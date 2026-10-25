@@ -9,14 +9,16 @@
 (def ^:private usage
   "usage: jolt -M:drive --root URI --file PATH --uri URI --language ID
                     [--delay MS] [--hover LINE:CHAR] [--definition LINE:CHAR]
-                    [--register FEATURE,...] -- COMMAND [ARG...]
+                    [--register FEATURE,...] [--diagnostic true]
+                    -- COMMAND [ARG...]
 
-  --root      workspace root URI to send in initialize
-  --file      file on this machine whose contents are opened
-  --uri       URI to open it as (may differ from --file, e.g. a container path)
-  --delay     time to wait after opening the file, e.g. for indexing
-  --register  textDocument features to accept registrations for after
-              startup, such as hover,definition")
+  --root        workspace root URI to send in initialize
+  --file        file on this machine whose contents are opened
+  --uri         URI to open it as (may differ from --file, e.g. a container path)
+  --delay       time to wait after opening the file, e.g. for indexing
+  --register    textDocument features to accept registrations for after
+                startup, such as hover,definition
+  --diagnostic  pull the file's diagnostics and list them")
 
 (defn- parse-args
   "Options are `--name value` pairs, and the rest is the command. jolt itself
@@ -69,7 +71,7 @@
                           [feature {"dynamicRegistration" true}]))})
 
 (defn -main [& args]
-  (let [{:keys [root file uri language delay hover definition register command]} (parse-args args)]
+  (let [{:keys [root file uri language delay hover definition register diagnostic command]} (parse-args args)]
     (when (some nil? [root file uri language (first command)])
       (binding [*out* *err*] (println usage))
       (System/exit 2))
@@ -91,7 +93,11 @@
         (request in out 2 "textDocument/hover" (assoc doc "position" (position hover))))
       (when definition
         (request in out 3 "textDocument/definition" (assoc doc "position" (position definition))))
-      (request in out 4 "shutdown" nil)
+      (when diagnostic
+        (doseq [{:strs [source code message]} (get-in (request in out 4 "textDocument/diagnostic" doc)
+                                                      ["result" "items"])]
+          (println "  " source code "-" message)))
+      (request in out 5 "shutdown" nil)
       (notify "exit" nil)
       (.close out)
       (println "exit code" (.waitFor proc))
