@@ -3,7 +3,8 @@
   DESIGN.md."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [monorepo-lsp.config :as config])
+            [monorepo-lsp.config :as config]
+            [monorepo-lsp.paths :as paths])
   (:import (java.io File)))
 
 (defn cache-dir
@@ -13,13 +14,14 @@
        "/monorepo-lsp/" backend-id))
 
 (defn- read-into
-  "Runs `command` and writes its stdout to `target`, which is only created if the
-  command succeeds. Returns nil, or why it failed."
-  [command ^File target]
+  "Runs `command` in `dir` and writes its stdout to `target`, which is only
+  created if the command succeeds. Returns nil, or why it failed."
+  [command dir ^File target]
   (let [part (io/file (str target ".part"))]
     (try
       (.mkdirs (.getParentFile target))
       (let [proc (.start (doto (ProcessBuilder. ^java.util.List command)
+                           (.directory (io/file dir))
                            (.redirectOutput part)))
             stderr (slurp (.getErrorStream proc))
             exit (.waitFor proc)]
@@ -41,8 +43,9 @@
   was started for, the repo root as a client path under :repo, its
   :backend-id and its :cache directory.
 
+  The runner's `read` command runs in the scope's directory, as `start` does.
   Returns a map of each file that couldn't be copied to why."
-  [{:keys [config server-type scope cache] :as backend} files]
+  [{:keys [config server-type scope repo cache] :as backend} files]
   (into {}
         (for [file files
               :let [target (io/file (str cache file))]
@@ -50,7 +53,7 @@
               :let [command (config/command config server-type scope "read"
                                             (assoc (select-keys backend [:repo :backend-id]) :file file))
                     problem (if command
-                              (read-into command target)
+                              (read-into command (paths/client-path repo scope) target)
                               "the runner has no read template")]
               :when problem]
           [file problem])))

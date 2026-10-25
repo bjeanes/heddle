@@ -23,8 +23,15 @@ read = ['monorepo-lsp-no-such-program', '{read:file}']
 [scopes.'.']
 s = { runner = 'fake', command = 's', paths = { '.' = '/src' } }
 
+[runners.where]
+start = ['{cfg:command}']
+read = ['pwd']
+
 [scopes.host]
 s = { runner = 'host', command = 's', paths = { 'host' = '/host' } }
+
+[scopes.where]
+s = { runner = 'where', command = 's', paths = { 'where' = '/where' } }
 
 [scopes.missing]
 s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
@@ -34,8 +41,10 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
   (str (Files/createTempDirectory "monorepo-lsp-test" (into-array FileAttribute []))))
 
 (defn- backend [scope]
-  {:config config :server-type "s" :scope scope :repo "/r" :backend-id "monorepo-lsp-1"
-   :cache (temp-dir)})
+  (let [repo (temp-dir)]
+    (.mkdirs (io/file repo scope))
+    {:config config :server-type "s" :scope scope :repo repo :backend-id "monorepo-lsp-1"
+     :cache (temp-dir)}))
 
 (deftest cache-dirs
   (let [dir (fetched/cache-dir "monorepo-lsp-1")]
@@ -65,6 +74,12 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
         (is (str/includes? (get failures gone) "No such file"))
         (is (= ["lib"] (vec (.list (io/file (str (:cache b) server)))))
             "no copy of gone.rb, partial or otherwise")))))
+
+(deftest reading-from-the-scope
+  (let [b (backend "where")]
+    (fetched/fetch! b ["/usr/x.rb"])
+    (is (= (str (.getCanonicalPath (io/file (:repo b) "where")) "\n")
+           (slurp (str (:cache b) "/usr/x.rb"))))))
 
 (deftest fetching-without-a-usable-read
   (testing "a runner without a read template"
