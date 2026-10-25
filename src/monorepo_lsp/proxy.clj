@@ -113,10 +113,26 @@
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
 
+(defn- with-new-commands!
+  "The server capabilities `caps` of the backend `b`, listing only the commands
+  that no backend has registered with the client yet, qualified with its
+  server type. Some clients refuse to register a command twice, and two
+  backends of one server type will offer the same commands."
+  [proxy b caps]
+  (if-let [commands (get-in caps ["executeCommandProvider" "commands"])]
+    (let [qualified (map #(origin/qualify-command (:server-type b) %) commands)
+          [old] (swap-vals! (:state proxy) update :commands (fnil into #{}) qualified)
+          fresh (vec (remove (get old :commands #{}) qualified))]
+      (if (seq fresh)
+        (assoc-in caps ["executeCommandProvider" "commands"] fresh)
+        (dissoc caps "executeCommandProvider")))
+    caps))
+
 (defn- register! [proxy b]
   (when (backend/ready? b)
     (let [client-caps (get-in @(:state proxy) [:client-params "capabilities"])
-          registrations (capabilities/registrations client-caps (backend/capabilities b)
+          registrations (capabilities/registrations client-caps
+                                                    (with-new-commands! proxy b (backend/capabilities b))
                                                     (document-selector b) (:backend-id b))]
       (when (seq registrations)
         (request-client! proxy "client/registerCapability" {"registrations" registrations} nil
@@ -179,6 +195,14 @@
 (defn- qualify-ids [b registrations]
   (mapv #(update % "id" (partial qualify b)) registrations))
 
+(defn- qualify-registered-commands [b registrations]
+  (mapv (fn [registration]
+          (cond-> registration
+            (get-in registration ["registerOptions" "commands"])
+            (update-in ["registerOptions" "commands"]
+                       #(mapv (partial origin/qualify-command (:server-type b)) %))))
+        registrations))
+
 (defn- progress-token!
   "The token to give the client for one that the backend `b` created. The
   client's `window/workDoneProgress/cancel` finds the backend by it."
@@ -188,12 +212,13 @@
     qualified))
 
 (defn- request-params
-  "The params of a request from the backend `b`, with the registration IDs and
-  progress tokens it chose qualified."
+  "The params of a request from the backend `b`, with the registration IDs,
+  commands and progress tokens it chose qualified."
   [proxy b method params]
   (case method
     "window/workDoneProgress/create" (update params "token" #(progress-token! proxy b %))
-    "client/registerCapability" (update params "registrations" #(qualify-ids b %))
+    "client/registerCapability" (update params "registrations"
+                                        #(->> % (qualify-ids b) (qualify-registered-commands b)))
     "client/unregisterCapability" (update params "unregisterations" #(qualify-ids b %))
     params))
 
@@ -283,11 +308,19 @@
 
 ;; Requests
 
+(def ^:private methods-with-commands
+  #{"textDocument/completion" "completionItem/resolve"
+    "textDocument/codeAction" "codeAction/resolve"
+    "textDocument/codeLens" "codeLens/resolve"
+    "textDocument/inlayHint" "inlayHint/resolve"})
+
 (defn- result-for-client
   "The result of the request `method` from the backend `b`, ready for the
   client."
   [b method result]
-  (origin/mark-result method (:backend-id b) (to-client! b result)))
+  (let [result (cond->> (to-client! b result)
+                 (contains? methods-with-commands method) (origin/qualify-commands (:server-type b)))]
+    (origin/mark-result method (:backend-id b) result)))
 
 (defn- forward-request! [proxy b {:strs [id method params]}]
   (backend/request! b method (translate/to-server b params) id
@@ -386,6 +419,39 @@
       (forward-request! proxy b (assoc msg "params" item))
       (send-client! proxy (lsp/response id params)))))
 
+(defn- command-backend
+  "The running backend of `server-type` to run a command with `arguments`.
+  Where there are several, the one with the deepest scope that contains a
+  file the arguments refer to, or else the first by scope."
+  [proxy server-type arguments]
+  (let [{:keys [repo backends]} @(:state proxy)
+        running (sort-by :scope (filter #(= server-type (:server-type %)) (vals backends)))
+        files (keep #(repo-relative repo (uri->path %))
+                    (filter string? (tree-seq coll? seq arguments)))
+        containing (filter (fn [b] (some #(paths/within? (:scope b) %) files)) running)]
+    (or (last (sort-by (comp count :scope) containing))
+        (first running))))
+
+(defn- execute-command!
+  "Sends `workspace/executeCommand` to a backend of the server type that the
+  command is qualified with, as the command ID the backend chose."
+  [proxy {:strs [id params] :as msg}]
+  (let [server-types (keys (get-in @(:state proxy) [:config "servers"]))
+        [server-type command] (origin/command-origin server-types (get params "command"))
+        b (when server-type (command-backend proxy server-type (get params "arguments")))
+        not-running #(send-client! proxy (lsp/error-response id -32603 (str "no " server-type " backend is running")))]
+    (cond
+      (nil? server-type)
+      (send-client! proxy (lsp/error-response id -32602 (str "unknown command " (pr-str (get params "command")))))
+
+      (nil? b)
+      (not-running)
+
+      :else
+      (backend/when-ready b #(if (backend/ready? b)
+                               (forward-request! proxy b (assoc-in msg ["params" "command"] command))
+                               (not-running))))))
+
 (defn- cancel!
   "Passes on the client's cancellation of a request it sent a backend."
   [proxy client-id]
@@ -431,6 +497,7 @@
       (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
       (capabilities/resolve-method? method) (resolve! proxy msg)
+      (= "workspace/executeCommand" method) (execute-command! proxy msg)
       (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))
       uri (route-request! proxy msg (running-handlers proxy uri))
       :else (send-client! proxy (lsp/response id nil)))))

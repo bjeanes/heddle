@@ -10,6 +10,17 @@
     (is (nil? (origin/unmark {"title" "a" "data" {"x" 1}})))
     (is (nil? (origin/unmark {"title" "a"})))))
 
+(deftest qualifying-commands
+  (testing "qualifies every command, wherever it is"
+    (is (= [{"title" "Fix" "command" {"title" "Fix" "command" "lint:fix" "arguments" ["x"]}}
+            {"title" "Run" "command" "lint:run"}]
+           (origin/qualify-commands "lint" [{"title" "Fix" "command" {"title" "Fix" "command" "fix" "arguments" ["x"]}}
+                                            {"title" "Run" "command" "run"}]))))
+  (testing "finds the server type a command belongs to"
+    (is (= ["lint" "fix"] (origin/command-origin ["ruby" "lint"] "lint:fix")))
+    (is (= ["a:b" "c"] (origin/command-origin ["a" "a:b"] "a:b:c")) "by the longest prefix")
+    (is (nil? (origin/command-origin ["ruby"] "lint:fix")))))
+
 (deftest marking-results
   (testing "marks code actions but not bare commands, which can't be resolved"
     (is (= [{"title" "fix" "data" {"monorepo-lsp/backend" "b1"}}

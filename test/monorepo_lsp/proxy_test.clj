@@ -317,6 +317,53 @@ read = ['cat', '{read:file}']
           (client! t (lsp/request 5 "completionItem/resolve" item))
           (is (= (lsp/response 5 item) (from-proxy t))))))))
 
+(deftest running-commands
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"codeActionProvider" true
+                                                                    "executeCommandProvider" {"commands" ["fix"]}}})]
+                    "textDocument/codeAction" [(lsp/response id [{"title" "Fix" "command" "fix"}])]
+                    "workspace/executeCommand" [(lsp/response id [server-type params])]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (testing "registers each backend's commands qualified with its server type"
+      (is (= #{["lint:fix"] ["ruby:fix"]}
+             (set (for [msg (doall (repeatedly 2 #(from-proxy t)))]
+                    (get-in msg ["params" "registrations" 0 "registerOptions" "commands"]))))))
+    (testing "qualifies the commands in answers"
+      (client! t (request-about t 1 "textDocument/codeAction" "api/a.rb"))
+      (is (= ["lint:fix" "ruby:fix"] (map #(get % "command") (get (from-proxy t) "result")))))
+    (testing "sends a command to a backend of its server type, as the backend named it"
+      (client! t (lsp/request 2 "workspace/executeCommand" {"command" "ruby:fix" "arguments" [(uri t "api/a.rb")]}))
+      (is (= (lsp/response 2 ["ruby" {"command" "fix" "arguments" [(uri t "api/a.rb")]}]) (from-proxy t))))
+    (testing "refuses commands of no server type"
+      (client! t (lsp/request 3 "workspace/executeCommand" {"command" "fix"}))
+      (is (= -32602 (get-in (from-proxy t) ["error" "code"]))))))
+
+(deftest running-commands-in-several-scopes
+  (let [respond (fn [[_ scope] {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "workspace/executeCommand" [(lsp/response id scope)]
+                    nil))
+        t (start :respond respond
+                 :server-types #{"ruby"}
+                 :config (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+        execute (fn [id & arguments]
+                  (client! t (lsp/request id "workspace/executeCommand" {"command" "ruby:x" "arguments" (vec arguments)}))
+                  (get (from-proxy t) "result"))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (open! t "b.rb" "ruby")
+    (is (eventually #(= 2 (count @(:received t)))))
+    (testing "go to the backend whose scope contains a file in the arguments"
+      (is (= "api" (execute 1 {"uri" (uri t "api/a.rb")})))
+      (is (= "." (execute 2 {"uri" (uri t "b.rb")}))))
+    (testing "or else to the first by scope"
+      (is (= "." (execute 3))))))
+
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]

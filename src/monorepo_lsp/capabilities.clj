@@ -6,13 +6,14 @@
   startup. Those features are registered for each backend once it has started.
   The rest are announced in the proxy's own `initialize` reply.")
 
-(def ^:private features
+(def ^:private document-features
   "Each feature's request method, the server capability that offers it, its
   key in the client's `textDocument` capabilities, and what to announce for it
   when the client can't register it later. That last is nil where only a
   backend could supply the feature's options."
   (mapv
-   #(zipmap [:method :provider :client :static] %)
+   (fn [[method provider client static]]
+     {:method method :provider provider :client ["textDocument" client] :static static})
    [["textDocument/hover" "hoverProvider" "hover" true]
     ["textDocument/completion" "completionProvider" "completion" {}]
     ["textDocument/signatureHelp" "signatureHelpProvider" "signatureHelp" {}]
@@ -42,6 +43,20 @@
     ["textDocument/inlayHint" "inlayHintProvider" "inlayHint" true]
     ["textDocument/diagnostic" "diagnosticProvider" "diagnostic"
      {"interFileDependencies" false "workspaceDiagnostics" false}]]))
+
+(def ^:private execute-command
+  "Running a command, which isn't about any one file. Some clients only run
+  commands that a server has listed in its options."
+  {:method "workspace/executeCommand"
+   :provider "executeCommandProvider"
+   :client ["workspace" "executeCommand"]
+   :static {"commands" []}})
+
+(def ^:private features
+  (conj document-features execute-command))
+
+(defn- document-feature? [feature]
+  (= "textDocument" (first (:client feature))))
 
 (def ^:private resolve-methods
   "Requests that resolve an item, and the requests whose answers hold the
@@ -89,7 +104,7 @@
     (true? (get-in server-caps [provider "resolveProvider"]))))
 
 (defn- registrable? [client-caps feature]
-  (true? (get-in client-caps ["textDocument" (:client feature) "dynamicRegistration"])))
+  (true? (get-in client-caps (conj (:client feature) "dynamicRegistration"))))
 
 (def ^:private sync-everything
   {"openClose" true
@@ -109,16 +124,17 @@
 
 (defn registrations
   "The registrations for `client/registerCapability` of the features a backend
-  offers that the client accepts registrations for. Each covers the files in
-  `document-selector`, and its ID starts with `id-prefix`."
+  offers that the client accepts registrations for. Each one for a document
+  feature covers the files in `document-selector`. Each ID starts with
+  `id-prefix`."
   [client-caps server-caps document-selector id-prefix]
   (vec (for [f features
              :when (and (registrable? client-caps f) (offers? server-caps f))
              :let [options (get server-caps (:provider f))]]
          {"id" (str id-prefix ":" (:method f))
           "method" (:method f)
-          "registerOptions" (assoc (if (map? options) options {})
-                                   "documentSelector" document-selector)})))
+          "registerOptions" (cond-> (if (map? options) options {})
+                              (document-feature? f) (assoc "documentSelector" document-selector))})))
 
 (def ^:private combined-methods
   "The requests whose answers can be combined. They go to every backend for the

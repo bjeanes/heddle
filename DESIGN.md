@@ -353,7 +353,10 @@ Some requests follow up on an item a backend returned earlier, such as
 `workspace/executeCommand`. They have to reach the backend that made the item.
 The proxy wraps each item's `data` field with the backend it came from and
 unwraps it on the way back. It prefixes command IDs with the server type, which
-also keeps two servers' commands from colliding.
+also keeps two servers' commands from colliding. A command doesn't say which
+scope it came from, though. When more than one backend of that server type is
+running, the proxy picks the one whose scope contains a file the command's
+arguments refer to, and otherwise the first by scope.
 
 ### Requests about no particular file
 

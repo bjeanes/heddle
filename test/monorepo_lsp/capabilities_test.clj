@@ -31,6 +31,18 @@
            (capabilities/registrations client-caps server-caps selector "b1"))
         "only what the backend offers and the client can register")))
 
+(deftest command-registrations
+  (let [client-caps {"workspace" {"executeCommand" {"dynamicRegistration" true}}}
+        server-caps {"executeCommandProvider" {"commands" ["a"]}}]
+    (is (= [{"id" "b1:workspace/executeCommand"
+             "method" "workspace/executeCommand"
+             "registerOptions" {"commands" ["a"]}}]
+           (capabilities/registrations client-caps server-caps [{"language" "ruby"}] "b1"))
+        "without a document selector")
+    (is (= {"commands" []}
+           (get-in (capabilities/initialize-result {}) ["capabilities" "executeCommandProvider"]))
+        "announced with no commands when the client can't register them")))
+
 (deftest features-by-method
   (is (= "hoverProvider" (:provider (capabilities/feature "textDocument/hover"))))
   (is (= "semanticTokensProvider" (:provider (capabilities/feature "textDocument/semanticTokens/full"))))
