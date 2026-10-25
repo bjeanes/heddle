@@ -55,6 +55,14 @@
 (def ^:private features
   (conj document-features execute-command))
 
+(def ^:private workspace-symbol
+  "Workspace symbol search, which the proxy announces at startup rather than
+  registering for each backend. It asks every backend itself, so a client
+  that asked for each registration would get every answer several times."
+  {:method "workspace/symbol"
+   :provider "workspaceSymbolProvider"
+   :static {"resolveProvider" true}})
+
 (defn- document-feature? [feature]
   (= "textDocument" (first (:client feature))))
 
@@ -65,7 +73,8 @@
    "codeAction/resolve" "textDocument/codeAction"
    "codeLens/resolve" "textDocument/codeLens"
    "documentLink/resolve" "textDocument/documentLink"
-   "inlayHint/resolve" "textDocument/inlayHint"})
+   "inlayHint/resolve" "textDocument/inlayHint"
+   "workspaceSymbol/resolve" "workspace/symbol"})
 
 (def ^:private related-methods
   "Requests that belong to a feature registered under another method."
@@ -76,7 +85,7 @@
    "textDocument/prepareRename" "textDocument/rename"})
 
 (def ^:private by-method
-  (into {} (map (juxt :method identity)) features))
+  (into {} (map (juxt :method identity)) (conj features workspace-symbol)))
 
 (defn feature
   "The feature that the request `method` uses, or nil if it isn't one the proxy
@@ -116,7 +125,8 @@
   capabilities."
   [client-caps]
   {"capabilities" (into {"textDocumentSync" sync-everything
-                         "positionEncoding" "utf-16"}
+                         "positionEncoding" "utf-16"
+                         (:provider workspace-symbol) (:static workspace-symbol)}
                         (for [f features
                               :when (and (some? (:static f)) (not (registrable? client-caps f)))]
                           [(:provider f) (:static f)]))
@@ -138,7 +148,8 @@
 
 (def ^:private combined-methods
   "The requests whose answers can be combined. They go to every backend for the
-  file that offers the feature. The rest want one answer:
+  file that offers the feature, or every running backend for workspace
+  symbols. The rest want one answer:
 
   - hover, signature help and document symbols describe the code in one
     server's terms, and two servers' descriptions would repeat or contradict
@@ -159,7 +170,8 @@
     "textDocument/references"
     "textDocument/documentLink"
     "textDocument/inlayHint"
-    "textDocument/diagnostic"})
+    "textDocument/diagnostic"
+    "workspace/symbol"})
 
 (defn combined?
   "Whether the answers to the request `method` from several backends are

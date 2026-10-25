@@ -401,6 +401,46 @@ read = ['cat', '{read:file}']
     (is (= (lsp/response 1 {"kind" "full" "items" [{"message" "lint"} {"message" "ruby"}]})
            (from-proxy t)))))
 
+(deftest searching-the-workspace
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"workspaceSymbolProvider" {"resolveProvider" true}}})]
+                    "workspace/symbol" [(lsp/response id [{"name" server-type}])]
+                    "workspaceSymbol/resolve" [(lsp/response id (assoc params "containerName" server-type))]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (client! t (lsp/request 1 "workspace/symbol" {"query" "x"}))
+    (testing "answers with nothing before any backend has started"
+      (is (= (lsp/response 1 nil) (from-proxy t))))
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 2 "workspace/symbol" {"query" "x"}))
+    (let [symbols (get (from-proxy t) "result")]
+      (testing "combines every running backend's symbols"
+        (is (= ["lint" "ruby"] (map #(get % "name") symbols))))
+      (testing "resolves a symbol with the backend that found it"
+        (client! t (lsp/request 3 "workspaceSymbol/resolve" (second symbols)))
+        (is (= "ruby" (get-in (from-proxy t) ["result" "containerName"])))))))
+
+(deftest workspace-notifications
+  (let [t (start)
+        received-params (fn [k method] (mapv #(get % "params") (received t k method)))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "configuration changes go to every running backend"
+      (client! t (lsp/notification "workspace/didChangeConfiguration" {"settings" {}}))
+      (is (eventually #(= [{"settings" {}}] (received-params ["ruby" "api"] "workspace/didChangeConfiguration"))))
+      (is (eventually #(= [{"settings" {}}] (received-params ["lint" "."] "workspace/didChangeConfiguration")))))
+    (testing "watched file changes go to the backends whose scopes contain them"
+      (client! t (lsp/notification "workspace/didChangeWatchedFiles"
+                                   {"changes" [{"uri" (uri t "api/b.rb") "type" 1}
+                                               {"uri" (uri t "Gemfile") "type" 2}]}))
+      (is (eventually #(= [{"changes" [{"uri" (uri t "api/b.rb") "type" 1}
+                                       {"uri" (uri t "Gemfile") "type" 2}]}]
+                          (received-params ["lint" "."] "workspace/didChangeWatchedFiles"))))
+      (is (eventually #(= [{"changes" [{"uri" "file:///app/b.rb" "type" 1}]}]
+                          (received-params ["ruby" "api"] "workspace/didChangeWatchedFiles")))))))
+
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]

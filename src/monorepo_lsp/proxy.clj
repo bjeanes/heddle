@@ -341,6 +341,30 @@
     (when (= "textDocument/didClose" method)
       (swap! (:state proxy) update :documents dissoc uri))))
 
+;; The workspace
+
+(defn- running-backends
+  "Every running backend, in priority order."
+  [proxy]
+  (let [{:keys [config backends]} @(:state proxy)
+        rank (zipmap (config/by-priority config (set (map first (keys backends)))) (range))]
+    (map backends (sort-by (fn [[server-type scope]] [(rank server-type) scope]) (keys backends)))))
+
+(defn- notify-all! [proxy method params]
+  (doseq [b (running-backends proxy)]
+    (notify-backend! b method params)))
+
+(defn- watched-files-changed!
+  "Passes on each change to the backends whose scopes contain the file."
+  [proxy {:strs [changes]}]
+  (let [repo (:repo @(:state proxy))
+        within? (fn [b change]
+                  (some->> (uri->path (get change "uri")) (repo-relative repo) (paths/within? (:scope b))))]
+    (doseq [b (running-backends proxy)
+            :let [theirs (filterv #(within? b %) changes)]
+            :when (seq theirs)]
+      (notify-backend! b "workspace/didChangeWatchedFiles" {"changes" theirs}))))
+
 ;; Requests
 
 (def ^:private methods-with-commands
@@ -533,6 +557,7 @@
       (= "shutdown" method) (shutdown! proxy id)
       (capabilities/resolve-method? method) (resolve! proxy msg)
       (= "workspace/executeCommand" method) (execute-command! proxy msg)
+      (= "workspace/symbol" method) (combine-request! proxy msg (running-backends proxy))
       (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))
       uri (route-request! proxy msg (running-handlers proxy uri))
       :else (send-client! proxy (lsp/response id nil)))))
@@ -545,6 +570,8 @@
             "textDocument/didOpen" (open! proxy params)
             ("textDocument/didChange" "textDocument/didSave" "textDocument/didClose")
             (document-notification! proxy method params)
+            "workspace/didChangeConfiguration" (notify-all! proxy method params)
+            "workspace/didChangeWatchedFiles" (watched-files-changed! proxy params)
             "$/cancelRequest" (cancel! proxy (get params "id"))
             "window/workDoneProgress/cancel" (cancel-progress! proxy (get params "token"))
             nil)))

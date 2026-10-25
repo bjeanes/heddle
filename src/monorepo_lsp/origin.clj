@@ -67,14 +67,14 @@
       "textDocument/completion"
       (some-> result merge/completion-list (update "items" mark-all))
 
-      ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint")
+      ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint" "workspace/symbol")
       (some-> result mark-all)
 
       "textDocument/codeAction"
       (some->> result (mapv #(if (command? %) % (mark backend-id %))))
 
       ("completionItem/resolve" "codeAction/resolve" "codeLens/resolve"
-       "documentLink/resolve" "inlayHint/resolve")
+       "documentLink/resolve" "inlayHint/resolve" "workspaceSymbol/resolve")
       (some->> result (mark backend-id))
 
       result)))

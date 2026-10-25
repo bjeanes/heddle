@@ -15,6 +15,8 @@
       (is (not (contains? caps "hoverProvider")))
       (is (= true (get caps "definitionProvider")))
       (is (= {} (get caps "completionProvider"))))
+    (testing "always announces workspace symbol search, which goes to every backend"
+      (is (= {"resolveProvider" true} (get caps "workspaceSymbolProvider"))))
     (testing "leaves out features that need a backend's options"
       (is (not (contains? caps "semanticTokensProvider")))
       (is (not (contains? caps "documentOnTypeFormattingProvider"))))))

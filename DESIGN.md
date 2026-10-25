@@ -364,6 +364,11 @@ Workspace symbol search, configuration changes and shutdown go to every running
 backend. The proxy merges the answers. Changes to watched files go to the
 backends whose scopes contain them.
 
+The proxy announces workspace symbol search at startup instead of registering
+it for each backend. Some clients send a request once for each registration,
+and since the proxy already asks every backend, they would see each symbol
+several times.
+
 ### Requests from backends
 
 Servers send requests to the client too, such as `workspace/configuration` and
