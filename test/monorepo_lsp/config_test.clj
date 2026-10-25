@@ -21,6 +21,9 @@
 
 (deftest languages
   (is (= ["ruby" "typescript" "typescriptreact"] (config/languages design)))
+  (is (= ["ruby" "typescript" "typescriptreact"] (config/languages design [])))
+  (is (= ["typescript" "typescriptreact"] (config/languages design ["typescript"])) "of the named server types")
+  (is (= [] (config/languages design ["unknown"])))
   (is (= ["x"] (config/languages (config/parse "
 [servers.started]
 languages = ['x']
@@ -35,6 +38,10 @@ boot = { runner = 'host', command = 's' }
 [scopes.'.'.by-glob]
 ")))
       "only server types that a scope starts, and only their languages"))
+
+(deftest unknown-server-types
+  (is (= ["nosuch"] (config/unknown-server-types design ["ruby-lsp" "nosuch"])))
+  (is (empty? (config/unknown-server-types design []))))
 
 (deftest priorities
   (let [c (config/parse "
