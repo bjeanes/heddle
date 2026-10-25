@@ -1,0 +1,18 @@
+[servers.ruby-lsp]
+languages = ["ruby"]
+globs = ["**/Gemfile"]
+priority = 10
+boot = { command = ["bundle", "exec", "ruby-lsp"] }
+
+[servers.rubocop]
+languages = ["ruby"]
+boot = { command = ["rubocop", "--lsp"] }
+
+[scopes."services/api"]
+ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/app" } }
+
+[scopes."services/billing"]
+ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billing" = "/app" } }
+
+[scopes."."]
+rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
