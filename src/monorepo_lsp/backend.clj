@@ -80,9 +80,10 @@
 
 (defn backend
   "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path. The backend can be used as a context for
-  monorepo-lsp.translate, and with monorepo-lsp.fetched."
-  [config server-type scope repo]
+  root as a client path, and `cache-root` is where fetched files are cached.
+  The backend can be used as a context for monorepo-lsp.translate, and with
+  monorepo-lsp.fetched."
+  [config server-type scope repo cache-root]
   (let [id (new-id)]
     {:config config
      :server-type server-type
@@ -90,7 +91,7 @@
      :repo repo
      :backend-id id
      :paths (get (config/boot-config config server-type scope) "paths")
-     :cache (fetched/cache-dir repo server-type scope)
+     :cache (fetched/cache-dir cache-root repo server-type scope)
      :fetched (atom #{})
      :root (config/server-scope config server-type scope repo)
      :state (atom {:status :starting :queue []})

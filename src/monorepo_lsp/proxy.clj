@@ -114,17 +114,20 @@
 (defn- load-config
   "The repo and its config, from the first of `roots` with a config. Without a
   usable config, the proxy serves nothing, and :problem has the type and text
-  of a message for the user. Otherwise, :warnings has the text of a message
-  about the config's warnings, if it has any."
+  of a message for the user. Otherwise, :cache-root is where to cache fetched
+  files, and :warnings has the text of any messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
       (let [c (config/read-config repo)
-            warnings (config/warnings c)]
+            unused (config/warnings c)
+            {:keys [root warning]} (fetched/cache-root c repo #(System/getenv %))]
         {:repo repo
          :config c
-         :warnings (when (seq warnings)
-                     (config/warnings-message (str (io/file repo config/file-name)) warnings))})
+         :cache-root root
+         :warnings (cond-> []
+                     (seq unused) (conj (config/warnings-message (str (io/file repo config/file-name)) unused))
+                     warning (conj warning))})
       (catch Exception e
         {:repo repo
          :config no-config
@@ -162,13 +165,14 @@
       (run! (:send proxy) (:held old)))))
 
 (defn- initialize! [proxy {:strs [id params]}]
-  (let [{:keys [repo config problem warnings]} (load-config (config-roots params (:cwd proxy)))
+  (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
         eager? (and (:eager proxy) (not problem))]
     (when-not problem
       (doseq [name (:server-types proxy)
               :when (not (contains? (get config "servers") name))]
         (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
-    (swap! (:state proxy) assoc :repo repo :config config :client-params params :held (when eager? []))
+    (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root
+           :client-params params :held (when eager? []))
     (when eager?
       (start-every-backend! proxy))
     (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
@@ -177,8 +181,8 @@
     (register! proxy)
     (when-let [[type message] problem]
       (show-message! proxy type message))
-    (when warnings
-      (show-message! proxy :warning warnings))))
+    (doseq [warning warnings]
+      (show-message! proxy :warning warning))))
 
 ;; Backends
 
@@ -292,8 +296,8 @@
 (declare from-backend! failed!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
-  (let [{:keys [config repo client-params]} @(:state proxy)
-        b (backend/backend config server-type scope repo)]
+  (let [{:keys [config repo cache-root client-params]} @(:state proxy)
+        b (backend/backend config server-type scope repo cache-root)]
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))

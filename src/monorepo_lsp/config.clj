@@ -62,12 +62,39 @@
             :when problem]
         (str where ", server type " (pr-str server-type) " " problem)))))
 
+(defn- cache-errors [cache]
+  (if-not (map? cache)
+    ["cache must be a table, such as { env = \"XDG_CACHE_HOME\" }"]
+    (let [unknown (remove #{"env" "path"} (keys cache))
+          {:strs [env path]} cache]
+      (cond
+        (seq unknown)
+        (for [k unknown] (str "cache: unknown key " (pr-str k)))
+
+        (= (nil? env) (nil? path))
+        ["cache needs either env or path, but not both"]
+
+        env
+        (when-not (and (string? env) (seq env))
+          ["cache: env must be the name of an environment variable"])
+
+        (not (string? path))
+        ["cache: path must be a string"]
+
+        (str/starts-with? path "~")
+        ["cache: path can't start with ~, which isn't expanded; use env or an absolute path"]
+
+        (not (or (paths/absolute-dir? path) (paths/relative-dir? path)))
+        ["cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"]))))
+
 (defn- structure-errors [config]
   (let [{:strs [servers scopes runners]} config]
     (concat
      (for [k (keys config)
-           :when (not (#{"servers" "scopes" "runners"} k))]
+           :when (not (#{"servers" "scopes" "runners" "cache"} k))]
        (str "unknown section " (pr-str k)))
+     (when (contains? config "cache")
+       (cache-errors (get config "cache")))
      (for [k ["servers" "scopes" "runners"]
            :when (not (map? (get config k)))]
        (str k " must be a table"))

@@ -29,11 +29,36 @@
       (str/replace encoded "." "%2E")
       encoded)))
 
+(defn cache-root
+  "The directory that the config's `cache` table chooses for the cache, under
+  :root. `repo` is the directory holding the config, which a relative `path` is
+  resolved against, and `getenv` looks up an environment variable.
+
+  If `env` names a variable that is unset, empty or relative, the cache goes in
+  the system's temp directory instead, and :warning says why."
+  [config repo getenv]
+  (let [{:strs [env path]} (get config "cache")
+        tmpdir (System/getProperty "java.io.tmpdir")]
+    (cond
+      path {:root (if (str/starts-with? path "/") path (paths/client-path repo path))}
+      (nil? env) {:root tmpdir}
+      :else
+      (let [value (getenv env)
+            unusable (cond (nil? value) "isn't set"
+                           (= "" value) "is empty"
+                           (not (str/starts-with? value "/")) (str "is a relative path, " (pr-str value)))]
+        (if unusable
+          {:root tmpdir
+           :warning (str "The config's cache names $" env ", which " unusable ". "
+                         "Fetched files are cached in " tmpdir " instead.")}
+          {:root value})))))
+
 (defn cache-dir
-  "The directory holding fetched files for `server-type` in `scope`, as a
-  client path. Every backend for them uses the same one, in any process."
-  [repo server-type scope]
-  (str (str/replace (System/getProperty "java.io.tmpdir") #"/+$" "")
+  "The directory under the cache's `root` holding fetched files for
+  `server-type` in `scope`, as a client path. Every backend for them uses the
+  same one, in any process."
+  [root repo server-type scope]
+  (str (str/replace root #"/+$" "")
        "/monorepo-lsp/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
 
 (defn- read-into

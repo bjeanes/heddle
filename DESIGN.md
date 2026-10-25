@@ -473,8 +473,9 @@ VS Code and MCP bridges, give the proxy no hook like that. Instead, when a
 backend sends back a location in a fetched file, the proxy runs `read` for it
 _before_ forwarding the reply. The client can then open it like any other file.
 
-The cache directory is `<tmpdir>/monorepo-lsp/<repo>/<server type>/<scope>`,
-where `<tmpdir>` is the system's temp directory. Two backends can have
+The cache directory is `<root>/monorepo-lsp/<repo>/<server type>/<scope>`.
+`<root>` is the system's temp directory unless the config's `cache` table
+chooses another. Two backends can have
 different files at the same server path. So, each server type and scope gets a
 directory of its own. Each is percent-encoded into a single path segment, with
 the root scope `.` as `%2E`. Nesting the scopes instead would put
@@ -485,6 +486,23 @@ by a dash and the CRC-32 of its full path in hex.
 None of this depends on the backend ID. A restarted backend reuses the
 directory of the one it replaced, rather than leaving a new one behind each
 time. The backends of other proxies on the same repo use it too.
+
+However, the temp directory isn't always stable. `nix develop` points `TMPDIR`
+at a new directory for each shell. An editor started from one would then use a
+new cache each time and leave the old ones behind. So, `cache` can name an
+environment variable to read the root from, such as `XDG_CACHE_HOME`, or give
+the root as a path. A relative path is resolved against the config's
+directory, which is the repo root. The layout under the root is the same
+whichever way it's chosen. When the root is inside the repo,
+`monorepo-lsp/<repo>` adds two levels of directories that aren't needed. That
+being said, several checkouts of the repo can share an absolute root. `<repo>`
+keeps their copies apart.
+
+If the variable is unset, empty or a relative path, the proxy warns and falls
+back to the temp directory. Since the cache only saves fetching files again,
+refusing to serve over a missing variable would cost far more than it saves.
+`~` isn't expanded. A path that starts with it is an error, since it would
+otherwise make a directory named `~` in the repo.
 
 Copies persist across restarts. However, the container's libraries may have
 changed since an earlier backend fetched them. So, each backend fetches a file

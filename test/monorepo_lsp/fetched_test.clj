@@ -51,23 +51,52 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
   [b]
   (assoc b :backend-id "monorepo-lsp-2" :fetched (atom #{})))
 
+(defn- cache-root
+  "The cache root that a config with `cache` chooses for the repo /code/shop,
+  with `env` as the environment."
+  [cache env]
+  (fetched/cache-root (config/parse (str "cache = " cache "\n")) "/code/shop" env))
+
+(def ^:private tmpdir (System/getProperty "java.io.tmpdir"))
+
+(deftest cache-roots
+  (testing "default to the system's temp directory"
+    (is (= {:root tmpdir} (fetched/cache-root (config/parse "") "/code/shop" {}))))
+  (testing "can be read from an environment variable"
+    (is (= {:root "/home/me/.cache"}
+           (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "/home/me/.cache"}))))
+  (testing "fall back to the temp directory, with a warning, if the variable is unusable"
+    (is (= {:root tmpdir
+            :warning (str "The config's cache names $XDG_CACHE_HOME, which isn't set. "
+                          "Fetched files are cached in " tmpdir " instead.")}
+           (cache-root "{ env = 'XDG_CACHE_HOME' }" {})))
+    (is (str/includes? (:warning (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" ""}))
+                       "which is empty"))
+    (is (str/includes? (:warning (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "cache"}))
+                       "which is a relative path, \"cache\"")))
+  (testing "can be an absolute path"
+    (is (= {:root "/var/cache"} (cache-root "{ path = '/var/cache' }" {}))))
+  (testing "can be a path relative to the config's directory"
+    (is (= {:root "/code/shop/.cache"} (cache-root "{ path = '.cache' }" {})))
+    (is (= {:root "/code/shop"} (cache-root "{ path = '.' }" {})))))
+
 (deftest cache-dirs
-  (let [dir (fetched/cache-dir "/code/shop" "ruby" "services/api")]
-    (testing "are keyed by repo, server type and scope"
-      (is (re-find #"/monorepo-lsp/shop-[0-9a-f]{8}/ruby/services%2Fapi$" dir))
-      (is (not (str/includes? dir "//"))))
+  (let [dir (fetched/cache-dir "/cache" "/code/shop" "ruby" "services/api")]
+    (testing "are keyed by repo, server type and scope, under the cache root"
+      (is (re-matches #"/cache/monorepo-lsp/shop-[0-9a-f]{8}/ruby/services%2Fapi" dir))
+      (is (= dir (fetched/cache-dir "/cache/" "/code/shop" "ruby" "services/api"))))
     (testing "are the same every time"
-      (is (= dir (fetched/cache-dir "/code/shop" "ruby" "services/api"))))
+      (is (= dir (fetched/cache-dir "/cache" "/code/shop" "ruby" "services/api"))))
     (testing "give the root scope a segment of its own"
-      (is (str/ends-with? (fetched/cache-dir "/code/shop" "ruby" ".") "/ruby/%2E")))
+      (is (str/ends-with? (fetched/cache-dir "/cache" "/code/shop" "ruby" ".") "/ruby/%2E")))
     (testing "differ for each repo, server type and scope"
       (is (= 5 (count (distinct [dir
-                                 (fetched/cache-dir "/other/shop" "ruby" "services/api")
-                                 (fetched/cache-dir "/code/shop" "rubocop" "services/api")
-                                 (fetched/cache-dir "/code/shop" "ruby" "services")
-                                 (fetched/cache-dir "/code/shop" "ruby" ".")])))))
+                                 (fetched/cache-dir "/cache" "/other/shop" "ruby" "services/api")
+                                 (fetched/cache-dir "/cache" "/code/shop" "rubocop" "services/api")
+                                 (fetched/cache-dir "/cache" "/code/shop" "ruby" "services")
+                                 (fetched/cache-dir "/cache" "/code/shop" "ruby" ".")])))))
     (testing "don't nest one scope inside another"
-      (is (not (str/starts-with? dir (str (fetched/cache-dir "/code/shop" "ruby" "services") "/")))))))
+      (is (not (str/starts-with? dir (str (fetched/cache-dir "/cache" "/code/shop" "ruby" "services") "/")))))))
 
 (deftest fetching
   (let [server (temp-dir)

@@ -85,13 +85,14 @@ For more, see the examples:
 
 ## The config in full
 
-The config has three tables. `servers` says which language servers handle
+The config has three main tables. `servers` says which language servers handle
 which files. `scopes` says how to start each of those servers for the files
 under a directory. `runners` holds the commands that start a server somewhere,
 such as on the host or in a container. You'll often only need the first two,
 because the proxy ships with runners for the host, Docker and Compose. Compose
 has no special treatment in the proxy. It's one of those built-in runners,
-written in the same TOML you'd use for your own.
+written in the same TOML you'd use for your own. An optional fourth table,
+`cache`, says where to keep [copies of files from the servers](#the-cache).
 
 ### Server types and scopes
 
@@ -139,6 +140,9 @@ command = ["ruby-lsp"]                   # replaces the server type's command
 
 [scopes."."]                             # the repo root, as a catch-all
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
+
+[cache]                                  # optional, defaults to the system's temp directory
+env = "XDG_CACHE_HOME"                   # or path = "/absolute/dir" or "dir/in/the/repo"
 ```
 
 With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`
@@ -254,6 +258,43 @@ Every one of them needs a `command`.
   removes it when the server exits. Since `paths` only translates paths, you
   mount the repo yourself with `args`, as in
   `args = ["--volume", "{client:repo}:/src"]`.
+
+### The cache
+
+When a server points you at a file that `paths` doesn't cover, such as an
+installed gem, the proxy copies it out with the runner's `read` for you to
+open. It keeps those copies under `<root>/monorepo-lsp/<repo>/`, where `<root>`
+is the system's temp directory (`TMPDIR`) unless the `cache` table says
+otherwise. Each server refreshes a file the first time it needs it after
+starting. A stale copy therefore only lasts until then.
+
+`cache` takes one of two keys:
+
+- `env` names an environment variable that holds the root, such as
+  `env = "XDG_CACHE_HOME"`. If the variable is unset, empty or a relative path,
+  the proxy warns you and uses the temp directory.
+- `path` gives the root itself, either absolute or relative to the directory
+  holding the config. Since `~` isn't expanded, use `env` for a directory in
+  your home.
+
+Each choice has its trade-offs:
+
+- **The temp directory** needs no setup, and the OS clears it from time to
+  time. However, some tools point `TMPDIR` at a new directory for each shell,
+  such as `nix develop`. An editor started from one of those shells starts a
+  new cache each time and leaves the old ones behind.
+- **`XDG_CACHE_HOME`** is the one I'd recommend, since it stays put across
+  shells. Nothing sweeps it, though. Since the proxy only copies files that
+  servers point you at, and replaces each copy rather than adding another, it
+  stays small. However, it does stay. Many systems, including macOS, don't set
+  it by default. If yours doesn't, set it where your editor will inherit it, or
+  the proxy will warn and use the temp directory.
+- **An absolute path** is the same for everyone who uses the config. That's
+  awkward in a config checked into the repo, since machines lay out their
+  directories differently.
+- **A path in the repo** needs an entry in `.gitignore`. Since it's inside the
+  repo, tools that search or watch the repo will see it too, unless they
+  ignore it.
 
 ## Neovim
 

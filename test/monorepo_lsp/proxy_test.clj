@@ -315,6 +315,27 @@ read = ['cat', '{read:file}']
       (is (= (unused-value-warning t) (from-proxy t)))
       (is (nothing-more? t)))))
 
+(defn- cache-of [t k]
+  (get-in @(:state (:proxy t)) [:backends k :cache]))
+
+(deftest choosing-the-cache-root
+  (testing "a path relative to the config's directory"
+    (let [t (start :config (str "cache = { path = '.cache' }\n" config))]
+      (initialize! t {})
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(cache-of t ["ruby" "api"])))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/monorepo-lsp/")))))
+  (testing "an unset environment variable, which warns once after initialize and falls back"
+    (let [t (start :config (str "cache = { env = 'MONOREPO_LSP_TEST_UNSET' }\n" config))]
+      (initialize! t {})
+      (is (= (shown 2 (str "The config's cache names $MONOREPO_LSP_TEST_UNSET, which isn't set. "
+                           "Fetched files are cached in " (System/getProperty "java.io.tmpdir") " instead."))
+             (from-proxy t)))
+      (is (nothing-more? t))
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(cache-of t ["ruby" "api"])))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (System/getProperty "java.io.tmpdir"))))))
+
 (deftest starting-backends-eagerly-with-a-failed-backend
   (let [ruby-starts (atom 0)
         respond (fn [[server-type] {:strs [id method]}]

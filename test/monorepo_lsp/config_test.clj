@@ -1,6 +1,6 @@
 (ns monorepo-lsp.config-test
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [are deftest is testing]]
             [monorepo-lsp.config :as config]))
 
 (def design (config/read-config "test/monorepo_lsp/fixtures/design"))
@@ -144,6 +144,20 @@ start = ['{read:file}', '--root={srv:scope}']
   (testing "sections"
     (is (= #{"unknown section \"other\"" "servers must be a table"}
            (errors "servers = 1\n[other]\n"))))
+  (testing "the cache"
+    (is (nil? (errors "cache = { env = 'XDG_CACHE_HOME' }")))
+    (is (nil? (errors "cache = { path = '/var/cache' }")))
+    (is (nil? (errors "[cache]\npath = '.cache/lsp'\n")))
+    (are [toml error] (= #{error} (errors toml))
+      "cache = '/var/cache'"                  "cache must be a table, such as { env = \"XDG_CACHE_HOME\" }"
+      "[cache]"                               "cache needs either env or path, but not both"
+      "cache = { env = 'A', path = '/b' }"    "cache needs either env or path, but not both"
+      "cache = { env = 'A', dir = '/b' }"     "cache: unknown key \"dir\""
+      "cache = { env = '' }"                  "cache: env must be the name of an environment variable"
+      "cache = { path = 1 }"                  "cache: path must be a string"
+      "cache = { path = '~/.cache' }"         "cache: path can't start with ~, which isn't expanded; use env or an absolute path"
+      "cache = { path = '../cache' }"         "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"
+      "cache = { path = '/var/cache/' }"      "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"))
   (testing "the message lists every problem"
     (let [msg (try (config/parse "x = 1\ny = 2\n" "here.toml")
                    (catch clojure.lang.ExceptionInfo e (ex-message e)))]
