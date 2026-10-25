@@ -154,7 +154,8 @@ with the proxy, is defined in config as a set of command templates.
 - **`prepare`** runs before `start`, for example to bring up a stopped
   container. It's optional too.
 
-These are the runners proposed to ship with the proxy:
+These are the runners that ship with the proxy, from
+`resources/monorepo_lsp/runners.toml`:
 
 ```toml
 [runners.host]
