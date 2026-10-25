@@ -1,4 +1,4 @@
-# monorepo-lsp: kick-off
+# heddle: kick-off
 
 ## Background
 
@@ -37,8 +37,9 @@ to be using something else.
 
 ## What this is
 
-`monorepo-lsp` takes that harness out of the editor and makes it a standalone
-command. To the editor it is one ordinary language server.
+`heddle` (working name `monorepo-lsp`) takes that harness out of the editor
+and makes it a standalone command. To the editor it is one ordinary language
+server.
 
 Behind that, the proxy reads a config file checked into the repo. For each file,
 the config says which kinds of server handle it, such as a language server and
@@ -49,8 +50,8 @@ use and forwards the file's messages to it, translating paths in both
 directions.
 
 An editor can run the proxy for all of the repo's servers at once, by running
-`monorepo-lsp` on its own. It can also name the servers it wants, for example
-`monorepo-lsp ruby-lsp`. That suits an editor extension built around one
+`heddle` on its own. It can also name the servers it wants, for example
+`heddle ruby-lsp`. That suits an editor extension built around one
 particular server.
 
 Since the routing and the container handling live in the proxy, any editor that
@@ -63,7 +64,7 @@ rename over MCP, which is more reliable than searching the text. However, each
 bridge starts one server command for one workspace. In a monorepo, that server
 can't see the dependencies of most services. Its answers are then wrong or
 missing. The agent has no way to tell those apart from good ones. With
-`monorepo-lsp` as the bridge's server command, an agent can trust what the
+`heddle` as the bridge's server command, an agent can trust what the
 language server tells it anywhere in the repo.
 
 ## Goals
@@ -142,7 +143,7 @@ The answer to each was yes, with some caveats:
    directly. Hover and definition take a few milliseconds through it.
 2. **Can it round-trip large JSON quickly enough?** Yes, though not with a
    library. clojure.data.json doesn't run on Jolt, for reasons covered in
-   `src/monorepo_lsp/json.clj`. Our own codec writes a 3.4 MB message in about
+   `src/heddle/json.clj`. Our own codec writes a 3.4 MB message in about
    0.4 s and reads it in about 0.27 s. That message is far bigger than typical
    ones, but the writer is the obvious place to optimise.
 3. **Can it build binaries for other machines?** Yes. `jolt build` produced a
@@ -194,7 +195,7 @@ to release.
 ## Milestones
 
 1. The language spike. This is done, as described above.
-2. One server in one container. `monorepo-lsp ruby-lsp` serves a single scope
+2. One server in one container. `heddle ruby-lsp` serves a single scope
    through Compose, with path translation and container-only files. We'll test
    it from Neovim against a real Ruby service.
 3. The full config model. That covers several scopes and server types, running
@@ -210,7 +211,6 @@ to release.
 
 ## Open questions
 
-- The name. `monorepo-lsp` is a working name.
 - The config format and file name. The design uses TOML for now, which will be
   cheap to change once we've tried writing real configs in it. EDN is out,
   since it is rarely used outside Clojure.

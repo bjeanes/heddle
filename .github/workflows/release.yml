@@ -59,21 +59,21 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-jolt
       - run: jolt -M:test
-      - run: jolt build -m monorepo-lsp.main -o out/monorepo-lsp
+      - run: jolt build -m heddle.main -o out/heddle
 
       - name: Check the binary starts
         run: |
-          out/monorepo-lsp --help > "$RUNNER_TEMP/usage.txt" 2>&1 || true
+          out/heddle --help > "$RUNNER_TEMP/usage.txt" 2>&1 || true
           cat "$RUNNER_TEMP/usage.txt"
-          grep -q '^usage: monorepo-lsp' "$RUNNER_TEMP/usage.txt"
+          grep -q '^usage: heddle' "$RUNNER_TEMP/usage.txt"
 
       - name: List the libraries it links
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
-            otool -L out/monorepo-lsp
+            otool -L out/heddle
           else
-            readelf -d out/monorepo-lsp | grep NEEDED
-            readelf -V out/monorepo-lsp | grep -o 'GLIBC_[0-9.]*' | sort -Vu
+            readelf -d out/heddle | grep NEEDED
+            readelf -V out/heddle | grep -o 'GLIBC_[0-9.]*' | sort -Vu
           fi
 
       - name: Package
@@ -82,11 +82,11 @@ jobs:
           COPYFILE_DISABLE: 1
         run: |
           mkdir dist
-          tar -czf "dist/monorepo-lsp-$VERSION-$PLATFORM.tar.gz" -C out monorepo-lsp
+          tar -czf "dist/heddle-$VERSION-$PLATFORM.tar.gz" -C out heddle
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: monorepo-lsp-${{ matrix.platform }}
+          name: heddle-${{ matrix.platform }}
           path: dist/
           if-no-files-found: error
 
@@ -117,9 +117,9 @@ jobs:
               echo "The latest build of \`main\`, from $GITHUB_SHA. It is replaced on every push to \`main\`."
               echo
             fi
-            echo "Each archive holds a single \`monorepo-lsp\` binary. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
+            echo "Each archive holds a single \`heddle\` binary. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
             echo
-            echo "The macOS binary isn't signed or notarised. After downloading it, clear macOS's quarantine flag with \`xattr -d com.apple.quarantine monorepo-lsp\`, or macOS will refuse to run it."
+            echo "The macOS binary isn't signed or notarised. After downloading it, clear macOS's quarantine flag with \`xattr -d com.apple.quarantine heddle\`, or macOS will refuse to run it."
           } > "$RUNNER_TEMP/notes.md"
 
       - name: Publish ${{ env.VERSION }}

@@ -1,5 +1,5 @@
 {
-  description = "monorepo-lsp: one language server proxy for a whole monorepo";
+  description = "heddle: one language server proxy for a whole monorepo";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 

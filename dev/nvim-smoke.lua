@@ -1,15 +1,15 @@
--- Checks that Neovim's own LSP client works with monorepo-lsp, set up with
+-- Checks that Neovim's own LSP client works with heddle, set up with
 -- this repo's Neovim module, against examples/monorepo. Run it with the
 -- example's Compose project up:
 --
---   nvim --clean --headless -l dev/nvim-smoke.lua out/monorepo-lsp
+--   nvim --clean --headless -l dev/nvim-smoke.lua out/heddle
 --
 -- It exits non-zero if any check fails. It changes buffers but never saves
 -- them.
 
 local proxy = arg[1] and vim.fn.fnamemodify(arg[1], ':p')
 if not proxy or vim.fn.executable(proxy) ~= 1 then
-  io.stderr:write('usage: nvim --clean --headless -l dev/nvim-smoke.lua PATH-TO-MONOREPO-LSP\n')
+  io.stderr:write('usage: nvim --clean --headless -l dev/nvim-smoke.lua PATH-TO-HEDDLE\n')
   os.exit(2)
 end
 local script = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p')
@@ -53,7 +53,7 @@ vim.lsp.config('ruby_lsp', { cmd = fake_server, filetypes = { 'ruby' }, root_mar
 vim.lsp.config('rubocop', { cmd = fake_server, filetypes = { 'ruby' }, root_markers = { 'Gemfile', '.git' } })
 vim.lsp.enable({ 'ruby_lsp', 'rubocop' })
 
-require('monorepo_lsp').setup()
+require('heddle').setup()
 
 local failures = 0
 
@@ -100,10 +100,10 @@ local function check_file(case)
 
   local client
   vim.wait(30000, function()
-    client = vim.lsp.get_clients({ bufnr = bufnr, name = 'monorepo_lsp' })[1]
+    client = vim.lsp.get_clients({ bufnr = bufnr, name = 'heddle' })[1]
     return client ~= nil and client.initialized
   end, 100)
-  if not check(client ~= nil, 'monorepo_lsp attached') then
+  if not check(client ~= nil, 'heddle attached') then
     return
   end
   local others = vim.tbl_map(function(c)
@@ -254,20 +254,20 @@ vim.notify = function(msg, level, ...)
   end
   return notify(msg, level, ...)
 end
-require('monorepo_lsp').setup({ cmd = { 'monorepo-lsp', 'serve', 'rubocop' } })
+require('heddle').setup({ cmd = { 'heddle', 'serve', 'rubocop' } })
 local greeting = vim.fs.joinpath(example, 'services/api/lib/greeting.rb')
 vim.cmd('silent! bwipeout! ' .. vim.fn.fnameescape(greeting))
 vim.cmd.edit(greeting)
 local attached_here = {}
 vim.wait(30000, function()
   attached_here = names(vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf() }))
-  return vim.list_contains(attached_here, 'monorepo_lsp')
+  return vim.list_contains(attached_here, 'heddle')
 end, 100)
 vim.wait(2000)
 attached_here = names(vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf() }))
 check(
-  #attached_here == 1 and attached_here[1] == 'monorepo_lsp',
-  "only monorepo_lsp attached with `serve rubocop` in cmd",
+  #attached_here == 1 and attached_here[1] == 'heddle',
+  "only heddle attached with `serve rubocop` in cmd",
   table.concat(attached_here, ', ')
 )
 check(#warnings == 0, 'the module read which languages the proxy serves', short(table.concat(warnings, ' ')))
