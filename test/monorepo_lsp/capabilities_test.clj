@@ -41,6 +41,10 @@
       (is (not (capabilities/offers? {"hoverProvider" false} hover)))
       (is (not (capabilities/offers? {} hover))))))
 
+(deftest combined-requests
+  (is (capabilities/combined? "textDocument/completion"))
+  (is (not (capabilities/combined? "textDocument/hover"))))
+
 (deftest empty-results
   (is (nil? (capabilities/empty-result "textDocument/hover")))
   (is (= {"kind" "full" "items" []} (capabilities/empty-result "textDocument/diagnostic"))))

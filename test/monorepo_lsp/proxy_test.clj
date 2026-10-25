@@ -240,6 +240,35 @@ read = ['cat', '{read:file}']
     (is (= (lsp/response 1 "ruby") (from-proxy t))
         "go to the highest priority backend that offers the feature")))
 
+(deftest combining-answers
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (case [server-type method]
+                    (["ruby" "initialize"] ["lint" "initialize"])
+                    [(lsp/response id {"capabilities" {"completionProvider" {}
+                                                       "referencesProvider" true
+                                                       "codeLensProvider" {}}})]
+                    ["ruby" "textDocument/completion"] [(lsp/response id [{"label" "ruby"}])]
+                    ["lint" "textDocument/completion"] [(lsp/response id {"isIncomplete" true
+                                                                          "items" [{"label" "lint"}]})]
+                    ["ruby" "textDocument/references"] [(lsp/response id [{"uri" "file:///app/a.rb"}])]
+                    ["lint" "textDocument/references"] [(lsp/error-response id -32603 "broken")]
+                    (["ruby" "textDocument/codeLens"] ["lint" "textDocument/codeLens"])
+                    [(lsp/error-response id -32603 (str server-type " broke"))]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "from every backend for the file that offers the feature, in priority order"
+      (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+      (is (= (lsp/response 1 {"isIncomplete" true "items" [{"label" "lint"} {"label" "ruby"}]})
+             (from-proxy t))))
+    (testing "without the backends that failed to answer"
+      (client! t (request-about t 2 "textDocument/references" "api/a.rb"))
+      (is (= (lsp/response 2 [{"uri" (uri t "api/a.rb")}]) (from-proxy t))))
+    (testing "or with the first error if they all failed"
+      (client! t (request-about t 3 "textDocument/codeLens" "api/a.rb"))
+      (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
+
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]

@@ -99,6 +99,36 @@
           "registerOptions" (assoc (if (map? options) options {})
                                    "documentSelector" document-selector)})))
 
+(def ^:private combined-methods
+  "The requests whose answers can be combined. They go to every backend for the
+  file that offers the feature. The rest want one answer:
+
+  - hover, signature help and document symbols describe the code in one
+    server's terms, and two servers' descriptions would repeat or contradict
+    each other;
+  - definition, declaration, type definition, implementation and document
+    highlights point at the same code, so a second server would mostly add
+    duplicates;
+  - formatting and rename are edits, and two servers' edits to the same text
+    would conflict;
+  - folding and selection ranges, semantic tokens, colours, linked editing
+    ranges, monikers, inline values and the call and type hierarchies each
+    cover the whole file or symbol, which a client expects from one server.
+
+  Smarter merging of some of these is pinned for later in DESIGN.md."
+  #{"textDocument/completion"
+    "textDocument/codeAction"
+    "textDocument/codeLens"
+    "textDocument/references"
+    "textDocument/documentLink"
+    "textDocument/inlayHint"})
+
+(defn combined?
+  "Whether the answers to the request `method` from several backends are
+  combined, as opposed to one backend answering."
+  [method]
+  (contains? combined-methods method))
+
 (defn empty-result
   "The result for a request when no backend for its file offers its feature."
   [method]

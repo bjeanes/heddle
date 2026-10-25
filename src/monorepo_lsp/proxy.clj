@@ -12,6 +12,7 @@
             [monorepo-lsp.fetched :as fetched]
             [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp]
+            [monorepo-lsp.merge :as merge]
             [monorepo-lsp.paths :as paths]
             [monorepo-lsp.translate :as translate])
   (:import (java.net URI)))
@@ -304,6 +305,61 @@
            (forward-request! proxy b msg)
            (route-request! proxy msg more))))))
 
+(defn- when-all-ready
+  "Calls `f` once every one of `backends` has started or failed to start."
+  [backends f]
+  (if-let [[b & more] (seq backends)]
+    (backend/when-ready b #(when-all-ready more f))
+    (f)))
+
+(defn- ask-all!
+  "Sends the request to each of `backends`, and calls `on-responses` with
+  their responses in the same order once they have all answered. A backend
+  that stops first answers nil."
+  [backends {:strs [id method params]} on-responses]
+  (let [n (count backends)
+        responses (atom {})]
+    (doseq [[i b] (map-indexed vector backends)]
+      (backend/request! b method (translate/to-server b params) id
+                        (fn [response]
+                          (let [all (swap! responses assoc i response)]
+                            (when (= n (count all))
+                              (on-responses (mapv all (range n))))))))))
+
+(defn- answered? [response]
+  (and response (not (contains? response "error"))))
+
+(defn- combined-response
+  "The response to the client's request `id` from the backends' `responses`.
+  Backends that failed to answer are left out, unless they all did."
+  [id method backends responses]
+  (let [answers (for [[b response] (map vector backends responses)
+                      :when (answered? response)]
+                  [(:server-type b) (to-client! b (get response "result"))])]
+    (doseq [[b response] (map vector backends responses)
+            :when (not (answered? response))]
+      (log/info (:backend-id b) "didn't answer" method "-"
+                (get-in response ["error" "message"] "it stopped")))
+    (cond
+      (seq answers) (lsp/response id (merge/combine method answers))
+      (some some? responses) (assoc (first (filter some? responses)) "id" id)
+      :else (lsp/error-response id -32603 "every backend stopped before answering"))))
+
+(defn- combine-request!
+  "Sends a request to every one of `backends` that offers the request's
+  feature, and answers with their combined results."
+  [proxy {:strs [id method] :as msg} backends]
+  (when-all-ready backends
+    #(let [feature (capabilities/feature method)
+           offering (filterv (fn [b] (and (backend/ready? b)
+                                          (capabilities/offers? (backend/capabilities b) feature)))
+                             backends)]
+       (if (empty? offering)
+         (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+         (ask-all! offering msg
+                   (fn [responses]
+                     (send-client! proxy (combined-response id method offering responses))))))))
+
 (defn- cancel!
   "Passes on the client's cancellation of a request it sent a backend."
   [proxy client-id]
@@ -348,6 +404,7 @@
       (= "initialize" method) (initialize! proxy msg)
       (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
+      (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))
       uri (route-request! proxy msg (running-handlers proxy uri))
       :else (send-client! proxy (lsp/response id nil)))))
 
