@@ -91,6 +91,11 @@ read = ['cat', '{read:file}']
 (defn- shown [type message]
   (lsp/notification "window/showMessage" {"type" type "message" message}))
 
+(defn- failure
+  "The message for a backend that failed as `what-happened` says."
+  [what-happened]
+  (str what-happened ". Opening one of its files will start it again, once 30 s have passed."))
+
 (deftest initializing
   (testing "answers with full sync, and finds the config at the client's root"
     (let [t (start)]
@@ -653,29 +658,65 @@ read = ['cat', '{read:file}']
   (testing "when a backend can't be connected to"
     (let [t (start :server-types #{"ruby"} :refuse {["ruby" "api"] "ruby: command not found"})]
       (start-ruby! t)
-      (is (= (shown 1 "ruby in api failed to start: ruby: command not found") (from-proxy t)))))
+      (is (= (shown 1 (failure "ruby in api failed to start: ruby: command not found")) (from-proxy t)))))
   (testing "when a backend answers initialize with an error"
     (let [t (start :server-types #{"ruby"}
                    :respond (fn [_ {:strs [id]}] [(lsp/error-response id -32603 "no Gemfile")]))]
       (start-ruby! t)
-      (is (= (shown 1 "ruby in api failed to start: initialize failed: no Gemfile") (from-proxy t)))))
+      (is (= (shown 1 (failure "ruby in api failed to start: initialize failed: no Gemfile")) (from-proxy t)))))
   (testing "when a backend exits before answering initialize"
     (let [t (start :server-types #{"ruby"} :respond (constantly [fake/hang-up]))]
       (start-ruby! t)
-      (is (= (shown 1 "ruby in api failed to start: it exited with 0 before answering initialize")
+      (is (= (shown 1 (failure "ruby in api failed to start: it exited with 0 before answering initialize"))
              (from-proxy t)))))
   (testing "when a running backend stops"
     (let [t (start :server-types #{"ruby"})]
       (start-ruby! t)
       (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
       (stop-backend! t ["ruby" "api"])
-      (is (= (shown 2 "ruby in api stopped with exit code 0. It will restart when one of its files next opens.")
-             (from-proxy t)))))
+      (is (= (shown 2 (failure "ruby in api stopped with exit code 0")) (from-proxy t)))))
   (testing "naming the repo root for a scope at the root"
     (let [t (start :server-types #{"lint"} :refuse {["lint" "."] "lint: command not found"})]
       (initialize! t {})
       (open! t "Gemfile" "plaintext")
-      (is (= (shown 1 "lint in the repo root failed to start: lint: command not found") (from-proxy t))))))
+      (is (= (shown 1 (failure "lint in the repo root failed to start: lint: command not found"))
+             (from-proxy t))))))
+
+(def ^:private fails-initialize
+  (fn [_ {:strs [id method]}]
+    (when (= "initialize" method)
+      [(lsp/error-response id -32603 "no Gemfile")])))
+
+(deftest telling-a-backend-that-failed-initialize-to-exit
+  (let [t (start :server-types #{"ruby"} :respond fails-initialize)]
+    (start-ruby! t)
+    (is (eventually #(seq (received t ["ruby" "api"] "exit"))))))
+
+(deftest retrying-failed-backends
+  (testing "that failed to start, on a didOpen at least 30 s later"
+    (let [t (start :server-types #{"ruby"} :respond fails-initialize)
+          initializes #(count (received t ["ruby" "api"] "initialize"))]
+      (start-ruby! t)
+      (is (= 1 (get-in (from-proxy t) ["params" "type"])))
+      (swap! (:now t) + 29999)
+      (open! t "api/a.rb" "ruby")
+      (is (= 1 (initializes)))
+      (swap! (:now t) inc)
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 (initializes))))))
+  (testing "that stopped, on a didOpen at least 30 s later"
+    (let [t (start :server-types #{"ruby"})
+          opens #(count (received t ["ruby" "api"] "textDocument/didOpen"))]
+      (start-ruby! t)
+      (is (eventually #(= 1 (opens))))
+      (stop-backend! t ["ruby" "api"])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (swap! (:now t) + 29999)
+      (open! t "api/a.rb" "ruby")
+      (is (= 1 (opens)))
+      (swap! (:now t) inc)
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 (opens)))))))
 
 (deftest telling-the-user-about-a-backend-at-most-once-a-minute
   (let [t (start :server-types #{"ruby"})

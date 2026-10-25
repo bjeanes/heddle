@@ -230,7 +230,7 @@
       (show-message! proxy type message)
       (log/info message))))
 
-(declare from-backend!)
+(declare from-backend! failed!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
   (let [{:keys [config repo client-params]} @(:state proxy)
@@ -240,12 +240,20 @@
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
     (backend/when-ready b #(if (backend/ready? b)
                              (register! proxy)
-                             (report! proxy b :error (str (describe b) " failed to start: " (backend/error b)))))
+                             (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
+                                 (future (backend/exit! b 2000)))))
     b))
 
-(defn- backend-for! [proxy k]
-  (or (get-in @(:state proxy) [:backends k])
-      (start-backend! proxy k)))
+(def ^:private retry-interval-ms 30000)
+
+(defn- backend-for!
+  "The backend for `k`, a [server-type scope], started if it isn't running.
+  Returns nil if it failed within the last `retry-interval-ms`."
+  [proxy k]
+  (let [{:keys [backends failures]} @(:state proxy)]
+    (cond
+      (contains? backends k) (get backends k)
+      (elapsed? (get-in failures [k :at]) (now-ms proxy) retry-interval-ms) (start-backend! proxy k))))
 
 (defn- to-client!
   "Translates a payload from the backend `b` for the client, after fetching
@@ -286,22 +294,33 @@
           :when (contains? for-file (:backend-id b))]
     (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
 
+(defn- failed!
+  "Replaces the backend `b`, which failed to start or stopped, with a record of
+  why and when under :failures, withdraws its diagnostics and tells the user.
+  `what-happened` follows the backend's description in the message."
+  [proxy b type what-happened]
+  (let [k [(:server-type b) (:scope b)]
+        now (now-ms proxy)
+        message (str (describe b) " " what-happened ". Opening one of its files will start it again, once "
+                     (quot retry-interval-ms 1000) " s have passed.")
+        [old] (swap-vals! (:state proxy)
+                          (fn [state]
+                            (cond-> state
+                              (identical? b (get-in state [:backends k]))
+                              (-> (update :backends dissoc k)
+                                  (assoc-in [:failures k] {:message message :at now})))))]
+    (when (identical? b (get-in old [:backends k]))
+      (clear-diagnostics! proxy b)
+      (when-not (or (:shut-down old) (:exiting old))
+        (report! proxy b type message)))))
+
 (defn- stopped!
-  "Forgets the backend `b`, which has stopped, and tells the user if it had
-  been running. A backend that stops while starting has failed to start, which
-  is reported once it settles."
+  "Handles the backend `b` stopping. A backend that stops while starting has
+  failed to start instead, which is handled once it settles."
   [proxy b]
   (log/info (:backend-id b) "stopped")
-  (swap! (:state proxy) update :backends
-         (fn [backends]
-           (let [k [(:server-type b) (:scope b)]]
-             (cond-> backends (identical? b (get backends k)) (dissoc k)))))
-  (clear-diagnostics! proxy b)
-  (let [{:keys [shut-down exiting]} @(:state proxy)]
-    (when (and (= :exited (backend/status b)) (not (or shut-down exiting)))
-      (report! proxy b :warning (str (describe b) " stopped"
-                                     (some->> (backend/exit-code b 1000) (str " with exit code "))
-                                     ". It will restart when one of its files next opens.")))))
+  (when (= :exited (backend/status b))
+    (failed! proxy b :warning (str "stopped" (some->> (backend/exit-code b 1000) (str " with exit code "))))))
 
 (defn- qualify
   "An ID that the backend `b` chose for the client, made unique among all
@@ -429,8 +448,10 @@
 (defn- open! [proxy {:strs [textDocument] :as params}]
   (let [{:strs [uri languageId]} textDocument]
     (swap! (:state proxy) assoc-in [:documents uri] {:language languageId})
-    (doseq [k (handlers proxy uri languageId)]
-      (notify-backend! (backend-for! proxy k) "textDocument/didOpen" params))))
+    (doseq [k (handlers proxy uri languageId)
+            :let [b (backend-for! proxy k)]
+            :when b]
+      (notify-backend! b "textDocument/didOpen" params))))
 
 (defn- document-notification! [proxy method params]
   (let [uri (get-in params ["textDocument" "uri"])]
