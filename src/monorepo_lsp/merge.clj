@@ -27,6 +27,18 @@
     {"isIncomplete" (boolean (some #(get % "isIncomplete") lists))
      "items" (vec (mapcat #(get % "items") lists))}))
 
+(defn- code-actions
+  "The code actions in `answers`. The spec gives a code action no ID, only a
+  title, and two servers may well offer actions with the same title. So, if
+  more than one server offers any, each title names its server type."
+  [answers]
+  (let [offered (filter (comp seq second) answers)]
+    (if (< 1 (count offered))
+      (vec (for [[server-type actions] offered
+                 action actions]
+             (update action "title" #(str "[" server-type "] " %))))
+      (vec (mapcat second offered)))))
+
 (defn combine
   "One answer to the request `method` from `answers`, which are pairs of a
   server type and its backend's result, in priority order. Nil if every
@@ -36,4 +48,5 @@
     (when (seq results)
       (case method
         "textDocument/completion" (completions results)
+        "textDocument/codeAction" (code-actions answers)
         (vec (apply concat results))))))

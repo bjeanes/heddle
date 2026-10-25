@@ -246,7 +246,10 @@ read = ['cat', '{read:file}']
                     (["ruby" "initialize"] ["lint" "initialize"])
                     [(lsp/response id {"capabilities" {"completionProvider" {}
                                                        "referencesProvider" true
-                                                       "codeLensProvider" {}}})]
+                                                       "codeLensProvider" {}
+                                                       "codeActionProvider" true}})]
+                    (["ruby" "textDocument/codeAction"] ["lint" "textDocument/codeAction"])
+                    [(lsp/response id [{"title" "Fix"}])]
                     ["ruby" "textDocument/completion"] [(lsp/response id [{"label" "ruby"}])]
                     ["lint" "textDocument/completion"] [(lsp/response id {"isIncomplete" true
                                                                           "items" [{"label" "lint"}]})]
@@ -264,6 +267,9 @@ read = ['cat', '{read:file}']
         (is (= 1 id))
         (is (true? (get result "isIncomplete")))
         (is (= ["lint" "ruby"] (map #(get % "label") (get result "items"))))))
+    (testing "with code action titles naming their server types"
+      (client! t (request-about t 4 "textDocument/codeAction" "api/a.rb"))
+      (is (= ["[lint] Fix" "[ruby] Fix"] (map #(get % "title") (get (from-proxy t) "result")))))
     (testing "without the backends that failed to answer"
       (client! t (request-about t 2 "textDocument/references" "api/a.rb"))
       (is (= (lsp/response 2 [{"uri" (uri t "api/a.rb")}]) (from-proxy t))))

@@ -27,6 +27,15 @@
                                   ["y" [{"label" "c"}]]])
                   "items"))))))
 
+(deftest combining-code-actions
+  (testing "names each action's server type when more than one offers any"
+    (is (= [{"title" "[x] Fix"} {"title" "[y] Fix" "command" "y.fix"}]
+           (merge/combine "textDocument/codeAction"
+                          [["x" [{"title" "Fix"}]] ["y" [{"title" "Fix" "command" "y.fix"}]]]))))
+  (testing "leaves titles alone when only one does"
+    (is (= [{"title" "Fix"}]
+           (merge/combine "textDocument/codeAction" [["x" []] ["y" [{"title" "Fix"}]] ["z" nil]])))))
+
 (deftest combining-other-answers
   (testing "concatenates them"
     (is (= [{"title" "a"} {"title" "b"}]
