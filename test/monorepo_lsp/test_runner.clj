@@ -14,6 +14,7 @@
             [monorepo-lsp.origin-test]
             [monorepo-lsp.paths-test]
             [monorepo-lsp.proxy-test]
+            [monorepo-lsp.readme-test]
             [monorepo-lsp.runner-test]
             [monorepo-lsp.translate-test]))
 

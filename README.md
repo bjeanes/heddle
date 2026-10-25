@@ -81,6 +81,168 @@ For more, see the examples:
   own bundles, plus RuboCop in a separate `lints` service that checks the
   whole repo.
 
+[The config in full](#the-config-in-full) covers every key.
+
+## The config in full
+
+The config has three tables. `servers` says which language servers handle
+which files. `scopes` says how to start each of those servers for the files
+under a directory. `runners` holds the commands that start a server somewhere,
+such as on the host or in a container. You'll often only need the first two,
+because the proxy ships with runners for the host, Docker and Compose. Compose
+has no special treatment in the proxy. It's one of those built-in runners,
+written in the same TOML you'd use for your own.
+
+### Server types and scopes
+
+A server type matches a file by the language ID your editor sends when it
+opens the file, by a glob on the file's path from the repo root, or by both.
+When several server types handle a file and a request needs a single answer,
+the one with the highest `priority` answers. A tie goes to the name that sorts
+first.
+
+A scope is a directory relative to the repo root, with `.` for the root itself.
+It lists the server types it starts and how to start each one. For each server
+type that matches a file, the proxy uses the longest scope that contains the
+file and lists that server type. If there isn't one, that server type doesn't
+handle the file.
+
+The proxy lays a scope's values over the server type's `boot` table, one key
+at a time. That lets you give the command once, on the server type, and only
+say where it runs in each scope. Two keys in the result belong to the proxy.
+`runner` names the runner to use. `paths` maps directories in the repo to the
+absolute directories the server sees, such as where a container mounts them.
+Every other key, `command` included, is a value for the runner's templates.
+
+<!-- example: full config -->
+```toml
+[servers.ruby-lsp]                       # a server type, named as you like
+languages = ["ruby"]                     # optional if globs is given
+globs = ["**/Gemfile", "**/*.rake"]      # optional if languages is given
+priority = 10                            # optional, defaults to 0
+
+[servers.ruby-lsp.boot]                  # optional, defaults to empty
+runner = "compose"                       # required, here or in each scope
+command = ["bundle", "exec", "ruby-lsp"] # a value for the runner
+
+[servers.rubocop]
+languages = ["ruby"]
+boot = { command = ["rubocop", "--lsp"] }
+
+[scopes."services/api".ruby-lsp]         # starts ruby-lsp under services/api
+service = "api"                          # a value for the runner, which compose requires
+paths = { "services/api" = "/app" }      # optional, defaults to each path as itself
+
+[scopes."services/legacy".ruby-lsp]
+runner = "host"                          # replaces the server type's runner
+command = ["ruby-lsp"]                   # replaces the server type's command
+
+[scopes."."]                             # the repo root, as a catch-all
+rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
+```
+
+With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`
+service and RuboCop in the `lints` service.
+
+### Runners
+
+A runner is a set of command templates. Each template is a list of arguments,
+which the proxy runs directly, without a shell. Every template runs with the
+scope's directory as its working directory.
+
+- `start` starts the server, which then speaks LSP over its stdin and stdout.
+  Every runner needs one. The proxy runs it the first time you open a file the
+  backend handles.
+- `prepare` is optional. If the runner has one, the proxy runs it to
+  completion before each `start`, for example to start a stopped container. If
+  it fails, the backend doesn't start.
+- `read` is optional. It prints a file from the server's side. The proxy runs
+  it when a server refers to a file that `paths` doesn't cover, such as an
+  installed gem, to copy the file out for you to open. Without it, you can't
+  open those files.
+- `defaults` is optional. It gives values for the templates that a boot config
+  can override.
+
+Templates draw on values through placeholders:
+
+| Placeholder          | Value                                                     |
+| -------------------- | --------------------------------------------------------- |
+| `{cfg:NAME}`         | the boot config's `NAME`, or else the runner's `defaults` |
+| `{client:repo}`      | the repo root, as a path on your machine                  |
+| `{client:scope}`     | the scope's directory, as a path on your machine          |
+| `{server:scope}`     | the scope's directory, as the server sees it              |
+| `{read:file}`        | the file to print, as the server sees it (only in `read`) |
+| `{proxy:backend_id}` | an ID unique to the backend, safe as a container name     |
+
+A `{cfg:…}` value can be a string or a list of strings. The other placeholders
+are always a single string. Since there's no shell to split a string into
+words, a list is how you pass several arguments. A list has to make up a whole argument
+of the template, and its items become separate arguments. An empty list leaves
+the argument out. A `{cfg:…}` value can itself use the other placeholders, as
+in `"{client:repo}:/src"`, though not another `{cfg:…}`.
+
+When the proxy loads the config, it checks every scope against its runner. It
+reports a value the runner needs but nobody gives, an unknown placeholder, or
+`paths` that don't cover the scope's directory.
+
+To run a server in a Nix dev shell, for example, add a runner and name it from
+a scope:
+
+<!-- example: custom runner -->
+```toml
+[runners.nix]                                    # a runner, named as you like
+defaults = { shell = "{client:repo}" }           # optional
+prepare = ["nix", "develop", "{cfg:shell}", "--command", "true"]
+start = ["nix", "develop", "{cfg:shell}", "--command", "{cfg:command}"]
+
+[scopes."tools/cli".ruby-lsp]
+runner = "nix"
+```
+
+Added to the config above, this starts `nix develop /path/to/repo --command
+bundle exec ruby-lsp` in `tools/cli`. Since the server runs on your machine,
+its paths need no translating and the runner needs no `read`.
+
+### The built-in runners
+
+The proxy adds these to your config's `runners`. If you define a runner with
+the same name, yours replaces the built-in one. Since there's no default
+runner, every boot config has to name one.
+
+<!-- resources/monorepo_lsp/runners.toml -->
+```toml
+# The runners that ship with the proxy. A project's config can override any of
+# these by name, or add its own.
+
+[runners.host]
+start = ["{cfg:command}"]
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[runners.docker-exec]
+start = ["docker", "exec", "--interactive", "--workdir", "{server:scope}", "{cfg:container}", "{cfg:command}"]
+read = ["docker", "exec", "{cfg:container}", "cat", "{read:file}"]
+
+[runners.docker-run]
+defaults = { args = [] }
+start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}", "{cfg:args}", "--workdir", "{server:scope}", "{cfg:image}", "{cfg:command}"]
+read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
+```
+
+Every one of them needs a `command`.
+
+- `host` runs it on your machine.
+- `compose` runs it in a running Compose `service`. To pass Compose flags such
+  as `--file`, set `compose`, which defaults to `["docker", "compose"]`.
+- `docker-exec` runs it in a running `container`.
+- `docker-run` starts a new container from `image` for each backend, and
+  removes it when the server exits. Since `paths` only translates paths, you
+  mount the repo yourself with `args`, as in
+  `args = ["--volume", "{client:repo}:/src"]`.
+
 ## Neovim
 
 This needs Neovim 0.11 or newer, though I've only tried it with 0.12.6. The
