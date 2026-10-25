@@ -507,14 +507,42 @@
                                       :else
                                       (lsp/response id (result-for-client b method (get response "result"))))))))
 
+(def ^:private request-failed -32803)
+
+(defn- failures
+  "Why each of the backends `ks`, as [server-type scope], failed, for those
+  that aren't running because they did."
+  [{:keys [backends failures]} ks]
+  (keep #(when-not (contains? backends %) (get-in failures [% :message])) ks))
+
+(defn- failed-response
+  "An error answering the request `id`, which an agent sees in its tool's
+  result, with why the backends that would have answered it failed."
+  [id reasons]
+  (lsp/error-response id request-failed (str/join "\n" reasons)))
+
+(defn- answer-unanswered!
+  "Answers a request that no running backend can, with an empty result. If no
+  backend that would handle the request's file is running, and some have
+  failed, the answer is an error saying why instead."
+  [proxy {:strs [id method params]}]
+  (let [state @(:state proxy)
+        uri (get-in params ["textDocument" "uri"])
+        ks (handlers proxy uri (get-in state [:documents uri :language]))
+        reasons (when (not-any? #(contains? (:backends state) %) ks)
+                  (failures state ks))]
+    (send-client! proxy (if (seq reasons)
+                          (failed-response id reasons)
+                          (lsp/response id (capabilities/empty-result method))))))
+
 (defn- route-request!
   "Sends a request to the first of the backends `b` and `more`, in priority
-  order, that offers the request's feature, or answers it with an empty result
-  if none does. A request for a feature the proxy doesn't know about goes to
-  the first backend that has started."
-  [proxy {:strs [id method] :as msg} [b & more]]
+  order, that offers the request's feature, or answers it with
+  `answer-unanswered!` if none does. A request for a feature the proxy doesn't
+  know about goes to the first backend that has started."
+  [proxy {:strs [method] :as msg} [b & more]]
   (if (nil? b)
-    (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+    (answer-unanswered! proxy msg)
     (backend/when-ready b
       #(let [feature (capabilities/feature method)]
          (if (and (backend/ready? b)
@@ -572,7 +600,7 @@
                                           (capabilities/offers? (backend/capabilities b) feature)))
                              backends)]
        (if (empty? offering)
-         (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+         (answer-unanswered! proxy msg)
          (ask-all! offering msg
                    (fn [responses]
                      (send-client! proxy (combined-response id method offering responses))))))))
@@ -603,14 +631,25 @@
     (or (last (sort-by (comp count :scope) containing))
         (first running))))
 
+(defn- not-running-response
+  "The answer to the request `id` for a command of `server-type`, which has no
+  running backend to run it."
+  [proxy id server-type]
+  (let [state @(:state proxy)
+        reasons (failures state (sort (filter #(= server-type (first %)) (keys (:failures state)))))]
+    (if (seq reasons)
+      (failed-response id reasons)
+      (lsp/error-response id -32603 (str "no " server-type " backend is running")))))
+
 (defn- execute-command!
   "Sends `workspace/executeCommand` to a backend of the server type that the
-  command is qualified with, as the command ID the backend chose."
+  command is qualified with, as the command ID the backend chose. If none is
+  running, the answer is an error saying why."
   [proxy {:strs [id params] :as msg}]
   (let [server-types (keys (get-in @(:state proxy) [:config "servers"]))
         [server-type command] (origin/command-origin server-types (get params "command"))
         b (when server-type (command-backend proxy server-type (get params "arguments")))
-        not-running #(send-client! proxy (lsp/error-response id -32603 (str "no " server-type " backend is running")))]
+        not-running #(send-client! proxy (not-running-response proxy id server-type))]
     (cond
       (nil? server-type)
       (send-client! proxy (lsp/error-response id -32602 (str "unknown command " (pr-str (get params "command")))))

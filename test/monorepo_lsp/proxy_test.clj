@@ -489,19 +489,44 @@ read = ['cat', '{read:file}']
       (is (eventually #(= [{"changes" [{"uri" "file:///app/b.rb" "type" 1}]}]
                           (received-params ["ruby" "api"] "workspace/didChangeWatchedFiles")))))))
 
-(deftest requests-past-a-backend-that-failed-to-start
+(deftest requests-with-a-failed-backend
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]
                     ["lint" "initialize"] [(lsp/error-response id -32603 "no config")]
                     ["ruby" "initialize"] [(lsp/response id {"capabilities" {"definitionProvider" true}})]
                     ["ruby" "textDocument/definition"] [(lsp/response id "from ruby")]
                     nil))
-        t (start :respond respond)]
+        t (start :respond respond)
+        lint-failed (failure "lint in the repo root failed to start: initialize failed: no config")]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
-    (is (= "window/showMessage" (get (from-proxy t) "method")))
-    (is (= (lsp/response 1 "from ruby") (from-proxy t)))))
+    (open! t "Gemfile" "plaintext")
+    (is (= (shown 1 lint-failed) (from-proxy t)))
+    (testing "go to another backend that can answer"
+      (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
+      (is (= (lsp/response 1 "from ruby") (from-proxy t))))
+    (testing "get an empty result while another backend for the file is running"
+      (client! t (request-about t 2 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 2 nil) (from-proxy t))))
+    (testing "get an error saying why when no backend for the file is running"
+      (client! t (request-about t 3 "textDocument/hover" "Gemfile"))
+      (is (= (lsp/error-response 3 -32803 lint-failed) (from-proxy t)))
+      (client! t (request-about t 4 "textDocument/completion" "Gemfile"))
+      (is (= (lsp/error-response 4 -32803 lint-failed) (from-proxy t))))
+    (testing "get an error saying why for a command whose backends have failed"
+      (client! t (lsp/request 5 "workspace/executeCommand" {"command" "lint:fix"}))
+      (is (= (lsp/error-response 5 -32803 lint-failed) (from-proxy t))))))
+
+(deftest requests-with-every-backend-failed
+  (let [t (start :refuse {["ruby" "api"] "ruby: command not found"
+                          ["lint" "."] "lint: command not found"})
+        ruby-failed (failure "ruby in api failed to start: ruby: command not found")
+        lint-failed (failure "lint in the repo root failed to start: lint: command not found")]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (= #{(shown 1 ruby-failed) (shown 1 lint-failed)} (set [(from-proxy t) (from-proxy t)])))
+    (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+    (is (= (lsp/error-response 1 -32803 (str lint-failed "\n" ruby-failed)) (from-proxy t)))))
 
 (deftest requests-from-backends
   (let [respond (fn [[server-type] {:strs [id method]}]
