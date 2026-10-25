@@ -284,9 +284,21 @@ before it knows which backends it will need.
 
 The proxy answers `initialize` itself. It announces text document syncing for
 every file, which means the client tells it about every file that opens. Then,
-as each backend starts, the proxy registers that backend's features with the
-client (`client/registerCapability`[1]), limited to that backend's files with a
-document selector.
+as backends start, the proxy registers their features with the client
+(`client/registerCapability`[1]), limited to their files with a document
+selector.
+
+Each feature gets one registration, covering the files of every backend that
+offers it. Clients such as VS Code create a provider for each registration, and
+ask every provider whose selector matches a file. With a registration per
+backend, the client would send the proxy the same request once for each backend
+that handles the file. Since the proxy already routes or combines each request
+itself, the client would then show every answer several times. The registration
+merges the backends' options, such as taking every backend's trigger characters.
+When another backend starts and the registration has to cover more, the proxy
+unregisters it and registers it again. As far as I can tell, the spec doesn't
+say whether a client should replace a registration whose ID is registered a
+second time.
 
 Clients say, feature by feature, whether they accept registrations after
 startup. For a feature the client can't register later, the proxy announces it
@@ -364,10 +376,10 @@ Workspace symbol search, configuration changes and shutdown go to every running
 backend. The proxy merges the answers. Changes to watched files go to the
 backends whose scopes contain them.
 
-The proxy announces workspace symbol search at startup instead of registering
-it for each backend. Some clients send a request once for each registration,
-and since the proxy already asks every backend, they would see each symbol
-several times.
+The proxy announces workspace symbol search at startup, whether or not the
+client could register it later. Since the search isn't about any one file,
+there's nothing for a registration's document selector to narrow. Until a
+backend has started, the proxy answers with no symbols.
 
 ### Requests from backends
 

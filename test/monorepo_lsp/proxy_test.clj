@@ -165,19 +165,30 @@ read = ['cat', '{read:file}']
 
 (deftest registering-features
   (let [t (start)
-        caps (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})]
+        caps (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
+        selector #(get-in % ["params" "registrations" 0 "registerOptions" "documentSelector"])]
     (is (not (contains? caps "hoverProvider")))
-    (open! t "api/a.rb" "ruby")
-    (let [requests (doall (repeatedly 2 #(from-proxy t)))
-          registrations (mapcat #(get-in % ["params" "registrations"]) requests)]
-      (testing "once each backend has started"
-        (is (= ["client/registerCapability" "client/registerCapability"] (map #(get % "method") requests)))
-        (is (= ["textDocument/hover" "textDocument/hover"] (map #(get % "method") registrations)))
-        (is (= 2 (count (set (map #(get % "id") registrations))))))
-      (testing "for the files in its scope"
-        (is (some #(= {"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}
-                      (get-in % ["registerOptions" "documentSelector" 0]))
-                  registrations))))))
+    (open! t "Gemfile" "plaintext")
+    (let [lint (from-proxy t)]
+      (testing "once a backend that offers them has started, for the files it handles"
+        (is (= "client/registerCapability" (get lint "method")))
+        (is (= [["textDocument/hover" "textDocument/hover"]]
+               (map (juxt #(get % "id") #(get % "method")) (get-in lint ["params" "registrations"]))))
+        (is (some #{{"pattern" {"baseUri" (str "file://" (:repo t)) "pattern" "**/Gemfile"}}} (selector lint))
+            "such as those matching its globs"))
+      (testing "once for every backend, replacing the registration when another starts"
+        (open! t "api/a.rb" "ruby")
+        (let [unregister (from-proxy t)
+              register (from-proxy t)]
+          (is (= (lsp/request (get unregister "id") "client/unregisterCapability"
+                              {"unregisterations" [{"id" "textDocument/hover" "method" "textDocument/hover"}]})
+                 unregister))
+          (is (= "client/registerCapability" (get register "method")))
+          (is (= ["textDocument/hover"] (map #(get % "id") (get-in register ["params" "registrations"]))))
+          (testing "covering both backends' files"
+            (is (= (selector lint) (take (count (selector lint)) (selector register))))
+            (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
+                      (selector register)))))))))
 
 (defn- received [t k method]
   (filterv #(= method (get % "method")) (get @(:received t) k)))
@@ -327,11 +338,13 @@ read = ['cat', '{read:file}']
                     nil))
         t (start :respond respond)]
     (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "Gemfile" "plaintext")
+    (is (= "client/registerCapability" (get (from-proxy t) "method")))
     (open! t "api/a.rb" "ruby")
-    (testing "registers each backend's commands qualified with its server type"
-      (is (= #{["lint:fix"] ["ruby:fix"]}
-             (set (for [msg (doall (repeatedly 2 #(from-proxy t)))]
-                    (get-in msg ["params" "registrations" 0 "registerOptions" "commands"]))))))
+    (testing "registers every backend's commands qualified with its server type"
+      (is (= "client/unregisterCapability" (get (from-proxy t) "method")))
+      (is (= ["lint:fix" "ruby:fix"]
+             (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "commands"]))))
     (testing "qualifies the commands in answers"
       (client! t (request-about t 1 "textDocument/codeAction" "api/a.rb"))
       (is (= ["lint:fix" "ruby:fix"] (map #(get % "command") (get (from-proxy t) "result")))))

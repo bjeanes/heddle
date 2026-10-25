@@ -27,20 +27,45 @@
                      "definitionProvider" true
                      "referencesProvider" false}
         client-caps (assoc-in registers-hover ["textDocument" "references" "dynamicRegistration"] true)]
-    (is (= [{"id" "b1:textDocument/hover"
+    (is (= [{"id" "textDocument/hover"
              "method" "textDocument/hover"
              "registerOptions" {"workDoneProgress" true "documentSelector" selector}}]
-           (capabilities/registrations client-caps server-caps selector "b1"))
-        "only what the backend offers and the client can register")))
+           (capabilities/registrations client-caps [[server-caps selector]]))
+        "only what a backend offers and the client can register")))
+
+(deftest registrations-for-several-backends
+  (let [client-caps {"textDocument" {"hover" {"dynamicRegistration" true}
+                                     "completion" {"dynamicRegistration" true}}}
+        options #(get-in (into {} (map (juxt (fn [r] (get r "method")) identity))
+                               (capabilities/registrations client-caps %))
+                         [%2 "registerOptions"])]
+    (testing "one for each feature, covering every offering backend's files"
+      (is (= [{"id" "textDocument/hover"
+               "method" "textDocument/hover"
+               "registerOptions" {"documentSelector" [{"language" "ruby"} {"language" "erb"}]}}]
+             (capabilities/registrations client-caps [[{"hoverProvider" true} [{"language" "ruby"}]]
+                                                      [{"hoverProvider" true} [{"language" "erb"}]]
+                                                      [{} [{"language" "haml"}]]]))))
+    (testing "with the trigger characters of all of them"
+      (is (= ["." ":" "/"]
+             (get (options [[{"completionProvider" {"triggerCharacters" ["." ":"]}} []]
+                            [{"completionProvider" {"triggerCharacters" ["/" "."]}} []]]
+                           "textDocument/completion")
+                  "triggerCharacters"))))
+    (testing "resolving items if any of them does"
+      (is (true? (get (options [[{"completionProvider" {"resolveProvider" false}} []]
+                                [{"completionProvider" {"resolveProvider" true}} []]]
+                               "textDocument/completion")
+                      "resolveProvider"))))))
 
 (deftest command-registrations
-  (let [client-caps {"workspace" {"executeCommand" {"dynamicRegistration" true}}}
-        server-caps {"executeCommandProvider" {"commands" ["a"]}}]
-    (is (= [{"id" "b1:workspace/executeCommand"
+  (let [client-caps {"workspace" {"executeCommand" {"dynamicRegistration" true}}}]
+    (is (= [{"id" "workspace/executeCommand"
              "method" "workspace/executeCommand"
-             "registerOptions" {"commands" ["a"]}}]
-           (capabilities/registrations client-caps server-caps [{"language" "ruby"}] "b1"))
-        "without a document selector")
+             "registerOptions" {"commands" ["a" "b"]}}]
+           (capabilities/registrations client-caps [[{"executeCommandProvider" {"commands" ["a"]}} [{"language" "ruby"}]]
+                                                    [{"executeCommandProvider" {"commands" ["a" "b"]}} [{"language" "erb"}]]]))
+        "with every backend's commands once, and without a document selector")
     (is (= {"commands" []}
            (get-in (capabilities/initialize-result {}) ["capabilities" "executeCommandProvider"]))
         "announced with no commands when the client can't register them")))

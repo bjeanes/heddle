@@ -33,7 +33,8 @@
                             :documents {}
                             :last-id 0
                             :to-client {}
-                            :progress {}})))
+                            :progress {}
+                            :registered {}})))
 
 (defn- send-client! [proxy msg]
   ((:send proxy) msg))
@@ -113,33 +114,52 @@
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
 
-(defn- with-new-commands!
-  "The server capabilities `caps` of the backend `b`, listing only the commands
-  that no backend has registered with the client yet, qualified with its
-  server type. Some clients refuse to register a command twice, and two
-  backends of one server type will offer the same commands."
-  [proxy b caps]
-  (if-let [commands (get-in caps ["executeCommandProvider" "commands"])]
-    (let [qualified (map #(origin/qualify-command (:server-type b) %) commands)
-          [old] (swap-vals! (:state proxy) update :commands (fnil into #{}) qualified)
-          fresh (vec (remove (get old :commands #{}) qualified))]
-      (if (seq fresh)
-        (assoc-in caps ["executeCommandProvider" "commands"] fresh)
-        (dissoc caps "executeCommandProvider")))
-    caps))
+(defn- running-backends
+  "Every running backend, in priority order."
+  [proxy]
+  (let [{:keys [config backends]} @(:state proxy)
+        rank (zipmap (config/by-priority config (set (map first (keys backends)))) (range))]
+    (map backends (sort-by (fn [[server-type scope]] [(rank server-type) scope]) (keys backends)))))
 
-(defn- register! [proxy b]
-  (when (backend/ready? b)
-    (let [client-caps (get-in @(:state proxy) [:client-params "capabilities"])
-          registrations (capabilities/registrations client-caps
-                                                    (with-new-commands! proxy b (backend/capabilities b))
-                                                    (document-selector b) (:backend-id b))]
-      (when (seq registrations)
-        (request-client! proxy "client/registerCapability" {"registrations" registrations} nil
-                         (fn [{:strs [error]}]
-                           (when error
-                             (log/info "the client refused" (:backend-id b) "registrations:"
-                                       (get error "message")))))))))
+(defn- server-capabilities
+  "The server capabilities of the backend `b`, with its commands qualified
+  with its server type."
+  [b]
+  (cond-> (backend/capabilities b)
+    (get-in (backend/capabilities b) ["executeCommandProvider" "commands"])
+    (update-in ["executeCommandProvider" "commands"]
+               #(mapv (partial origin/qualify-command (:server-type b)) %))))
+
+(defn- ask-client!
+  "Sends the client a request about registrations, and logs it if the client
+  refuses."
+  [proxy method params]
+  (request-client! proxy method params nil
+                   (fn [{:strs [error]}]
+                     (when error
+                       (log/info "the client refused" method "-" (get error "message"))))))
+
+(defn- register!
+  "Registers each feature that any ready backend offers, with one registration
+  covering all of their files. Some clients, such as VS Code, ask every
+  registration that matches a file, so a registration per backend would bring
+  the proxy each request several times. When a registration has to change, the
+  proxy unregisters it and registers it again."
+  [proxy]
+  (locking (:state proxy)
+    (let [{:keys [client-params registered]} @(:state proxy)
+          wanted (capabilities/registrations (get client-params "capabilities")
+                                             (for [b (running-backends proxy)
+                                                   :when (backend/ready? b)]
+                                               [(server-capabilities b) (document-selector b)]))
+          changed (remove #(= % (get registered (get % "method"))) wanted)
+          replaced (filter #(contains? registered (get % "method")) changed)]
+      (swap! (:state proxy) update :registered into (map (juxt #(get % "method") identity)) changed)
+      (when (seq replaced)
+        (ask-client! proxy "client/unregisterCapability"
+                     {"unregisterations" (mapv #(select-keys % ["id" "method"]) replaced)}))
+      (when (seq changed)
+        (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)})))))
 
 (defn- init-params [b client-params]
   (let [root-uri (path->uri (:root b))]
@@ -164,7 +184,7 @@
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
-    (backend/when-ready b #(register! proxy b))
+    (backend/when-ready b #(register! proxy))
     b))
 
 (defn- backend-for! [proxy k]
@@ -355,13 +375,6 @@
       (swap! (:state proxy) update :documents dissoc uri))))
 
 ;; The workspace
-
-(defn- running-backends
-  "Every running backend, in priority order."
-  [proxy]
-  (let [{:keys [config backends]} @(:state proxy)
-        rank (zipmap (config/by-priority config (set (map first (keys backends)))) (range))]
-    (map backends (sort-by (fn [[server-type scope]] [(rank server-type) scope]) (keys backends)))))
 
 (defn- notify-all! [proxy method params]
   (doseq [b (running-backends proxy)]

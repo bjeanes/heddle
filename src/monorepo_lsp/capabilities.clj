@@ -3,8 +3,9 @@
   the client. See \"Startup and capabilities\" in DESIGN.md.
 
   A client says, feature by feature, whether it accepts registrations after
-  startup. Those features are registered for each backend once it has started.
-  The rest are announced in the proxy's own `initialize` reply."
+  startup. Those features are registered once a backend that offers them has
+  started, with one registration for each feature. The rest are announced in
+  the proxy's own `initialize` reply."
   (:require [clojure.string :as str])
   (:import (java.net URI)))
 
@@ -58,9 +59,9 @@
   (conj document-features execute-command))
 
 (def ^:private workspace-symbol
-  "Workspace symbol search, which the proxy announces at startup rather than
-  registering for each backend. It asks every backend itself, so a client
-  that asked for each registration would get every answer several times."
+  "Workspace symbol search, which the proxy announces at startup whatever the
+  client supports. It isn't about any one file, and the proxy asks every
+  running backend itself, answering with nothing before any has started."
   {:method "workspace/symbol"
    :provider "workspaceSymbolProvider"
    :static {"resolveProvider" true}})
@@ -134,19 +135,36 @@
                           [(:provider f) (:static f)]))
    "serverInfo" {"name" "monorepo-lsp"}})
 
+(defn- merge-option
+  "One backend's value for a registration option combined with another's, from
+  a backend of lower priority. Lists such as trigger characters are combined,
+  and a flag such as `resolveProvider` is set if either sets it. Otherwise the
+  first value stands."
+  [a b]
+  (cond
+    (and (sequential? a) (sequential? b)) (vec (distinct (concat a b)))
+    (and (boolean? a) (boolean? b)) (or a b)
+    :else a))
+
 (defn registrations
-  "The registrations for `client/registerCapability` of the features a backend
-  offers that the client accepts registrations for. Each one for a document
-  feature covers the files in `document-selector`. Each ID starts with
-  `id-prefix`."
-  [client-caps server-caps document-selector id-prefix]
+  "The registrations for `client/registerCapability`, one for each feature
+  that the client accepts registrations for and any of `backends` offers.
+  `backends` are pairs of a backend's server capabilities and its document
+  selector, in priority order. A feature's registration combines the options
+  of every backend that offers it, and covers all of their files."
+  [client-caps backends]
   (vec (for [f features
-             :when (and (registrable? client-caps f) (offers? server-caps f))
-             :let [options (get server-caps (:provider f))]]
-         {"id" (str id-prefix ":" (:method f))
+             :when (registrable? client-caps f)
+             :let [offering (filter #(offers? (first %) f) backends)]
+             :when (seq offering)
+             :let [options (for [[server-caps] offering
+                                 :let [o (get server-caps (:provider f))]]
+                             (if (map? o) o {}))]]
+         {"id" (:method f)
           "method" (:method f)
-          "registerOptions" (cond-> (if (map? options) options {})
-                              (document-feature? f) (assoc "documentSelector" document-selector))})))
+          "registerOptions" (cond-> (apply merge-with merge-option options)
+                              (document-feature? f)
+                              (assoc "documentSelector" (vec (distinct (mapcat second offering)))))})))
 
 (defn- uri-path [uri]
   (when (string? uri)
