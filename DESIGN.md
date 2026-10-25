@@ -48,6 +48,15 @@ The proxy finds its config by looking for `.monorepo-lsp.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
 in. The file name will likely change along with the project's name.
 
+`monorepo-lsp --languages [DIR]` doesn't start the proxy. Instead, it prints
+the languages that the config at the root of DIR covers, as JSON such as
+`{"languages":["ruby"]}`. DIR defaults to the directory it was started in. Only
+server types that some scope starts count. If there's no config, or it's
+invalid, it prints the problems to stderr and exits non-zero. A client uses
+this to stop its own servers for those languages from starting alongside the
+proxy, since few clients can parse TOML themselves. It's a flag so that it
+can't be mistaken for a server type's name.
+
 ## Configuration
 
 The Neovim harness answered two questions at once, which the config keeps

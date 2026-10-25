@@ -54,6 +54,10 @@ ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/a
 Since the proxy doesn't start containers itself, bring them up first with
 `docker compose up --detach`.
 
+To check which languages a config covers, run `monorepo-lsp --languages` from
+the repo root, or give it the root as an argument. It prints them as JSON,
+such as `{"languages":["ruby"]}`, or the config's problems if there are any.
+
 For more, see the examples:
 
 - [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.

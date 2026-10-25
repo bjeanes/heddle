@@ -150,6 +150,12 @@
                        (some #(glob/matches? % path) (get server "globs")))]
          name)))
 
+(defn languages
+  "The languages, sorted, of every server type that some scope starts."
+  [config]
+  (let [started (set (mapcat keys (vals (get config "scopes"))))]
+    (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started))))))
+
 (defn by-priority
   "The server types in the order they're asked a request that wants one
   answer: highest `priority` first, then by name. A server type's priority is

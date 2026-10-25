@@ -19,6 +19,23 @@
   (is (= #{"typescript"} (config/server-types design "services/web/app.tsx" "typescriptreact")))
   (is (= #{} (config/server-types design "README.md" "markdown"))))
 
+(deftest languages
+  (is (= ["ruby" "typescript" "typescriptreact"] (config/languages design)))
+  (is (= ["x"] (config/languages (config/parse "
+[servers.started]
+languages = ['x']
+boot = { runner = 'host', command = 's' }
+[servers.unstarted]
+languages = ['y']
+[servers.by-glob]
+globs = ['*.z']
+boot = { runner = 'host', command = 's' }
+
+[scopes.'.'.started]
+[scopes.'.'.by-glob]
+")))
+      "only server types that a scope starts, and only their languages"))
+
 (deftest priorities
   (let [c (config/parse "
 [servers.a]
