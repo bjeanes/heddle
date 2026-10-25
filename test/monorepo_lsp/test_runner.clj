@@ -1,12 +1,14 @@
 (ns monorepo-lsp.test-runner
   (:require [clojure.test :as t]
             [monorepo-lsp.backend-test]
+            [monorepo-lsp.capabilities-test]
             [monorepo-lsp.config-test]
             [monorepo-lsp.fetched-test]
             [monorepo-lsp.glob-test]
             [monorepo-lsp.json-test]
             [monorepo-lsp.lsp-test]
             [monorepo-lsp.paths-test]
+            [monorepo-lsp.proxy-test]
             [monorepo-lsp.runner-test]
             [monorepo-lsp.translate-test]))
 
