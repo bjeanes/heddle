@@ -73,6 +73,12 @@ serves.
 warnings, exiting non-zero if there are errors. That way, someone editing the
 config can see its problems without starting an editor.
 
+`heddle init [DIR]` writes a starter config to the root of DIR, and refuses
+to replace one that's already there. Everything in it is commented out, so it
+loads as written, with no server types. It shows a server type, a scope for
+each built-in runner, the cache, and the built-in runners' own definitions,
+which come from the same file the proxy loads them from.
+
 `heddle help`, `--help` or `-h` prints the usage to stdout and exits 0.
 A command line it can't parse is a usage error instead. It prints the error and
 the usage to stderr, and exits 2.

@@ -17,6 +17,7 @@
             [heddle.proxy-test]
             [heddle.readme-test]
             [heddle.runner-test]
+            [heddle.starter-test]
             [heddle.translate-test]))
 
 (defn -main [& _]

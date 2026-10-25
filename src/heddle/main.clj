@@ -6,13 +6,15 @@
             [heddle.json :as json]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
-            [heddle.proxy :as proxy])
+            [heddle.proxy :as proxy]
+            [heddle.starter :as starter])
   (:import (java.io BufferedInputStream)))
 
 (def ^:private usage
   "usage: heddle [serve] [--eager] [SERVER-TYPE...]
        heddle languages [DIR [SERVER-TYPE...]]
        heddle check [DIR]
+       heddle init [DIR]
        heddle help
 
 serve, the default, speaks LSP over stdin and stdout. It serves every server
@@ -29,9 +31,12 @@ covers, counting only the server types named, if any.
 check reads the config at the root of DIR and prints its errors and warnings.
 It exits non-zero if the config has errors.
 
+init writes a starter config, all commented out, to the root of DIR. It won't
+replace a config that's already there.
+
 DIR is the current directory unless given.")
 
-(def ^:private commands #{"serve" "languages" "check" "help"})
+(def ^:private commands #{"serve" "languages" "check" "init" "help"})
 
 (defn- option? [arg]
   (str/starts-with? arg "-"))
@@ -102,6 +107,22 @@ DIR is the current directory unless given.")
   [dir]
   (with-config dir (fn [_ source] {:out (str "No errors in " source ".")})))
 
+(defn init
+  "What `heddle init` prints after writing a starter config to the root of the
+  repo at `dir`."
+  [dir]
+  (let [f (io/file dir config/file-name)]
+    (if (.exists f)
+      {:exit 1 :err (str "There's already a " config/file-name " in " dir ". Remove it first to start over.")}
+      (try
+        (spit f starter/toml)
+        {:exit 0
+         :out (str "Wrote a starter config to " f ".\n"
+                   "Uncomment what you need, then run `heddle check`.\n"
+                   "README's \"The config in full\" describes every key.")}
+        (catch Exception e
+          {:exit 1 :err (str "Couldn't write " f ": " (ex-message e))})))))
+
 (defn outcome
   "What a command other than serve prints, as :out and :err, and its :exit
   status."
@@ -111,6 +132,7 @@ DIR is the current directory unless given.")
       :help {:exit 0 :out usage}
       :languages (languages dir server-types)
       :check (check dir)
+      :init (init dir)
       {:exit 2 :err (str "heddle: " error "\n" usage)})))
 
 (defn- report! [{:keys [exit out err]}]

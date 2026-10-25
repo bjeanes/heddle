@@ -119,6 +119,38 @@
       (is (str/includes? err "server type \"s\" matches no files"))
       (is (str/includes? err "server type \"t\": globs must be a list of strings")))))
 
+(deftest init-takes-a-directory
+  (is (= {:command :init :dir nil} (main/parse-args ["init"])))
+  (is (= {:command :init :dir "/repo"} (main/parse-args ["init" "/repo"])))
+  (is (= {:error "init takes at most one directory"} (main/parse-args ["init" "/repo" "/other"]))))
+
+(deftest init-writes-a-config-that-check-accepts
+  (let [dir (temp-dir)
+        {:keys [exit out err]} (main/outcome {:command :init :dir dir})]
+    (is (= 0 exit))
+    (is (nil? err))
+    (is (str/includes? out (str (io/file dir ".heddle.toml"))))
+    (is (str/includes? out "heddle check"))
+    (is (= 0 (:exit (main/check dir))))))
+
+(deftest init-leaves-an-existing-config-alone
+  (let [dir (temp-dir)
+        f (io/file dir ".heddle.toml")]
+    (spit f "not toml\n")
+    (let [{:keys [exit out err]} (main/outcome {:command :init :dir dir})]
+      (is (= 1 exit))
+      (is (nil? out))
+      (is (str/includes? err "already"))
+      (is (= "not toml\n" (slurp f))))))
+
+(deftest init-needs-an-existing-directory
+  (let [file (str (io/file (temp-dir) "file"))]
+    (spit file "")
+    (doseq [dir [(str (temp-dir) "/nosuch") file]]
+      (let [{:keys [exit err]} (main/outcome {:command :init :dir dir})]
+        (is (= 1 exit) dir)
+        (is (str/includes? err (str "Couldn't write " (io/file dir ".heddle.toml"))) dir)))))
+
 (deftest check-a-config-with-warnings
   (let [dir (temp-dir)]
     (spit (io/file dir ".heddle.toml")

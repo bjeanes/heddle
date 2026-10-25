@@ -112,6 +112,7 @@ argument and prints which languages the config covers, as JSON such as
 heddle [serve] [--eager] [SERVER-TYPE...]
 heddle languages [DIR [SERVER-TYPE...]]
 heddle check [DIR]
+heddle init [DIR]
 heddle help
 ```
 
@@ -123,6 +124,12 @@ the `serve`, a name would be taken for a command. Given server types after its
 directory, `languages` only prints the languages of those. If one of them isn't
 in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
+
+`heddle init` writes a starter `.heddle.toml` to the root of DIR. It shows a
+server type, a scope for each built-in runner, the cache, and the built-in
+runners themselves for you to override, all commented out. Uncomment what you
+need, then run `heddle check`. If there's already a config there, `init`
+leaves it alone and exits 1.
 
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
