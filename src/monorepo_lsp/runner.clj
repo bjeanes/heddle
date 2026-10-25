@@ -39,6 +39,16 @@
     (not (get-in provided [owner name])) (str "unknown placeholder {" owner ":" name "}")
     (and (= "read" owner) (not= "read" template)) (str "{read:" name "} is only available in read")))
 
+(defn- placeholders
+  "Each `{owner:name}` in the runner's templates, as [template owner name]."
+  [runner]
+  (for [t templates
+        :let [template (get runner t)]
+        :when (string-list? template)
+        element template
+        [_ owner name] (re-seq placeholder element)]
+    [t owner name]))
+
 (defn runner-errors
   "Problems with a runner's definition that don't depend on any scope."
   [runner]
@@ -56,14 +66,24 @@
            :let [template (get runner t)]
            :when (and template (not (string-list? template)))]
        (str t " must be a list of strings"))
-     (for [t templates
-           :let [template (get runner t)]
-           :when (string-list? template)
-           element template
-           [_ owner name] (re-seq placeholder element)
+     (for [[t owner name] (placeholders runner)
            :let [e (placeholder-error t owner name)]
            :when e]
        (str t ": " e)))))
+
+(defn- cfg-values
+  "The boot config's values for `{cfg:…}` placeholders."
+  [boot]
+  (dissoc boot "runner" "paths"))
+
+(defn unused-values
+  "The names, sorted, of the boot config's values that none of the runner's
+  templates use."
+  [runner boot]
+  (let [used (set (for [[_ owner name] (placeholders runner)
+                        :when (= "cfg" owner)]
+                    name))]
+    (sort (remove used (keys (cfg-values boot))))))
 
 (defn- value-error
   "Why `{owner:name}` has no usable value in `ctx`, or nil."
@@ -127,7 +147,7 @@
   [runner boot scope runtime]
   (let [client-scope (paths/client-path (:repo runtime) scope)]
     (assoc runtime
-           :cfg (merge (get runner "defaults") (dissoc boot "runner" "paths"))
+           :cfg (merge (get runner "defaults") (cfg-values boot))
            :client-scope client-scope
            :server-scope (paths/to-server (get boot "paths") (:repo runtime) client-scope))))
 

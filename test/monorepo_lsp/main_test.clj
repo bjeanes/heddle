@@ -25,3 +25,12 @@
     (let [{:keys [exit err]} (main/languages dir)]
       (is (= 1 exit))
       (is (str/includes? err "server type \"s\" matches no files")))))
+
+(deftest languages-with-warnings
+  (let [dir (temp-dir)]
+    (spit (io/file dir ".monorepo-lsp.toml")
+          "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\nrunner = 'host'\ncommand = 's'\nimage = 'i'\n")
+    (let [{:keys [exit out err]} (main/languages dir)]
+      (is (= 0 exit))
+      (is (= "{\"languages\":[\"x\"]}" out))
+      (is (str/includes? err "\"image\" isn't used by runner \"host\"")))))

@@ -529,6 +529,14 @@ until it restarts, answering every request with an empty result. Failing
 `initialize` instead would leave many clients retrying the proxy or giving up
 on it, with the reason only in a log.
 
+A server type's boot table might set a `service` for the `compose` runner. A
+scope that switches that server type to `host` then has a value that its
+runner's templates never use. Since that is often deliberate, it isn't an
+error. However, an unused value can also be a misspelt key, such as `arg` for
+`args`. So, after answering `initialize`, the proxy shows one warning that
+lists every unused value in every scope. It then serves as usual.
+`--languages` prints the same warnings to stderr and still succeeds.
+
 ## Clients
 
 We're prototyping with Neovim and VS Code, plus an MCP bridge for agents. Other

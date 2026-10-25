@@ -183,6 +183,24 @@ start = ['{read:file}', '--root={srv:scope}']
              "scope \"s\", server type \"a\": runner \"host\", start: the value of {cfg:command} can't use {cfg:other}"}
            (scope-errors "{ runner = 'host', command = ['{read:file}', '--x={cfg:other}'], other = 'o' }")))))
 
+(deftest warns-about-unused-values
+  (testing "a value the scope's runner never uses"
+    (is (= ["scope \"tools/cli\", server type \"ruby-lsp\": \"service\" isn't used by runner \"host\""]
+           (config/warnings (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
+
+[scopes.'services/api'.ruby-lsp]
+[scopes.'tools/cli'.ruby-lsp]
+runner = 'host'
+")))))
+  (testing "nothing when every value is used, counting runner, paths and values that replace a default"
+    (is (empty? (config/warnings design))))
+  (testing "as one message"
+    (is (= "unused values in here.toml:\n  a\n  b"
+           (config/warnings-message "here.toml" ["a" "b"])))))
+
 (def ^:private runtime {:repo "/r" :backend-id "monorepo-lsp-1"})
 
 (deftest commands

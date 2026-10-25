@@ -183,7 +183,8 @@ in `"{client:repo}:/src"`, though not another `{cfg:…}`.
 
 When the proxy loads the config, it checks every scope against its runner. It
 reports a value the runner needs but nobody gives, an unknown placeholder, or
-`paths` that don't cover the scope's directory.
+`paths` that don't cover the scope's directory. It warns about a value that the
+runner's templates never use, which is often a misspelt key.
 
 `prepare` is for anything that has to be in place before the server can start.
 The built-in `docker-run` makes the server the container's main process. If

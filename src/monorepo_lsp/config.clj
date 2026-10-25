@@ -144,6 +144,25 @@
     (when (.exists f)
       (parse (slurp f) (str f)))))
 
+(defn warnings
+  "Values in a valid config's scopes that the scope's runner never uses. A
+  server type's boot table can set a value for one runner that a scope then
+  swaps for another, so these aren't errors."
+  [config]
+  (for [[scope entries] (get config "scopes")
+        server-type (keys entries)
+        :let [boot (boot-config config server-type scope)
+              runner-name (get boot "runner")]
+        k (runner/unused-values (get-in config ["runners" runner-name]) boot)]
+    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": "
+         (pr-str k) " isn't used by runner " (pr-str runner-name))))
+
+(defn warnings-message
+  "The `warnings` for the config file at `source`, as one message."
+  [source warnings]
+  (str/join "\n" (cons (str "unused values in " source ":")
+                       (map #(str "  " %) warnings))))
+
 (defn server-types
   "The server types that handle the file at the repo-relative `path`, which the
   client opened as `language-id` (nil if unknown)."

@@ -284,6 +284,37 @@ read = ['cat', '{read:file}']
       (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
       (is (nothing-more? t)))))
 
+(def ^:private config-with-unused-value
+  (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))
+
+(defn- unused-value-warning [t]
+  (shown 2 (str "unused values in " (:repo t) "/.monorepo-lsp.toml:\n"
+                "  scope \"api\", server type \"ruby\": \"image\" isn't used by runner \"local\"")))
+
+(deftest with-config-warnings
+  (let [t (start :config config-with-unused-value)]
+    (initialize! t {})
+    (testing "shows them once, after answering initialize"
+      (is (= (unused-value-warning t) (from-proxy t)))
+      (is (nothing-more? t)))
+    (testing "and still serves"
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(seq (methods-received t ["ruby" "api"])))))))
+
+(deftest with-config-warnings-starting-backends-eagerly
+  (let [log (lsp/notification "window/logMessage" {"type" 3 "message" "one"})
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (cond-> [(lsp/response id {"capabilities" {}})]
+                      (= "ruby" server-type) (->> (cons log)))))
+        t (start :config config-with-unused-value :respond respond :eager true)]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "shows them after the answer and the backends' held messages"
+      (is (= 0 (get (from-proxy t) "id")))
+      (is (= log (from-proxy t)))
+      (is (= (unused-value-warning t) (from-proxy t)))
+      (is (nothing-more? t)))))
+
 (deftest starting-backends-eagerly-with-a-failed-backend
   (let [ruby-starts (atom 0)
         respond (fn [[server-type] {:strs [id method]}]

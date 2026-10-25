@@ -114,11 +114,17 @@
 (defn- load-config
   "The repo and its config, from the first of `roots` with a config. Without a
   usable config, the proxy serves nothing, and :problem has the type and text
-  of a message for the user."
+  of a message for the user. Otherwise, :warnings has the text of a message
+  about the config's warnings, if it has any."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
-      {:repo repo :config (config/read-config repo)}
+      (let [c (config/read-config repo)
+            warnings (config/warnings c)]
+        {:repo repo
+         :config c
+         :warnings (when (seq warnings)
+                     (config/warnings-message (str (io/file repo config/file-name)) warnings))})
       (catch Exception e
         {:repo repo
          :config no-config
@@ -156,7 +162,7 @@
       (run! (:send proxy) (:held old)))))
 
 (defn- initialize! [proxy {:strs [id params]}]
-  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))
+  (let [{:keys [repo config problem warnings]} (load-config (config-roots params (:cwd proxy)))
         eager? (and (:eager proxy) (not problem))]
     (when-not problem
       (doseq [name (:server-types proxy)
@@ -170,7 +176,9 @@
       (answer-initialize! proxy (lsp/response id result)))
     (register! proxy)
     (when-let [[type message] problem]
-      (show-message! proxy type message))))
+      (show-message! proxy type message))
+    (when warnings
+      (show-message! proxy :warning warnings))))
 
 ;; Backends
 

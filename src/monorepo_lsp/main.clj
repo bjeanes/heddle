@@ -1,5 +1,6 @@
 (ns monorepo-lsp.main
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [monorepo-lsp.backend :as backend]
             [monorepo-lsp.config :as config]
             [monorepo-lsp.json :as json]
@@ -23,11 +24,14 @@ covers. DIR is the current directory unless given.")
 
 (defn languages
   "What `monorepo-lsp --languages` prints for the repo at `dir`, as :out on success
-  or :err on failure, with its :exit status."
+  or :err on failure, with its :exit status. :err also has any warnings about
+  the config."
   [dir]
   (try
     (if-let [c (config/read-config dir)]
-      {:exit 0 :out (json/write-str {"languages" (config/languages c)})}
+      (let [warnings (config/warnings c)]
+        (cond-> {:exit 0 :out (json/write-str {"languages" (config/languages c)})}
+          (seq warnings) (assoc :err (config/warnings-message (str (io/file dir config/file-name)) warnings))))
       {:exit 1 :err (str "There's no " config/file-name " in " dir ".")})
     (catch Exception e
       {:exit 1 :err (ex-message e)})))
@@ -40,9 +44,10 @@ covers. DIR is the current directory unless given.")
   (when (seq more)
     (usage!))
   (let [{:keys [exit out err]} (languages (or dir (System/getProperty "user.dir")))]
-    (if out
-      (println out)
+    (when err
       (binding [*out* *err*] (println err)))
+    (when out
+      (println out))
     (flush)
     (System/exit exit)))
 
