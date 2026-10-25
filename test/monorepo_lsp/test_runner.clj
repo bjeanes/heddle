@@ -6,6 +6,8 @@
             [monorepo-lsp.fetched-test]
             [monorepo-lsp.glob-test]
             [monorepo-lsp.json-test]
+            [monorepo-lsp.log :as log]
+            [monorepo-lsp.log-test]
             [monorepo-lsp.lsp-test]
             [monorepo-lsp.paths-test]
             [monorepo-lsp.proxy-test]
@@ -13,5 +15,6 @@
             [monorepo-lsp.translate-test]))
 
 (defn -main [& _]
+  (log/set-writer! (fn [_]))
   (let [{:keys [fail error]} (t/run-all-tests #"monorepo-lsp\..*-test")]
     (System/exit (if (zero? (+ fail error)) 0 1))))
