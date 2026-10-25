@@ -67,50 +67,58 @@ For more, see the examples:
 
 ## Neovim
 
-This needs Neovim 0.11 or newer, though I've only tried it with 0.12.6. Add
-this to your config.
+This needs Neovim 0.11 or newer, though I've only tried it with 0.12.6. The
+repo is also a Neovim plugin. Install it with your plugin manager, such as
+lazy.nvim, pointed at a checkout:
 
 ```lua
-vim.lsp.config('monorepo_lsp', {
-  cmd = { 'monorepo-lsp' },
-  root_markers = { '.monorepo-lsp.toml' },
-  workspace_required = true,
-  on_init = function(client)
-    -- Neovim only runs the commands a server lists when it starts, but the
-    -- proxy learns its backends' commands later. Send it every command that
-    -- Neovim doesn't run itself.
-    setmetatable(client.commands, {
-      __index = function(_, command)
-        if not vim.lsp.commands[command] then
-          return function(cmd, ctx)
-            client:request('workspace/executeCommand', { command = command, arguments = cmd.arguments }, nil, ctx.bufnr)
-          end
-        end
-      end,
-    })
+{
+  dir = '/path/to/monorepo-lsp',
+  config = function()
+    require('monorepo_lsp').setup()
   end,
-})
-vim.lsp.enable('monorepo_lsp')
-
--- In a repo with a .monorepo-lsp.toml, leave these to the proxy.
-for _, name in ipairs({ 'ruby_lsp', 'rubocop' }) do
-  vim.lsp.config(name, {
-    root_dir = function(bufnr, on_dir)
-      if not vim.fs.root(bufnr, '.monorepo-lsp.toml') then
-        on_dir(vim.fs.root(bufnr, { 'Gemfile', '.git' }))
-      end
-    end,
-  })
-end
+}
 ```
 
-The proxy only starts in a repo with a `.monorepo-lsp.toml`. Add any other
-servers the repo's config covers to the list at the end, so that Neovim
-doesn't also start them on the host.
+Or add a checkout to your runtimepath yourself:
 
-`on_init` is there for code actions and other commands. Without it, Neovim
-refuses to run any backend's commands, since the proxy can only list them
-after Neovim has started it.
+```lua
+vim.opt.runtimepath:append('/path/to/monorepo-lsp')
+require('monorepo_lsp').setup()
+```
+
+`setup()` configures and enables a `monorepo_lsp` client, which only starts in
+a repo with a `.monorepo-lsp.toml`. It takes these options:
+
+- `cmd` runs the proxy, and defaults to `{ 'monorepo-lsp' }`.
+- `keep` lists other clients, by name, that should start as usual.
+
+In a repo with a config, Neovim would otherwise also start your usual servers
+for the same files, on the host. To prevent that, the module asks
+`monorepo-lsp --languages` which languages the config covers, once per repo.
+Then, for a file whose filetype is one of those, it stops any other client
+from starting. Your other configs are left alone, as are the same servers
+everywhere else. If the proxy can't answer, the module warns once for that
+repo and lets your servers start as usual.
+
+Since Neovim has no hook that runs before a client starts, the module does
+this by wrapping `vim.lsp.start`.
+
+The module also lets Neovim run backends' code actions and other commands.
+Neovim only runs the commands a server lists when it starts, but the proxy
+learns them from its backends later. The module sends the proxy any command
+that Neovim doesn't run itself.
+
+If you'd rather not install the module, you can leave the host's servers out
+with a repo-local `.nvim.lua` instead, using `'exrc'`:
+
+```lua
+vim.lsp.enable({ 'ruby_lsp', 'rubocop' }, false)
+```
+
+However, that applies to the whole session, and only if Neovim started in that
+repo. You'll also need the `monorepo_lsp` config from
+[`lua/monorepo_lsp.lua`](lua/monorepo_lsp.lua) to run commands.
 
 The proxy logs to stderr, which Neovim writes to its LSP log
 (`:lua vim.cmd.edit(vim.lsp.log.get_filename())`).

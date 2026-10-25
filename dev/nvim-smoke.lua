@@ -1,6 +1,6 @@
--- Checks that Neovim's own LSP client works with monorepo-lsp, configured as
--- in README.md, against examples/monorepo. Run it with the example's Compose
--- project up:
+-- Checks that Neovim's own LSP client works with monorepo-lsp, set up with
+-- this repo's Neovim module, against examples/monorepo. Run it with the
+-- example's Compose project up:
 --
 --   nvim --clean --headless -l dev/nvim-smoke.lua out/monorepo-lsp
 --
@@ -13,54 +13,47 @@ if not proxy or vim.fn.executable(proxy) ~= 1 then
   os.exit(2)
 end
 local script = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p')
-local example = vim.fs.joinpath(vim.fs.dirname(vim.fs.dirname(script)), 'examples/monorepo')
+local repo = vim.fs.dirname(vim.fs.dirname(script))
+local example = vim.fs.joinpath(repo, 'examples/monorepo')
 
 vim.env.PATH = vim.fs.dirname(proxy) .. ':' .. vim.env.PATH
+vim.opt.runtimepath:prepend(repo)
 vim.cmd('filetype on')
 
 -- File watching isn't under test here. Inside Claude Code's sandbox, its
 -- watcher fails with EMFILE. The error then aborts whatever request is waiting.
 vim.lsp.config('*', { capabilities = { workspace = { didChangeWatchedFiles = { dynamicRegistration = false } } } })
 
--- Stand-ins for nvim-lspconfig's configs, which the setup below has to keep
--- out of the way.
-vim.lsp.config('ruby_lsp', { cmd = { 'ruby-lsp' }, filetypes = { 'ruby' }, root_markers = { 'Gemfile', '.git' } })
-vim.lsp.config('rubocop', { cmd = { 'rubocop', '--lsp' }, filetypes = { 'ruby' }, root_markers = { 'Gemfile', '.git' } })
-vim.lsp.enable({ 'ruby_lsp', 'rubocop' })
-
--- BEGIN README setup
-vim.lsp.config('monorepo_lsp', {
-  cmd = { 'monorepo-lsp' },
-  root_markers = { '.monorepo-lsp.toml' },
-  workspace_required = true,
-  on_init = function(client)
-    -- Neovim only runs the commands a server lists when it starts, but the
-    -- proxy learns its backends' commands later. Send it every command that
-    -- Neovim doesn't run itself.
-    setmetatable(client.commands, {
-      __index = function(_, command)
-        if not vim.lsp.commands[command] then
-          return function(cmd, ctx)
-            client:request('workspace/executeCommand', { command = command, arguments = cmd.arguments }, nil, ctx.bufnr)
-          end
-        end
-      end,
-    })
-  end,
-})
-vim.lsp.enable('monorepo_lsp')
-
--- In a repo with a .monorepo-lsp.toml, leave these to the proxy.
-for _, name in ipairs({ 'ruby_lsp', 'rubocop' }) do
-  vim.lsp.config(name, {
-    root_dir = function(bufnr, on_dir)
-      if not vim.fs.root(bufnr, '.monorepo-lsp.toml') then
-        on_dir(vim.fs.root(bufnr, { 'Gemfile', '.git' }))
+-- An in-process server that answers only what a client needs to start and
+-- stop it.
+local function fake_server(dispatchers)
+  local closing = false
+  return {
+    request = function(method, _, callback)
+      callback(nil, method == 'initialize' and { capabilities = {} } or nil)
+      return true, 1
+    end,
+    notify = function(method)
+      if method == 'exit' then
+        dispatchers.on_exit(0, 15)
       end
     end,
-  })
+    is_closing = function()
+      return closing
+    end,
+    terminate = function()
+      closing = true
+    end,
+  }
 end
--- END README setup
+
+-- Stand-ins for the host's own Ruby servers, such as nvim-lspconfig's, which
+-- the module has to keep out of the way of the proxy.
+vim.lsp.config('ruby_lsp', { cmd = fake_server, filetypes = { 'ruby' }, root_markers = { 'Gemfile', '.git' } })
+vim.lsp.config('rubocop', { cmd = fake_server, filetypes = { 'ruby' }, root_markers = { 'Gemfile', '.git' } })
+vim.lsp.enable({ 'ruby_lsp', 'rubocop' })
+
+require('monorepo_lsp').setup()
 
 local failures = 0
 
@@ -214,6 +207,33 @@ if client then
   client:exec_cmd({ title = 'Local', command = 'smoke.local' }, { bufnr = bufnr })
   check(ran_locally, "Neovim's own commands still run in Neovim")
 end
+
+local function names(clients)
+  return vim.tbl_map(function(c)
+    return c.name
+  end, clients)
+end
+
+print('\nhost servers')
+local started = names(vim.lsp.get_clients())
+check(
+  not vim.list_contains(started, 'ruby_lsp') and not vim.list_contains(started, 'rubocop'),
+  "the host's Ruby servers didn't start for the example",
+  table.concat(started, ', ')
+)
+
+local outside = vim.fn.tempname() .. '.rb'
+vim.cmd.edit(outside)
+local attached = {}
+vim.wait(10000, function()
+  attached = names(vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf() }))
+  return vim.list_contains(attached, 'ruby_lsp') and vim.list_contains(attached, 'rubocop')
+end, 100)
+check(
+  vim.list_contains(attached, 'ruby_lsp') and vim.list_contains(attached, 'rubocop'),
+  "the host's Ruby servers attached to " .. outside,
+  table.concat(attached, ', ')
+)
 
 for _, c in ipairs(vim.lsp.get_clients()) do
   c:stop()
