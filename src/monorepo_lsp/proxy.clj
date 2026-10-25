@@ -9,6 +9,7 @@
             [monorepo-lsp.backend :as backend]
             [monorepo-lsp.capabilities :as capabilities]
             [monorepo-lsp.config :as config]
+            [monorepo-lsp.fetched :as fetched]
             [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp]
             [monorepo-lsp.paths :as paths]
@@ -22,12 +23,15 @@
   - :connect, the connector for backends (see monorepo-lsp.backend);
   - :server-types, the set of server types to serve, or nil to serve all;
   - :cwd, where to look for the config if no workspace root the client names
-    has one."
+    has one;
+  - :exit, a function to call with the exit code once the client sends
+    `exit`."
   [opts]
   (assoc opts :state (atom {:backends {}
                             :documents {}
                             :last-id 0
-                            :to-client {}})))
+                            :to-client {}
+                            :progress {}})))
 
 (defn- send-client! [proxy msg]
   ((:send proxy) msg))
@@ -45,21 +49,29 @@
 
 (defn- request-client!
   "Sends a request to the client with an ID of the proxy's own, and calls
-  `on-response` with the client's response."
-  [proxy method params on-response]
+  `on-response` with the client's response. `origin` is the backend and ID of
+  the request this one forwards, if any."
+  [proxy method params origin on-response]
   (let [state (swap! (:state proxy)
                      (fn [{:keys [last-id] :as state}]
                        (-> state
                            (assoc :last-id (inc last-id))
-                           (assoc-in [:to-client (inc last-id)] on-response))))]
-    (send-client! proxy (lsp/request (:last-id state) method params))
-    (:last-id state)))
+                           (assoc-in [:to-client (inc last-id)] {:origin origin
+                                                                 :on-response on-response}))))]
+    (send-client! proxy (lsp/request (:last-id state) method params))))
 
 (defn- client-response! [proxy {:strs [id] :as msg}]
   (let [[old] (swap-vals! (:state proxy) update :to-client dissoc id)]
-    (if-let [on-response (get-in old [:to-client id])]
+    (if-let [{:keys [on-response]} (get-in old [:to-client id])]
       (on-response msg)
       (log/info "the client answered an unknown request" (pr-str id)))))
+
+(defn- cancel-client-request!
+  "Passes on a backend's cancellation of a request it sent the client."
+  [proxy origin]
+  (doseq [[id request] (:to-client @(:state proxy))
+          :when (= origin (:origin request))]
+    (send-client! proxy (lsp/notification "$/cancelRequest" {"id" id}))))
 
 ;; Initialization
 
@@ -105,7 +117,7 @@
           registrations (capabilities/registrations client-caps (backend/capabilities b)
                                                     (document-selector b) (:backend-id b))]
       (when (seq registrations)
-        (request-client! proxy "client/registerCapability" {"registrations" registrations}
+        (request-client! proxy "client/registerCapability" {"registrations" registrations} nil
                          (fn [{:strs [error]}]
                            (when error
                              (log/info "the client refused" (:backend-id b) "registrations:"
@@ -141,14 +153,78 @@
   (or (get-in @(:state proxy) [:backends k])
       (start-backend! proxy k)))
 
-(defn- from-backend! [proxy b msg]
-  (if (nil? msg)
-    (do (log/info (:backend-id b) "stopped")
-        (swap! (:state proxy) update :backends
-               (fn [backends]
-                 (let [k [(:server-type b) (:scope b)]]
-                   (cond-> backends (identical? b (get backends k)) (dissoc k))))))
-    (log/info (:backend-id b) "sent" (get msg "method") "which isn't handled yet")))
+(defn- to-client!
+  "Translates a payload from the backend `b` for the client, after fetching
+  any files it refers to that only the backend can see."
+  [b payload]
+  (doseq [[file problem] (fetched/fetch! b (translate/fetched-files b payload))]
+    (log/info "couldn't fetch" file "from" (:backend-id b) "-" problem))
+  (translate/to-client b payload))
+
+(defn- stopped! [proxy b]
+  (log/info (:backend-id b) "stopped")
+  (swap! (:state proxy) update :backends
+         (fn [backends]
+           (let [k [(:server-type b) (:scope b)]]
+             (cond-> backends (identical? b (get backends k)) (dissoc k))))))
+
+(defn- qualify
+  "An ID that the backend `b` chose for the client, made unique among all
+  backends. Two backends of one server type will often choose the same IDs."
+  [b id]
+  (str (:backend-id b) "/" id))
+
+(defn- qualify-ids [b registrations]
+  (mapv #(update % "id" (partial qualify b)) registrations))
+
+(defn- progress-token!
+  "The token to give the client for one that the backend `b` created. The
+  client's `window/workDoneProgress/cancel` finds the backend by it."
+  [proxy b token]
+  (let [qualified (qualify b token)]
+    (swap! (:state proxy) assoc-in [:progress qualified] {:backend b :token token})
+    qualified))
+
+(defn- request-params
+  "The params of a request from the backend `b`, with the registration IDs and
+  progress tokens it chose qualified."
+  [proxy b method params]
+  (case method
+    "window/workDoneProgress/create" (update params "token" #(progress-token! proxy b %))
+    "client/registerCapability" (update params "registrations" #(qualify-ids b %))
+    "client/unregisterCapability" (update params "unregisterations" #(qualify-ids b %))
+    params))
+
+(defn- progress-params
+  "The params of `$/progress` from the backend `b`. A token the backend created
+  is qualified, and a token the client chose is left as it is."
+  [proxy b {:strs [token value] :as params}]
+  (let [qualified (qualify b token)]
+    (if (contains? (:progress @(:state proxy)) qualified)
+      (do (when (= "end" (get value "kind"))
+            (swap! (:state proxy) update :progress dissoc qualified))
+          (assoc params "token" qualified))
+      params)))
+
+(defn- from-backend! [proxy b {:strs [id method params] :as msg}]
+  (cond
+    (nil? msg)
+    (stopped! proxy b)
+
+    (contains? msg "id")
+    (request-client! proxy method (translate/to-client b (request-params proxy b method params))
+                     [(:backend-id b) id]
+                     (fn [response]
+                       (backend/send! b (assoc (translate/to-server b (dissoc response "id")) "id" id))))
+
+    (= "$/cancelRequest" method)
+    (cancel-client-request! proxy [(:backend-id b) (get params "id")])
+
+    (= "$/progress" method)
+    (send-client! proxy (lsp/notification method (translate/to-client b (progress-params proxy b params))))
+
+    :else
+    (send-client! proxy (lsp/notification method (translate/to-client b params)))))
 
 ;; Documents
 
@@ -203,21 +279,89 @@
     (when (= "textDocument/didClose" method)
       (swap! (:state proxy) update :documents dissoc uri))))
 
+;; Requests
+
+(defn- forward-request! [proxy b {:strs [id method params]}]
+  (backend/request! b method (translate/to-server b params) id
+                    (fn [response]
+                      (send-client! proxy
+                                    (if response
+                                      (assoc (to-client! b (dissoc response "id")) "id" id)
+                                      (lsp/error-response id -32603 (str (:server-type b) " stopped before answering")))))))
+
+(defn- route-request!
+  "Sends a request to the first of the backends `b` and `more` that offers the
+  request's feature, or answers it with an empty result if none does. A
+  request for a feature the proxy doesn't know about goes to the first backend
+  that has started."
+  [proxy {:strs [id method] :as msg} [b & more]]
+  (if (nil? b)
+    (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+    (backend/when-ready b
+      #(let [feature (capabilities/feature method)]
+         (if (and (backend/ready? b)
+                  (or (nil? feature) (capabilities/offers? (backend/capabilities b) feature)))
+           (forward-request! proxy b msg)
+           (route-request! proxy msg more))))))
+
+(defn- cancel!
+  "Passes on the client's cancellation of a request it sent a backend."
+  [proxy client-id]
+  (doseq [b (vals (:backends @(:state proxy)))
+          :let [id (backend/tagged-request b client-id)]
+          :when id]
+    (backend/notify! b "$/cancelRequest" {"id" id})))
+
+(defn- cancel-progress!
+  "Passes on the client's cancellation of progress a backend created."
+  [proxy token]
+  (when-let [{:keys [backend token]} (get-in @(:state proxy) [:progress token])]
+    (backend/notify! backend "window/workDoneProgress/cancel" {"token" token})))
+
+(def ^:private shutdown-timeout-ms 10000)
+
+(defn- shutdown!
+  "Answers `shutdown` once every backend has, or once they've had
+  `shutdown-timeout-ms` in all. The client's thread doesn't wait, since a
+  backend may need answers from the client before it can shut down."
+  [proxy id]
+  (swap! (:state proxy) assoc :shut-down true)
+  (let [backends (vals (:backends @(:state proxy)))
+        answers (mapv backend/shutdown! backends)
+        deadline (+ (System/currentTimeMillis) shutdown-timeout-ms)]
+    (future
+      (doseq [[b answered] (map vector backends answers)
+              :let [ms-left (max 0 (- deadline (System/currentTimeMillis)))]]
+        (when (= ::timeout (deref answered ms-left ::timeout))
+          (log/info (:backend-id b) "didn't answer shutdown in time")))
+      (send-client! proxy (lsp/response id nil)))))
+
+(defn- exit! [proxy]
+  (run! deref (mapv #(future (backend/exit! % 2000)) (vals (:backends @(:state proxy)))))
+  ((:exit proxy) (if (:shut-down @(:state proxy)) 0 1)))
+
 ;; The client's messages
 
-(defn- client-request! [proxy {:strs [id method] :as msg}]
-  (cond
-    (= "initialize" method) (initialize! proxy msg)
-    (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
-    :else (send-client! proxy (lsp/response id (capabilities/empty-result method)))))
+(defn- client-request! [proxy {:strs [id method params] :as msg}]
+  (let [uri (get-in params ["textDocument" "uri"])]
+    (cond
+      (= "initialize" method) (initialize! proxy msg)
+      (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
+      (= "shutdown" method) (shutdown! proxy id)
+      uri (route-request! proxy msg (running-handlers proxy uri))
+      :else (send-client! proxy (lsp/response id nil)))))
 
 (defn- client-notification! [proxy {:strs [method params]}]
-  (when (:config @(:state proxy))
-    (case method
-      "textDocument/didOpen" (open! proxy params)
-      ("textDocument/didChange" "textDocument/didSave" "textDocument/didClose")
-      (document-notification! proxy method params)
-      nil)))
+  (cond
+    (= "exit" method) (exit! proxy)
+    (nil? (:config @(:state proxy))) nil
+    :else (case method
+            "textDocument/didOpen" (open! proxy params)
+            ("textDocument/didChange" "textDocument/didSave" "textDocument/didClose")
+            (document-notification! proxy method params)
+            "$/cancelRequest" (cancel! proxy (get params "id"))
+            "window/workDoneProgress/cancel" (cancel-progress! proxy (get params "token"))
+            nil)))
 
 (defn handle-client!
   "Handles one message from the client."

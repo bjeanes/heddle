@@ -21,7 +21,11 @@ globs = ['**/Gemfile']
 lint = { runner = 'host', command = 'lint' }
 
 [scopes.api]
-ruby = { runner = 'host', command = 'ruby', paths = { 'api' = '/app' } }
+ruby = { runner = 'local', command = 'ruby', paths = { 'api' = '/app' } }
+
+[runners.local]
+start = ['{cfg:command}']
+read = ['cat', '{read:file}']
 ")
 
 (defn- temp-dir []
@@ -37,15 +41,19 @@ ruby = { runner = 'host', command = 'ruby', paths = { 'api' = '/app' } }
   [& {:keys [respond server-types]}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
-        received (atom {})]
+        received (atom {})
+        exit-code (promise)]
     (spit (io/file repo ".monorepo-lsp.toml") config)
+    (.mkdirs (io/file repo "api"))
     {:repo repo
      :out out
      :received received
+     :exit-code exit-code
      :proxy (proxy/create {:send #(.put out %)
                            :connect (fake/connector received (or respond offers-hover))
                            :server-types server-types
-                           :cwd (temp-dir)})}))
+                           :cwd (temp-dir)
+                           :exit #(deliver exit-code %)})}))
 
 (defn- from-proxy
   "The next message the proxy sends the client, waiting up to two seconds."
@@ -170,3 +178,193 @@ ruby = { runner = 'host', command = 'ruby', paths = { 'api' = '/app' } }
         (is (some #(= {"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}
                       (get-in % ["registerOptions" "documentSelector" 0]))
                   registrations))))))
+
+(defn- received [t k method]
+  (filterv #(= method (get % "method")) (get @(:received t) k)))
+
+(defn- request-about [t id method path]
+  (lsp/request id method {"textDocument" {"uri" (uri t path)}
+                          "position" {"line" 0 "character" 0}}))
+
+(deftest requests-about-a-file
+  (let [gem (str (temp-dir) "/gems/rainbow.rb")
+        respond (fn [[server-type] {:strs [id method params]}]
+                  (when id
+                    [(lsp/response
+                      id
+                      (case [server-type method]
+                        ["ruby" "initialize"] {"capabilities" {"hoverProvider" true "definitionProvider" true}}
+                        ["lint" "initialize"] {"capabilities" {"definitionProvider" true}}
+                        ["ruby" "textDocument/hover"] {"contents" (str "[Rainbow](file://" gem "#L1) for "
+                                                                       (get-in params ["textDocument" "uri"]))}
+                        ["lint" "textDocument/definition"] {"uri" (get-in params ["textDocument" "uri"])}
+                        nil))]))
+        t (start :respond respond)]
+    (io/make-parents gem)
+    (spit gem "module Rainbow; end\n")
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "go to the first backend, in server type order, that offers the feature"
+      (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
+      (let [response (from-proxy t)
+            cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+        (testing "with the client's ID on the response, and paths translated both ways"
+          (is (= "h" (get response "id")))
+          (is (= (str "[Rainbow](file://" cache gem "#L1) for " (uri t "api/a.rb"))
+                 (get-in response ["result" "contents"])))
+          (is (number? (get-in (received t ["ruby" "api"] "textDocument/hover") [0 "id"]))))
+        (testing "after fetching the files the response refers to"
+          (is (= "module Rainbow; end\n" (slurp (str cache gem))))))
+      (client! t (request-about t 7 "textDocument/definition" "api/a.rb"))
+      (is (= (lsp/response 7 {"uri" (uri t "api/a.rb")}) (from-proxy t)))
+      (is (= [] (received t ["ruby" "api"] "textDocument/definition"))))
+    (testing "get an empty result when no backend offers the feature"
+      (client! t (request-about t 8 "textDocument/references" "api/a.rb"))
+      (is (= (lsp/response 8 nil) (from-proxy t))))
+    (testing "go to the first backend when the proxy doesn't know the feature"
+      (client! t (request-about t 9 "custom/request" "api/a.rb"))
+      (is (= (lsp/response 9 nil) (from-proxy t)))
+      (is (= 1 (count (received t ["lint" "."] "custom/request")))))))
+
+(deftest requests-past-a-backend-that-failed-to-start
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (case [server-type method]
+                    ["lint" "initialize"] [(lsp/error-response id -32603 "no config")]
+                    ["ruby" "initialize"] [(lsp/response id {"capabilities" {"definitionProvider" true}})]
+                    ["ruby" "textDocument/definition"] [(lsp/response id "from ruby")]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
+    (is (= (lsp/response 1 "from ruby") (from-proxy t)))))
+
+(deftest requests-from-backends
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (cond
+                    (= "initialize" method)
+                    [(lsp/response id {"capabilities" {}})]
+
+                    (= "textDocument/didOpen" method)
+                    (into [(lsp/request 1 "workspace/configuration" {"items" [{"section" server-type}]})]
+                          (when (= "ruby" server-type)
+                            [(lsp/request 2 "window/workDoneProgress/create" {"token" "t"})
+                             (lsp/notification "$/cancelRequest" {"id" 2})
+                             (lsp/notification "textDocument/publishDiagnostics"
+                                               {"uri" "file:///app/a.rb" "diagnostics" []})]))))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (let [messages (doall (repeatedly 5 #(from-proxy t)))
+          by-method (group-by #(get % "method") messages)
+          configuration (into {} (for [r (get by-method "workspace/configuration")]
+                                   [(get-in r ["params" "items" 0 "section"]) r]))
+          create (first (get by-method "window/workDoneProgress/create"))]
+      (testing "get IDs of the proxy's own"
+        (is (= 3 (count (set (map #(get % "id") [(get configuration "ruby") (get configuration "lint") create]))))))
+      (testing "and so do their cancellations"
+        (is (= {"id" (get create "id")} (get-in by-method ["$/cancelRequest" 0 "params"]))))
+      (testing "notifications are translated"
+        (is (= (uri t "api/a.rb") (get-in by-method ["textDocument/publishDiagnostics" 0 "params" "uri"]))))
+      (testing "the client's responses go back to the right backend, with its ID and paths"
+        (client! t (lsp/response (get-in configuration ["ruby" "id"]) [(uri t "api")]))
+        (client! t (lsp/response (get-in configuration ["lint" "id"]) ["lint"]))
+        (is (eventually #(= {"id" 1 "result" ["file:///app"]}
+                            (select-keys (peek (get @(:received t) ["ruby" "api"])) ["id" "result"]))))
+        (is (eventually #(= {"id" 1 "result" ["lint"]}
+                            (select-keys (peek (get @(:received t) ["lint" "."])) ["id" "result"]))))))))
+
+(deftest registrations-and-progress-from-backends
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (case method
+                    "initialize"
+                    [(lsp/response id {"capabilities" {}})]
+
+                    "textDocument/didOpen"
+                    [(lsp/request 1 "client/registerCapability"
+                                  {"registrations" [{"id" "watch" "method" "workspace/didChangeWatchedFiles"}]})
+                     (lsp/request 2 "client/unregisterCapability"
+                                  {"unregisterations" [{"id" "watch" "method" "workspace/didChangeWatchedFiles"}]})
+                     (lsp/request 3 "window/workDoneProgress/create" {"token" "indexing"})
+                     (lsp/notification "$/progress" {"token" "indexing"
+                                                     "value" {"kind" "begin" "title" server-type}})
+                     (lsp/notification "$/progress" {"token" "from-client" "value" {"kind" "report"}})]
+
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (let [by-method (group-by #(get % "method") (doall (repeatedly 10 #(from-proxy t))))
+          ids (fn [method k] (set (for [msg (get by-method method)
+                                        item (get-in msg ["params" k])]
+                                    (get item "id"))))
+          created (set (map #(get-in % ["params" "token"]) (get by-method "window/workDoneProgress/create")))
+          progress (group-by #(get-in % ["params" "value" "kind"]) (get by-method "$/progress"))
+          token-of (into {} (for [msg (get progress "begin")]
+                              [(get-in msg ["params" "value" "title"]) (get-in msg ["params" "token"])]))]
+      (testing "registration IDs are made unique, and the same on unregistering"
+        (is (= 2 (count (ids "client/registerCapability" "registrations"))))
+        (is (= (ids "client/registerCapability" "registrations")
+               (ids "client/unregisterCapability" "unregisterations"))))
+      (testing "progress tokens a backend creates are made unique"
+        (is (= 2 (count created)))
+        (is (= created (set (vals token-of)))))
+      (testing "progress tokens the client chose are left alone"
+        (is (= ["from-client" "from-client"] (map #(get-in % ["params" "token"]) (get progress "report")))))
+      (testing "the client's cancellation of progress goes to the backend that created it"
+        (client! t (lsp/notification "window/workDoneProgress/cancel" {"token" (get token-of "ruby")}))
+        (is (eventually #(= [{"token" "indexing"}]
+                            (map (fn [msg] (get msg "params"))
+                                 (received t ["ruby" "api"] "window/workDoneProgress/cancel")))))
+        (is (= [] (received t ["lint" "."] "window/workDoneProgress/cancel")))))))
+
+(deftest cancelling-a-request
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {"hoverProvider" true}})]))
+        t (start :respond respond :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
+    (is (eventually #(seq (received t ["ruby" "api"] "textDocument/hover"))))
+    (client! t (lsp/notification "$/cancelRequest" {"id" "h"}))
+    (is (eventually #(= [{"id" (get-in (received t ["ruby" "api"] "textDocument/hover") [0 "id"])}]
+                        (map (fn [msg] (get msg "params")) (received t ["ruby" "api"] "$/cancelRequest")))))))
+
+(deftest shutting-down
+  (let [t (start)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 9 "shutdown" nil))
+    (testing "answers once every backend has shut down"
+      (is (= (lsp/response 9 nil) (from-proxy t)))
+      (is (= 1 (count (received t ["ruby" "api"] "shutdown"))))
+      (is (= 1 (count (received t ["lint" "."] "shutdown")))))
+    (testing "exits after telling every backend to"
+      (client! t (lsp/notification "exit" nil))
+      (is (= 0 (deref (:exit-code t) 2000 :timeout)))
+      (is (= 1 (count (received t ["ruby" "api"] "exit"))))
+      (is (= 1 (count (received t ["lint" "."] "exit")))))))
+
+(deftest shutting-down-a-slow-backend
+  (let [answer (promise)
+        respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "shutdown" (do @answer [(lsp/response id nil)])
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 9 "shutdown" nil))
+    (testing "doesn't hold up the client's messages while it waits"
+      (is (eventually #(seq (received t ["ruby" "api"] "shutdown"))))
+      (is (nil? (.poll (:out t) 100 TimeUnit/MILLISECONDS))))
+    (testing "answers once the backend does"
+      (deliver answer true)
+      (is (= (lsp/response 9 nil) (from-proxy t))))))
+
+(deftest exiting-without-shutting-down
+  (let [t (start)]
+    (client! t (lsp/notification "exit" nil))
+    (is (= 1 (deref (:exit-code t) 2000 :timeout)))))
