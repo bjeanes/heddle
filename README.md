@@ -54,9 +54,30 @@ ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/a
 Since the proxy doesn't start containers itself, bring them up first with
 `docker compose up --detach`.
 
-To check which languages a config covers, run `monorepo-lsp --languages` from
-the repo root, or give it the root as an argument. It prints them as JSON,
-such as `{"languages":["ruby"]}`, or the config's problems if there are any.
+To check a config, run `monorepo-lsp check` from the repo root, or give it the
+root as an argument. It prints the config's errors and warnings, and exits
+non-zero if there are any errors. `monorepo-lsp languages` takes the same
+argument and prints which languages the config covers, as JSON such as
+`{"languages":["ruby"]}`.
+
+## Running it
+
+```
+monorepo-lsp [serve] [--eager] [SERVER-TYPE...]
+monorepo-lsp languages [DIR]
+monorepo-lsp check [DIR]
+monorepo-lsp help
+```
+
+Editors and bridges run `monorepo-lsp` on its own, or with `--eager`. Either
+way, it's short for `monorepo-lsp serve`, which speaks LSP over stdin and
+stdout and serves every server type in the config. To serve only some of them,
+name them after `serve`, as in `monorepo-lsp serve ruby-lsp rubocop`. Without
+the `serve`, a name would be taken for a command.
+
+`monorepo-lsp help` prints the usage to stdout and exits 0. Any other command
+line it can't make sense of prints the problem and the usage to stderr, and
+exits 2.
 
 ## Starting servers eagerly
 
@@ -65,8 +86,8 @@ files. That keeps an editor from starting every container's server when you
 only open one file. However, until then, the proxy can't tell the client
 about that server's features, and workspace symbol search doesn't cover it.
 
-`monorepo-lsp --eager` (or `monorepo-lsp --eager ruby-lsp`, naming server
-types as usual) starts every server in the config as soon as the client
+`monorepo-lsp --eager` (or `monorepo-lsp serve --eager ruby-lsp`, naming
+server types as usual) starts every server in the config as soon as the client
 connects, and waits up to 30 s for them before finishing its handshake. The
 client then learns every feature and command up front. Use it for agents, and
 for clients that only use what a server announces at startup. A server that
@@ -327,12 +348,15 @@ require('monorepo_lsp').setup()
 `setup()` configures and enables a `monorepo_lsp` client, which only starts in
 a repo with a `.monorepo-lsp.toml`. It takes these options:
 
-- `cmd` runs the proxy, and defaults to `{ 'monorepo-lsp' }`.
+- `cmd` runs the proxy, and defaults to `{ 'monorepo-lsp' }`. Its first item
+  has to be the proxy itself, rather than a wrapper such as `nix run`, since
+  the module runs it with `languages` too.
 - `keep` lists other clients, by name, that should start as usual.
 
 In a repo with a config, Neovim would otherwise also start your usual servers
-for the same files, on the host. To prevent that, the module asks
-`monorepo-lsp --languages` which languages the config covers, once per repo.
+for the same files, on the host. To prevent that, the module runs
+`monorepo-lsp languages` (with the program from `cmd`) to ask which languages
+the config covers, once per repo.
 Then, for a file whose filetype is one of those, it stops any other client
 from starting. Your other configs are left alone, as are the same servers
 everywhere else. If the proxy can't answer, the module warns once for that
@@ -350,9 +374,7 @@ With `--eager`, the proxy lists every command when it starts, so Neovim can
 run them without the module's help. You can then configure the client
 yourself and skip the module, or keep using the module with
 `cmd = { 'monorepo-lsp', '--eager' }`. Either works. The module still covers
-the commands of any server that took longer than 30 s to start. Since the
-module runs `cmd` with `--languages` appended, the proxy accepts
-`--eager --languages` and ignores `--eager` there.
+the commands of any server that took longer than 30 s to start.
 
 If you'd rather not install the module, you can leave the host's servers out
 with a repo-local `.nvim.lua` instead, using `'exrc'`:

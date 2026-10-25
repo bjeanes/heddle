@@ -22,7 +22,7 @@ local function forward_unknown_commands(client)
 end
 
 local function read_languages(root)
-  local cmd = vim.list_extend(vim.deepcopy(options.cmd), { '--languages', root })
+  local cmd = { options.cmd[1], 'languages', root }
   local ok, result = pcall(function()
     return vim.system(cmd, { text = true, timeout = 5000 }):wait()
   end)

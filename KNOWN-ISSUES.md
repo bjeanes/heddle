@@ -76,10 +76,10 @@ them, under "Pinned for later".
 - **There's no VS Code extension yet.**
 - **Neovim needs the module to run servers' commands**, unless you use
   `--eager`. Neovim only runs commands announced at startup.
-- **The Neovim module doesn't work with server types in `cmd`.** With a `cmd`
-  such as `{ 'monorepo-lsp', 'ruby-lsp' }`, the module can't ask the proxy
-  which languages it covers. It then warns and lets your usual servers start
-  too.
+- **The Neovim module ignores server types in `cmd`.** With a `cmd` such as
+  `{ 'monorepo-lsp', 'serve', 'ruby-lsp' }`, the module still stops your usual
+  servers for every language in the config, including those the proxy won't
+  serve.
 - **Nobody has tried an MCP bridge with it yet.**
 - **It has only been tried with ruby-lsp and RuboCop**, in Docker Compose on
   macOS, from Neovim 0.12.
