@@ -103,7 +103,14 @@ boot = 1
 priority = 'high'
 
 [servers.b]
-"))))
+")))
+    (is (= #{"server type \"ruby-lsp\": unknown key \"langauges\""}
+           (errors "
+[servers.ruby-lsp]
+langauges = ['ruby']
+globs = ['**/Gemfile']
+"))
+        "a misspelt key, even when the server type still matches files"))
   (testing "scopes"
     (is (= #{"scope \"a/\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
              "scope \"../a\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
@@ -156,6 +163,8 @@ start = ['{read:file}', '--root={srv:scope}']
            (scope-errors "{ command = 'a' }")))
     (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
            (scope-errors "{ runner = 'nope' }"))))
+  (testing "a value no template uses is allowed"
+    (is (nil? (scope-errors "{ runner = 'host', command = 'a', service = 'api' }"))))
   (testing "every {cfg:…} a template uses needs a value"
     (is (= #{"scope \"s\", server type \"a\": runner \"compose\", start: no value for {cfg:service}"
              "scope \"s\", server type \"a\": runner \"compose\", read: no value for {cfg:service}"}

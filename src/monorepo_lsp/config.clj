@@ -33,6 +33,9 @@
     (if-not (map? server)
       [(str where " must be a table")]
       (concat
+       (for [k (keys server)
+             :when (not (#{"languages" "globs" "priority" "boot"} k))]
+         (str where ": unknown key " (pr-str k)))
        (for [k ["languages" "globs"]
              :when (and (contains? server k) (not (string-list? (get server k))))]
          (str where ": " k " must be a list of strings"))
