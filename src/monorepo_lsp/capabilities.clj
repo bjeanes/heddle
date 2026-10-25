@@ -158,7 +158,8 @@
     "textDocument/codeLens"
     "textDocument/references"
     "textDocument/documentLink"
-    "textDocument/inlayHint"})
+    "textDocument/inlayHint"
+    "textDocument/diagnostic"})
 
 (defn combined?
   "Whether the answers to the request `method` from several backends are

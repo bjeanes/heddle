@@ -179,12 +179,44 @@
     (log/info "couldn't fetch" file "from" (:backend-id b) "-" problem))
   (translate/to-client b payload))
 
+(defn- set-diagnostics
+  "`by-file`, which holds each backend's latest diagnostics for each file,
+  with the backend `backend-id`'s diagnostics for `uri` replaced."
+  [by-file uri backend-id diagnostics]
+  (let [for-file (if (seq diagnostics)
+                   (assoc (get by-file uri) backend-id diagnostics)
+                   (dissoc (get by-file uri) backend-id))]
+    (if (seq for-file)
+      (assoc by-file uri for-file)
+      (dissoc by-file uri))))
+
+(defn- publish-diagnostics!
+  "Replaces the backend `b`'s diagnostics for the file at `uri`, and publishes
+  every backend's diagnostics for it together. Each publication replaces what
+  the client had for the file, so forwarding a backend's own would hide the
+  others'."
+  [proxy b {:strs [uri diagnostics version]}]
+  (locking (:state proxy)
+    (let [state (swap! (:state proxy) update :diagnostics set-diagnostics uri (:backend-id b) diagnostics)]
+      (send-client! proxy (lsp/notification "textDocument/publishDiagnostics"
+                                            (cond-> {"uri" uri
+                                                     "diagnostics" (vec (apply concat (vals (get-in state [:diagnostics uri]))))}
+                                              version (assoc "version" version)))))))
+
+(defn- clear-diagnostics!
+  "Withdraws the diagnostics of the backend `b`, which has stopped."
+  [proxy b]
+  (doseq [[uri for-file] (:diagnostics @(:state proxy))
+          :when (contains? for-file (:backend-id b))]
+    (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
+
 (defn- stopped! [proxy b]
   (log/info (:backend-id b) "stopped")
   (swap! (:state proxy) update :backends
          (fn [backends]
            (let [k [(:server-type b) (:scope b)]]
-             (cond-> backends (identical? b (get backends k)) (dissoc k))))))
+             (cond-> backends (identical? b (get backends k)) (dissoc k)))))
+  (clear-diagnostics! proxy b))
 
 (defn- qualify
   "An ID that the backend `b` chose for the client, made unique among all
@@ -249,6 +281,9 @@
 
     (= "$/progress" method)
     (send-client! proxy (lsp/notification method (translate/to-client b (progress-params proxy b params))))
+
+    (= "textDocument/publishDiagnostics" method)
+    (publish-diagnostics! proxy b (translate/to-client b params))
 
     :else
     (send-client! proxy (lsp/notification method (translate/to-client b params)))))

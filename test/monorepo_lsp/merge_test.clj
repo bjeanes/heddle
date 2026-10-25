@@ -36,6 +36,19 @@
     (is (= [{"title" "Fix"}]
            (merge/combine "textDocument/codeAction" [["x" []] ["y" [{"title" "Fix"}]] ["z" nil]])))))
 
+(deftest combining-diagnostic-reports
+  (is (= {"kind" "full"
+          "items" [{"message" "a"} {"message" "b"}]
+          "relatedDocuments" {"file:///r" {"kind" "full" "items" [{"message" "c"} {"message" "d"}]}
+                              "file:///s" {"kind" "full" "items" [{"message" "e"}]}}}
+         (merge/combine "textDocument/diagnostic"
+                        [["x" {"kind" "full" "resultId" "1" "items" [{"message" "a"}]
+                               "relatedDocuments" {"file:///r" {"kind" "full" "items" [{"message" "c"}]}}}]
+                         ["y" {"kind" "full" "resultId" "2" "items" [{"message" "b"}]
+                               "relatedDocuments" {"file:///r" {"kind" "full" "items" [{"message" "d"}]}
+                                                   "file:///s" {"kind" "full" "items" [{"message" "e"}]}}}]]))
+      "concatenates the items for each file, and drops the backends' result IDs"))
+
 (deftest combining-other-answers
   (testing "concatenates them"
     (is (= [{"title" "a"} {"title" "b"}]

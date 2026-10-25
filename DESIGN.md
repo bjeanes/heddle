@@ -376,7 +376,15 @@ does the same for cancellations and progress tokens.
 Each `textDocument/publishDiagnostics` replaces whatever the client had for that
 file. When two servers check the same file, forwarding both would leave only the
 second server's diagnostics. Instead, the proxy keeps each backend's latest set
-for each file and publishes their union.
+for each file and publishes their union. When a backend stops, the proxy
+publishes the union again without it.
+
+Clients can also pull a file's diagnostics with `textDocument/diagnostic`. The
+proxy asks every backend for the file that offers it and concatenates their
+items. A backend can give its report a result ID, which the client sends back
+next time so the backend need only report what changed. One backend's ID means
+nothing to another, so the proxy drops them. Every backend then reports in
+full each time.
 
 ### Paths
 

@@ -364,6 +364,43 @@ read = ['cat', '{read:file}']
     (testing "or else to the first by scope"
       (is (= "." (execute 3))))))
 
+(defn- stop-backend! [t k]
+  ((get-in @(:state (get-in @(:state (:proxy t)) [:backends k])) [:conn :close])))
+
+(deftest publishing-diagnostics
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/notification "textDocument/publishDiagnostics"
+                                                              {"uri" (get-in params ["textDocument" "uri"])
+                                                               "diagnostics" [{"message" server-type}]})]
+                    nil))
+        t (start :respond respond)
+        messages (fn [msg] (set (map #(get % "message") (get-in msg ["params" "diagnostics"]))))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "publishes every backend's latest diagnostics for a file together"
+      (let [published [(from-proxy t) (from-proxy t)]]
+        (is (= #{(uri t "api/a.rb")} (set (map #(get-in % ["params" "uri"]) published))))
+        (is (= #{"ruby" "lint"} (messages (peek published))))))
+    (testing "withdraws a backend's diagnostics once it stops"
+      (stop-backend! t ["lint" "."])
+      (is (= #{"ruby"} (messages (from-proxy t)))))))
+
+(deftest pulling-diagnostics
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"diagnosticProvider" {}}})]
+                    "textDocument/diagnostic" [(lsp/response id {"kind" "full" "resultId" server-type
+                                                                 "items" [{"message" server-type}]})]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 1 "textDocument/diagnostic" {"textDocument" {"uri" (uri t "api/a.rb")}}))
+    (is (= (lsp/response 1 {"kind" "full" "items" [{"message" "lint"} {"message" "ruby"}]})
+           (from-proxy t)))))
+
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]

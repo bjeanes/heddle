@@ -39,6 +39,22 @@
              (update action "title" #(str "[" server-type "] " %))))
       (vec (mapcat second offered)))))
 
+(defn- full-report [reports]
+  {"kind" "full" "items" (vec (mapcat #(get % "items") reports))})
+
+(defn- diagnostic-reports
+  "One report from several backends' reports for a file, along with their
+  reports for related files. The combined reports have no `resultId`, since
+  one backend's ID means nothing to the others. So, the client never asks
+  for only what changed, and every backend always reports in full."
+  [reports]
+  (let [related (apply merge-with into (for [report reports
+                                             [uri related-report] (get report "relatedDocuments")]
+                                         {uri [related-report]}))]
+    (cond-> (full-report reports)
+      (seq related) (assoc "relatedDocuments" (into {} (for [[uri rs] related]
+                                                         [uri (full-report rs)]))))))
+
 (defn combine
   "One answer to the request `method` from `answers`, which are pairs of a
   server type and its backend's result, in priority order. Nil if every
@@ -49,4 +65,5 @@
       (case method
         "textDocument/completion" (completions results)
         "textDocument/codeAction" (code-actions answers)
+        "textDocument/diagnostic" (diagnostic-reports results)
         (vec (apply concat results))))))
