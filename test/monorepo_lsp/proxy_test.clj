@@ -614,6 +614,29 @@ read = ['cat', '{read:file}']
       (stop-backend! t ["lint" "."])
       (is (= #{"ruby"} (messages (from-proxy t)))))))
 
+(deftest publishing-diagnostics-about-fetched-files
+  (let [gem (str (temp-dir) "/gems/rainbow.rb")
+        respond (fn [_ {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/notification "textDocument/publishDiagnostics"
+                                                              {"uri" (get-in params ["textDocument" "uri"])
+                                                               "diagnostics" [{"message" "m"
+                                                                               "relatedInformation" [{"location" {"uri" (str "file://" gem)}
+                                                                                                      "message" "defined here"}]}]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (io/make-parents gem)
+    (spit gem "module Rainbow; end\n")
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (let [published (from-proxy t)
+          cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+      (is (= (str "file://" cache gem)
+             (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
+      (is (= "module Rainbow; end\n" (slurp (str cache gem)))
+          "fetches the files that diagnostics refer to"))))
+
 (deftest pulling-diagnostics
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case method

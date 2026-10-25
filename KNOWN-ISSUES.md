@@ -47,7 +47,8 @@ them, under "Pinned for later".
 - **A server that hangs while starting holds up every request for its files.**
   Nothing times out while a runner's `prepare` runs, or while the server is yet
   to answer `initialize`. The requests never complete, and you aren't told
-  why. The same goes for a `read` that hangs while copying a file out.
+  why. A `read` that hangs while copying a file out holds up everything that
+  server sends, its diagnostics included.
 - **A restarted server doesn't get the files that were already open.** You'll
   need to reopen them. Until you do, the proxy still sends that server your
   edits to them, which it may report as errors.
@@ -73,9 +74,6 @@ them, under "Pinned for later".
   one, which leaves an old cache behind each time. The `cache` table can keep
   them somewhere stable, such as `xdg = true`, but nothing sweeps that either.
   See [The cache](README.md#the-cache).
-- **Locations in a server's notifications aren't fetched.** A location in a
-  container-only file, such as a diagnostic's related information inside a
-  gem, can point at a copy that hasn't been made.
 - **`docker-run` needs its mounts listed twice**, once in `args` and again in
   `paths`.
 

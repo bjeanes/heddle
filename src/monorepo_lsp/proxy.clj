@@ -450,7 +450,7 @@
     (stopped! proxy b)
 
     (contains? msg "id")
-    (request-client! proxy method (cond->> (translate/to-client b (request-params proxy b method params))
+    (request-client! proxy method (cond->> (to-client! b (request-params proxy b method params))
                                     (= "client/registerCapability" method) (limit-selectors b))
                      [(:backend-id b) id]
                      (fn [response]
@@ -460,13 +460,13 @@
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])
 
     (= "$/progress" method)
-    (send-client! proxy (lsp/notification method (translate/to-client b (progress-params proxy b params))))
+    (send-client! proxy (lsp/notification method (to-client! b (progress-params proxy b params))))
 
     (= "textDocument/publishDiagnostics" method)
-    (publish-diagnostics! proxy b (translate/to-client b params))
+    (publish-diagnostics! proxy b (to-client! b params))
 
     :else
-    (send-client! proxy (lsp/notification method (translate/to-client b params)))))
+    (send-client! proxy (lsp/notification method (to-client! b params)))))
 
 ;; Documents
 
