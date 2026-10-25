@@ -1,16 +1,51 @@
 # heddle
 
-`heddle` is a language server proxy for monorepos whose services each
-run in their own container. To your editor, or to an agent's MCP bridge, it
-is one ordinary language server. Behind that, it reads a config checked into
-the repo and starts the right language servers for each part of the repo,
-wherever they need to run, such as inside each service's Compose container.
+Editors and agents expect to start a project's language servers themselves,
+on the host, one per language. Plenty of projects don't fit that. Their
+dependencies might only be installed in a container, or two parts of the repo
+might need different versions of the same server.
+
+`heddle` is a central place to define a project's language servers, in a
+config checked into the repo, for any editor or agent to use. To your editor,
+or to an agent's MCP bridge, heddle is one ordinary language server. Behind
+that, it starts the right servers for each part of the repo, wherever they
+need to run, such as on the host or inside each service's Compose container.
 It translates paths in both directions. When a server points at a file that
-only exists in its container, such as an installed gem, the proxy copies the
-file out so you can open it.
+only exists where it runs, such as an installed gem, heddle copies the file
+out so you can open it.
+
+A heddle is the part of a loom that lifts _selected_ warp threads for the weft
+to pass between, much as heddle picks out the servers that match each file.
 
 [KICKOFF.md](KICKOFF.md) covers why it exists and
 [DESIGN.md](DESIGN.md) covers how it works.
+
+## What it's for
+
+- **A multi-service monorepo.** Each service's servers run in that service's
+  own container, with the language and gem versions it actually uses. Two Ruby
+  services on different Ruby versions each get a ruby-lsp of their own.
+- **A single polyglot app**, such as Rails with TypeScript, Tailwind and
+  ESLint. Your editor configures one server, heddle, instead of four. It sends
+  each file to every server that handles it, and merges their diagnostics and
+  code actions into one answer.
+- **One config for the whole team.** The servers are defined once, in the
+  repo. Whoever opens it gets the same servers, whichever editor they use.
+  (VS Code still needs an extension to start it, which doesn't exist yet.)
+- **Agents.** MCP bridges such as mcp-language-server start one server for
+  one workspace. heddle is how an agent gets every language in the repo
+  through that one server. Since `heddle serve --eager` starts every server up
+  front, workspace symbol search works from the agent's first request.
+- **A containerised or remote toolchain, even for one service.** The app runs
+  in Docker, in a Nix shell or over SSH, while your editor stays on the host.
+  Docker and Compose have built-in runners. For anything else, you write a
+  runner that wraps the command, such as `nix develop --command` or `ssh`.
+  Since heddle maps paths between the two sides and fetches files that only
+  exist on the server's side, go-to-definition keeps working inside your
+  installed packages.
+- **Pinned versions.** Each server runs from the project's own bundle or
+  environment. You get the versions the project pins, instead of whatever
+  happens to be installed globally.
 
 ## Status
 

@@ -1,5 +1,5 @@
 {
-  description = "heddle: one language server proxy for a whole monorepo";
+  description = "heddle: define a project's language servers once, for any editor or agent";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
