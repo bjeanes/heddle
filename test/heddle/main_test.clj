@@ -151,6 +151,47 @@
         (is (= 1 exit) dir)
         (is (str/includes? err (str "Couldn't write " (io/file dir ".heddle.toml"))) dir)))))
 
+(defn- nothing-to-serve
+  ([terminal? dir] (nothing-to-serve terminal? dir []))
+  ([terminal? dir server-types]
+   (with-redefs [main/stdin-terminal? (constantly terminal?)]
+     (main/nothing-to-serve dir server-types))))
+
+(deftest serve-at-a-terminal-stops-without-a-config
+  (let [dir (temp-dir)
+        {:keys [exit err]} (nothing-to-serve true dir)]
+    (is (= 1 exit))
+    (is (str/starts-with? err (str "heddle: There's no .heddle.toml in " dir ".\n")))
+    (is (str/includes? err "heddle init"))))
+
+(deftest serve-at-a-terminal-stops-with-a-config-that-starts-nothing
+  (let [dir (temp-dir)]
+    (main/init dir)
+    (let [{:keys [exit err]} (nothing-to-serve true dir)]
+      (is (= 1 exit))
+      (is (str/starts-with? err (str "heddle: No scope in " dir "/.heddle.toml starts a server type.\n"))))))
+
+(deftest serve-at-a-terminal-stops-with-an-invalid-config
+  (let [dir (temp-dir)]
+    (spit (io/file dir ".heddle.toml") "[servers.s]\n")
+    (let [{:keys [exit err]} (nothing-to-serve true dir)]
+      (is (= 1 exit))
+      (is (str/includes? err "server type \"s\" matches no files")))))
+
+(deftest serve-at-a-terminal-stops-when-no-named-server-type-is-in-the-config
+  (let [dir "test/heddle/fixtures/design"
+        {:keys [exit err]} (nothing-to-serve true dir ["nosuch"])]
+    (is (= 1 exit))
+    (is (str/starts-with? err (str "heddle: There's no server type \"nosuch\" in " dir "/.heddle.toml.\n")))))
+
+(deftest serve-at-a-terminal-serves-a-config-that-starts-something
+  (let [dir "test/heddle/fixtures/design"]
+    (is (nil? (nothing-to-serve true dir)))
+    (is (nil? (nothing-to-serve true dir ["nosuch" "rubocop"])))))
+
+(deftest serve-from-an-editor-or-pipe-always-serves
+  (is (nil? (nothing-to-serve false (temp-dir)))))
+
 (deftest check-a-config-with-warnings
   (let [dir (temp-dir)]
     (spit (io/file dir ".heddle.toml")

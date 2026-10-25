@@ -8,7 +8,8 @@
             [heddle.lsp :as lsp]
             [heddle.proxy :as proxy]
             [heddle.starter :as starter])
-  (:import (java.io BufferedInputStream)))
+  (:import (java.io BufferedInputStream)
+           (java.lang ProcessBuilder$Redirect)))
 
 (def ^:private usage
   "usage: heddle [serve] [--eager] [SERVER-TYPE...]
@@ -143,6 +144,41 @@ DIR is the current directory unless given.")
   (flush)
   (System/exit exit))
 
+(defn stdin-terminal?
+  "Whether a person is typing into heddle, rather than an editor or a pipe
+  feeding it."
+  []
+  (try
+    (zero? (-> (ProcessBuilder. ["test" "-t" "0"])
+               (.redirectInput ProcessBuilder$Redirect/INHERIT)
+               .start
+               .waitFor))
+    (catch Exception _ false)))
+
+(defn- why-nothing-to-serve
+  "Why serving `server-types` (or every server type, if empty) from the repo at
+  `dir` would serve nothing, or nil if it would serve something."
+  [dir server-types]
+  (let [{:keys [repo config problem]} (proxy/load-config [dir])
+        unknown (config/unknown-server-types config server-types)]
+    (cond
+      problem (second problem)
+      (and (seq server-types) (= (count unknown) (count server-types)))
+      (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))))
+
+(defn nothing-to-serve
+  "What `heddle serve` prints, and its :exit status, when run by hand in `dir`
+  with nothing there to serve, or nil if it should serve as usual. It always
+  serves when stdin isn't a terminal, since the client may name a root with a
+  config at `initialize`."
+  [dir server-types]
+  (when (stdin-terminal?)
+    (when-let [reason (why-nothing-to-serve dir server-types)]
+      {:exit 1
+       :err (str "heddle: " reason "\n"
+                 "heddle serve speaks LSP over stdin and stdout, for an editor to run.\n"
+                 "`heddle init` writes a starter config, and `heddle check` checks one.")})))
+
 (defn- handle! [proxy msg]
   (try
     (proxy/handle-client! proxy msg)
@@ -168,5 +204,7 @@ DIR is the current directory unless given.")
 (defn -main [& args]
   (let [{:keys [command eager? server-types] :as parsed} (parse-args args)]
     (if (= :serve command)
-      (serve! eager? server-types)
+      (if-let [refusal (nothing-to-serve (System/getProperty "user.dir") server-types)]
+        (report! refusal)
+        (serve! eager? server-types))
       (report! (outcome parsed)))))

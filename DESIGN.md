@@ -611,11 +611,31 @@ A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
 and scope, and logs the rest.
 
-If the config is missing or invalid, the proxy still answers `initialize`, then
-shows a message saying so, with the config's errors. It then serves nothing
-until it restarts, answering every request with an empty result. Failing
-`initialize` instead would leave many clients retrying the proxy or giving up
-on it, with the reason only in a log.
+If the config is missing, invalid, or has no scope that starts a server type,
+the proxy still answers `initialize`, then shows a message saying so, with the
+config's errors. It also logs the message to stderr, as it does every message
+it shows. It then serves nothing until it restarts, answering every request
+with an empty result. Failing `initialize` instead would leave many clients
+retrying the proxy or giving up on it, with the reason only in a log.
+
+That reasoning only holds for a client, though. A person who runs `heddle` by
+hand in a directory without a usable config would otherwise see nothing at
+all, since the proxy sits waiting for `initialize` on stdin. So, if stdin is a
+terminal, `serve` checks the config in the directory it was started in before
+reading anything. If there's nothing to serve, including when none of the
+server types named after `serve` is in the config, it prints why to stderr,
+with a pointer to `heddle init` and `heddle check`, and exits 1, as `check`
+does without a config. Since an editor or a pipe never gives the proxy a
+terminal for stdin, clients see no change.
+
+It has to be the starting directory, since there's no client to name a root.
+That is also why the proxy doesn't check it at startup otherwise. The client's
+root may hold a config that the starting directory lacks.
+
+To find out whether stdin is a terminal, the proxy runs `test -t 0` with its
+own stdin. If `test` can't be run, the proxy assumes it isn't a terminal. On
+the JVM, `System/console` also needs stdout to be a terminal, and I haven't
+confirmed that Jolt's detects one at all.
 
 A server type's boot table might set a `service` for the `compose` runner. A
 scope that switches that server type to `host` then has a value that its

@@ -114,31 +114,34 @@
 
 (def ^:private no-config {"servers" {} "scopes" {} "runners" {}})
 
-(defn- load-config
+(defn load-config
   "The repo and its config, from the first of `roots` with a config. Without a
-  usable config, the proxy serves nothing, and :problem has the type and text
-  of a message for the user. Otherwise, :cache-root is where to cache fetched
-  files, and :warnings has the text of any messages warning about the config."
+  config that starts some server type, the proxy serves nothing. :problem then
+  has the type of a message for the user, what's wrong, and what would have to
+  change. Otherwise, :cache-root is where to cache fetched files, and :warnings
+  has the text of any messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
       (let [c (config/read-config repo)
+            source (str (io/file repo config/file-name))
             unused (config/warnings c)
             {:keys [root warning]} (fetched/cache-root c repo #(System/getenv %))]
-        {:repo repo
-         :config c
-         :cache-root root
-         :warnings (cond-> []
-                     (seq unused) (conj (config/warnings-message (str (io/file repo config/file-name)) unused))
-                     warning (conj warning))})
+        (cond-> {:repo repo
+                 :config c
+                 :cache-root root
+                 :warnings (cond-> []
+                             (seq unused) (conj (config/warnings-message source unused))
+                             warning (conj warning))}
+          (every? empty? (vals (get c "scopes")))
+          (assoc :problem [:warning (str "No scope in " source " starts a server type.") "a scope starts one"])))
       (catch Exception e
         {:repo repo
          :config no-config
-         :problem [:error (str (ex-message e) "\nheddle is serving nothing until the config is fixed and it restarts.")]}))
+         :problem [:error (ex-message e) "the config is fixed"]}))
     {:repo (first roots)
      :config no-config
-     :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) "."
-                             "\nheddle is serving nothing until there is one and it restarts.")]}))
+     :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) ".") "there is one"]}))
 
 (declare start-backend! ready-backends register! when-all-ready)
 
@@ -184,8 +187,8 @@
       (swap! (:state proxy) assoc :announced (capabilities/announced-methods (get result "capabilities")))
       (answer-initialize! proxy (lsp/response id result)))
     (register! proxy)
-    (when-let [[type message] problem]
-      (show-message! proxy type message))
+    (when-let [[type reason until] problem]
+      (show-message! proxy type (str reason "\nheddle is serving nothing until " until " and it restarts.")))
     (doseq [warning warnings]
       (show-message! proxy :warning warning))))
 

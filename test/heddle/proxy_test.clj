@@ -122,13 +122,26 @@ read = ['cat', '{read:file}']
        (= {} @(:received t))))
 
 (deftest without-a-usable-config
-  (testing "warns that there's no config, and serves nothing"
+  (testing "warns that there's no config, in a message and on stderr, and serves nothing"
     (let [t (start)
-          cwd (get-in t [:proxy :cwd])]
-      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+          cwd (get-in t [:proxy :cwd])
+          warning (str "There's no .heddle.toml in /nowhere or " cwd ".\n"
+                       "heddle is serving nothing until there is one and it restarts.")
+          logged (atom [])
+          previous-writer (log/set-writer! #(swap! logged conj %))]
+      (try
+        (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+        (finally
+          (log/set-writer! previous-writer)))
       (is (contains? (from-proxy t) "result"))
-      (is (= (shown 2 (str "There's no .heddle.toml in /nowhere or " cwd ".\n"
-                           "heddle is serving nothing until there is one and it restarts."))
+      (is (= (shown 2 warning) (from-proxy t)))
+      (is (= [(str "heddle: " warning)] @logged))
+      (is (serves-nothing? t))))
+  (testing "warns that no scope starts a server type, and serves nothing"
+    (let [t (start :config "[servers.ruby]\nlanguages = ['ruby']\n")]
+      (initialize! t {})
+      (is (= (shown 2 (str "No scope in " (:repo t) "/.heddle.toml starts a server type.\n"
+                           "heddle is serving nothing until a scope starts one and it restarts."))
              (from-proxy t)))
       (is (serves-nothing? t))))
   (testing "shows the config's errors, and serves nothing"
