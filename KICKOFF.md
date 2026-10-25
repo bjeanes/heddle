@@ -16,8 +16,8 @@ service and see that service's dependencies.
 That last requirement is where things fall apart. A language server has to run
 where the project's dependencies are installed. In this kind of setup they are
 often installed only inside each service's container. When an editor starts the
-server on the host, the server can't load the project's libraries, and
-sometimes can't start at all.
+server on the host, the server can't load the project's libraries. Sometimes it
+can't start at all.
 
 VS Code's usual answer is Dev Containers, which runs the editor's extensions
 inside a container. However, a window attaches to only one container at a time.
@@ -28,8 +28,8 @@ The project declares, in a config file, which Compose service each part of the
 repo runs its language server in. Neovim starts the server there with
 `docker exec`. It rewrites every path in the messages passing between editor and
 server, using a mapping it works out from the container's mounts. Some files
-exist only inside the container, such as installed libraries. Neovim copies
-those out to a temporary directory when they're opened, which keeps
+exist only inside the container, such as installed libraries. The harness
+copies those out to a temporary directory when they're opened, which keeps
 go-to-definition working inside dependencies.
 
 That harness only helps people using Neovim. Most people on a team are likely
@@ -38,14 +38,20 @@ to be using something else.
 ## What this is
 
 `monorepo-lsp` takes that harness out of the editor and makes it a standalone
-command. An editor runs it as the language server for a language, for example
-`monorepo-lsp ruby`. To the editor it is one ordinary language server.
+command. To the editor it is one ordinary language server.
 
 Behind that, the proxy reads a config file checked into the repo. For each file,
-it works out which part of the repo the file belongs to and forwards the message
-to that part's backend server. It starts the backend on first use, inside the
-configured Compose service if there is one, and translates paths in both
+the config says which kinds of server handle it, such as a language server and
+a linter. It also says how each of those is started for that part of the
+repo. That might be on the host, inside a Compose service, or through any other
+command that can run a server elsewhere. The proxy starts each backend on first
+use and forwards the file's messages to it, translating paths in both
 directions.
+
+An editor can run the proxy for all of the repo's servers at once, by running
+`monorepo-lsp` on its own. It can also name the servers it wants, for example
+`monorepo-lsp ruby-lsp`. That suits an editor extension built around one
+particular server.
 
 Since the routing and the container handling live in the proxy, any editor that
 can launch a language server gets them. A team describes its setup once, in the
@@ -53,10 +59,10 @@ repo.
 
 The same is true of coding agents. Bridges such as mcp-language-server[2]
 give an agent a language server's go-to-definition, references, diagnostics and
-rename over MCP, which is far more reliable than searching the text. However,
-each bridge starts one server command for one workspace. In a monorepo, that
-server can't see the dependencies of most services. Its answers are then wrong
-or missing, and the agent has no way to tell those apart from good ones. With
+rename over MCP, which is more reliable than searching the text. However, each
+bridge starts one server command for one workspace. In a monorepo, that server
+can't see the dependencies of most services. Its answers are then wrong or
+missing. The agent has no way to tell those apart from good ones. With
 `monorepo-lsp` as the bridge's server command, an agent can trust what the
 language server tells it anywhere in the repo.
 
@@ -66,13 +72,15 @@ language server tells it anywhere in the repo.
   against Neovim and VS Code first.
 - A coding agent can use it through an MCP bridge to a language server, with
   the same per-service accuracy an editor gets.
-- Different parts of a repo can use different backends, whether that means a
-  different container, a different command, or the host.
-- Backends can run in a Compose service, in a named container, or on the host.
-  The path mapping comes from the container's mounts, without anyone writing it
-  by hand.
-- Files that exist only in a container can be opened from the editor.
-- If a backend's service is stopped, the proxy starts it.
+- One proxy can serve every language in the repo, or just the servers it's
+  asked for.
+- Different parts of a repo can start the same server differently, whether that
+  means a different container, a different command, or the host.
+- Docker is supported without being assumed. A backend can run on the host,
+  through any command that runs a server elsewhere, or in a Docker container or
+  Compose service.
+- Files that exist only where the server runs, such as libraries installed in a
+  container, can be opened from the editor.
 - Everyone on a team gets the same setup from the config in the repo.
 
 ## Not in scope, for now
@@ -83,8 +91,8 @@ language server tells it anywhere in the repo.
   container support[3]. Anyone using the proxy goes without features like
   those.
 - Windows hosts and remote Docker contexts.
-- Running more than one server against the same file, such as a language server
-  and a separate linter. Milestone 5 comes back to this.
+- Clever merging of answers when several servers handle the same file. The
+  first version uses simple rules, described in `DESIGN.md`.
 
 ## Prior art
 
@@ -102,95 +110,26 @@ of it. Garnix wrote up nearly this design, a config file that maps paths to
 server commands, but only built a prototype with hard-coded parameters[8].
 
 Several LSP multiplexers put more than one server behind a single connection.
-However, lsp-mux[9] routes by file type, and the Emacs lsp-mux[10] routes by
-request method. multi-lsp-proxy[11] runs several servers per language without
-any routing that I could see. None of them route by path or know about
-containers. lspmux[12] solves the opposite problem, sharing one server between
-several editors.
+None of them route by path or know about containers. lsp-mux[9] routes by file
+type. The Emacs lsp-mux[10] routes by request method. multi-lsp-proxy[11] runs
+several servers per language without any routing that I could see. lspmux[12]
+solves the opposite problem, sharing one server between several editors.
 
 Getting lspdock to where the Neovim harness already is would mean rebuilding
 most of the harness inside it. So, we'll build on the harness, which already
 works on a real monorepo, and borrow from lspdock where it helps.
 
-## Configuration sketch
+## Design
 
-The format is undecided. Here is a sketch in TOML for a repo with two Ruby
-services, a TypeScript frontend, and a `lints` service that has the whole repo
-mounted:
-
-```toml
-# .monorepo-lsp.toml at the root of the repo
-compose = ["docker", "compose", "--file", "compose.dev.yml"]
-
-[servers.ruby]
-command = ["bundle", "exec", "ruby-lsp"]
-
-[servers.ruby.roots]
-"services/api" = { service = "api" }
-"services/billing" = { service = "billing" }
-# Roots that aren't listed run on the host, e.g. a service whose Ruby is too
-# old for the server.
-
-[servers.typescript]
-command = ["typescript-language-server", "--stdio"]
-roots."services/web" = { service = "web" }
-
-[servers.rubocop]
-command = ["rubocop", "--lsp"]
-roots."*" = { service = "lints" }
-```
-
-Neovim picks a server's root itself, from markers such as the nearest
-`Gemfile`. The proxy can't rely on the editor for that. Instead, it routes a
-file to the longest configured root that contains it, with `"*"` catching the
-rest.
-
-## Problems to solve
-
-The path translation is already proven in the Neovim harness. Most of the new
-work comes from putting several backends behind one connection.
-
-- **Initialisation.** The editor asks for the server's capabilities once, at
-  startup, before the proxy knows which backends it will need. We can either
-  start one backend straight away and pass its answer on, or answer from config
-  and register more features as backends start. VS Code and Neovim both support
-  registering features after startup.
-- **Message IDs.** Requests from the editor and requests from backends (such as
-  `workspace/configuration` and `workspace/applyEdit`) both need their IDs
-  remapped. The same goes for cancellations and progress tokens.
-- **Requests that aren't about a single file.** Workspace symbol search,
-  configuration changes and shutdown go to every running backend. The proxy
-  then merges what comes back.
-- **Container-only files in VS Code.** Neovim fetches these as a buffer opens.
-  VS Code gives the proxy no hook like that. Instead, the proxy has to copy a
-  file to the host before it sends the editor a location pointing into it.
-- **Diagnostics from more than one server.** Each `publishDiagnostics` replaces
-  whatever the editor had for that file. Once two servers can check the same
-  file, the proxy has to keep each server's set and publish the union.
-
-## Editor integration
-
-In Neovim, a server's `cmd` points at the proxy. Once the proxy matches the
-harness, the harness can come out of my dotfiles, apart from its formatter
-support (see the open questions).
-
-VS Code has no built-in way to launch an arbitrary language server. Language
-extensions don't always let you replace their server command either. Ruby LSP's
-doesn't[3]. We'll need a small companion extension, built on
-`vscode-languageclient`, that starts `monorepo-lsp <name>` for the configured
-languages. Anyone using it would disable the language's own extension for the
-workspace.
-
-Some extensions might not need the companion. `vscode-rubocop`, for one, has a
-`rubocop.commandPath` setting. I haven't checked whether pointing it at the
-proxy works.
+How the proxy works, from its config model to how it routes messages, is in
+`DESIGN.md`.
 
 ## Implementation language
 
-This is also undecided. The proxy should ship as a single static binary for
-macOS (arm64 and x86_64) and Linux, which means installing it is a matter of
-downloading one file. It has to handle several streams at once reliably and
-rewrite arbitrary JSON. Speed matters little.
+The implementation language is undecided. The proxy should ship as a single
+static binary for macOS (arm64 and x86_64) and Linux, which means installing it
+is a matter of downloading one file. It has to handle several streams at once
+reliably and rewrite arbitrary JSON. Speed matters little.
 
 I'd like to try Jolt[13], a Clojure that runs on Chez Scheme and builds
 self-contained executables. It is young (the repo was created in June 2026).
@@ -201,8 +140,8 @@ that it can:
 1. run `docker compose exec --interactive` and pump stdin and stdout
    concurrently without stalling;
 2. round-trip several MB of JSON through a generic tree rewrite at a reasonable
-   speed (Jolt's standard library has no JSON support, so this includes finding
-   a library);
+   speed. Since Jolt's standard library has no JSON support, that includes
+   finding a library;
 3. build binaries that run on other people's machines. Jolt's prebuilt releases
    cover only macOS arm64 and Linux x86_64.
 
@@ -213,29 +152,29 @@ that way.
 ## Milestones
 
 1. The language spike, as above.
-2. One backend in one container. `monorepo-lsp ruby` serves a single root
+2. One server in one container. `monorepo-lsp ruby-lsp` serves a single scope
    through Compose, with path translation and container-only files. We'll test
    it from Neovim against a real Ruby service.
-3. Routing across several roots, with host fallback and starting services as
-   they're needed. We'll also test it behind mcp-language-server, since an
-   agent working across the repo exercises exactly this routing.
+3. The full config model. That covers several scopes and server types, running
+   with no names given, and every runner. It also covers several servers on one
+   file, with their diagnostics merged. We'll test it behind mcp-language-server
+   as well, since an agent working across the repo relies on exactly this
+   routing.
 4. The VS Code extension, plus setup docs and an example repo.
-5. Later on, several servers per file with merged diagnostics, and formatters
+5. Later on, smarter merging of answers from several servers, and formatters
    offered through `textDocument/formatting`.
 
 ## Open questions
 
 - The name. `monorepo-lsp` is a working name.
-- The config format and file name.
-- Whether the name an editor passes picks a language (`ruby`), grouping several
-  servers, or a single server (`ruby-lsp`, `rubocop`). A language is what we'll
-  want eventually, but it depends on merging diagnostics.
-- What runs on the host for roots that aren't listed, and whether that's
-  configured per root.
+- The config format and file name. The design uses TOML for now, which will be
+  cheap to change once we've tried writing real configs in it. EDN is out,
+  since it is rarely used outside Clojure.
 - Whether formatters belong in the proxy. The Neovim harness also runs
   formatters such as Prettier inside a container.
 - How people install it, such as a Homebrew tap, Nix, release binaries, or
   bundled into the VS Code extension.
+- The narrower questions listed at the end of `DESIGN.md`.
 
 [1]: `nix/packages/nvim/plugins/container_lsp.lua` in my dotfiles
 [2]: https://github.com/isaacphi/mcp-language-server
