@@ -421,6 +421,19 @@ VS Code and MCP bridges, give the proxy no hook like that. Instead, when a
 backend sends back a location in a fetched file, the proxy runs `read` for it
 _before_ forwarding the reply. The client can then open it like any other file.
 
+The cache directory is `<tmpdir>/monorepo-lsp/<repo>/<server type>/<scope>`,
+where `<tmpdir>` is the system's temp directory. Two backends can have
+different files at the same server path. So, each server type and scope gets a
+directory of its own. Each is percent-encoded into a single path segment, with
+the root scope `.` as `%2E`. Nesting the scopes instead would put
+`services/api`'s copy of `/x.rb` where `services` keeps its `/api/x.rb`. Since
+two repos can also share a name, `<repo>` is the repo directory's name followed
+by a dash and the CRC-32 of its full path in hex.
+
+None of this depends on the backend ID. A restarted backend reuses the
+directory of the one it replaced, rather than leaving a new one behind each
+time. The backends of other proxies on the same repo use it too.
+
 ### Failures
 
 If a backend can't start, for example because its service won't come up or its

@@ -47,9 +47,22 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
      :cache (temp-dir)}))
 
 (deftest cache-dirs
-  (let [dir (fetched/cache-dir "monorepo-lsp-1")]
-    (is (str/ends-with? dir "/monorepo-lsp/monorepo-lsp-1"))
-    (is (not (str/includes? dir "//")))))
+  (let [dir (fetched/cache-dir "/code/shop" "ruby" "services/api")]
+    (testing "are keyed by repo, server type and scope"
+      (is (re-find #"/monorepo-lsp/shop-[0-9a-f]{8}/ruby/services%2Fapi$" dir))
+      (is (not (str/includes? dir "//"))))
+    (testing "are the same every time"
+      (is (= dir (fetched/cache-dir "/code/shop" "ruby" "services/api"))))
+    (testing "give the root scope a segment of its own"
+      (is (str/ends-with? (fetched/cache-dir "/code/shop" "ruby" ".") "/ruby/%2E")))
+    (testing "differ for each repo, server type and scope"
+      (is (= 5 (count (distinct [dir
+                                 (fetched/cache-dir "/other/shop" "ruby" "services/api")
+                                 (fetched/cache-dir "/code/shop" "rubocop" "services/api")
+                                 (fetched/cache-dir "/code/shop" "ruby" "services")
+                                 (fetched/cache-dir "/code/shop" "ruby" ".")])))))
+    (testing "don't nest one scope inside another"
+      (is (not (str/starts-with? dir (str (fetched/cache-dir "/code/shop" "ruby" "services") "/")))))))
 
 (deftest fetching
   (let [server (temp-dir)

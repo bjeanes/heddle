@@ -5,13 +5,35 @@
             [clojure.string :as str]
             [monorepo-lsp.config :as config]
             [monorepo-lsp.paths :as paths])
-  (:import (java.io File)))
+  (:import (java.io File)
+           (java.net URLEncoder)
+           (java.util.zip CRC32)))
+
+(defn- repo-key
+  "The repo's directory name and a hash of its path, which tells apart repos
+  with the same name."
+  [repo]
+  (let [file (.getAbsoluteFile (io/file repo))
+        crc (CRC32.)]
+    (.update crc (.getBytes (str file) "UTF-8"))
+    (str (.getName file) "-" (format "%08x" (.getValue crc)))))
+
+(defn- segment
+  "`s` percent-encoded as one path segment. Since `.` and `..` can't name a
+  directory of their own, their dots are encoded too, which URLEncoder doesn't
+  do. The root scope `.` becomes `%2E`."
+  [s]
+  (let [encoded (URLEncoder/encode ^String s "UTF-8")]
+    (if (re-matches #"\.+" encoded)
+      (str/replace encoded "." "%2E")
+      encoded)))
 
 (defn cache-dir
-  "The directory holding the backend's fetched files, as a client path."
-  [backend-id]
+  "The directory holding fetched files for `server-type` in `scope`, as a
+  client path. Every backend for them uses the same one, in any process."
+  [repo server-type scope]
   (str (str/replace (System/getProperty "java.io.tmpdir") #"/+$" "")
-       "/monorepo-lsp/" backend-id))
+       "/monorepo-lsp/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
 
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only
