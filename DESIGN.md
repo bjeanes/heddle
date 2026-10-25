@@ -546,6 +546,32 @@ If a backend can't start, for example because its service won't come up or its
 command is missing, the proxy tells the user with `window/showMessage`. The
 message names the server type, the scope and the reason.
 
+A backend that hangs while starting counts as failing to start. Until a backend
+has started, every request about its files waits for it, so a `prepare` stuck
+on a prompt or a server that never answers `initialize` would otherwise hold
+those requests up forever without a word to the user. So, a backend has 120 s
+from when it begins starting to finish `prepare` and answer `initialize`.
+After that, the proxy kills whichever is running and reports the backend as
+failed, with the reason, such as "didn't answer initialize within 120 s, of
+which prepare took 95 s". To kill a process, the proxy asks it and every
+process it started to stop, then forces any still running after 2 s. That
+matters for wrappers such as `sh -c` and `docker compose`, which run the real
+work in a child. It doesn't stop work a command handed to a daemon, such as a
+pull that Docker carries on with.
+
+The limit is generous because `prepare` may build or pull an image the first
+time. I expect that to fit in 120 s in most cases, but haven't measured it.
+
+This is separate from `--eager`'s 30 s wait. A backend still starting when the
+proxy answers `initialize` keeps starting, and fails later if it runs out of
+time.
+
+A `read` gets 10 s. Fetching runs on the thread that handles the backend's
+messages, so a hung `read` would hold up everything else the backend sends,
+diagnostics included. Copying one file out of a running container usually
+takes well under a second. A `read` that runs out of time is killed and
+reported like any other failed fetch.
+
 When none of the backends that handle a file is running, because some have
 failed and the rest never started, the proxy answers every request about the
 file with `RequestFailed` (`-32803`). The error has the same message the user
@@ -627,6 +653,10 @@ These may become worth doing once we've used the prototype.
   the proxy itself is killed. Cleaning up after that would need a container
   name or label that a restarted proxy can work out again, which a random
   backend ID isn't.
+- **Setting the time limits.** Starting and `read` have fixed limits (see
+  "Failures"). A runner whose `prepare` pulls images needs longer than `host`
+  does, so the limits may become per-runner settings once someone needs to
+  change them.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the

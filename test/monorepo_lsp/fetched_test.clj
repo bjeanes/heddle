@@ -27,6 +27,13 @@ s = { runner = 'fake', command = 's', paths = { '.' = '/src' } }
 start = ['{cfg:command}']
 read = ['pwd']
 
+[runners.hung]
+start = ['{cfg:command}']
+read = ['sleep', '30']
+
+[scopes.hung]
+s = { runner = 'hung', command = 's', paths = { 'hung' = '/hung' } }
+
 [scopes.host]
 s = { runner = 'host', command = 's', paths = { 'host' = '/host' } }
 
@@ -44,7 +51,7 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
   (let [repo (temp-dir)]
     (.mkdirs (io/file repo scope))
     {:config config :server-type "s" :scope scope :repo repo :backend-id "monorepo-lsp-1"
-     :cache (temp-dir) :fetched (atom #{})}))
+     :cache (temp-dir) :fetched (atom #{}) :read-timeout-ms 10000}))
 
 (defn- restarted
   "A new backend in place of `b`, sharing its cache."
@@ -173,4 +180,11 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
     (let [b (backend "missing")
           failures (fetched/fetch! b ["/usr/x.rb"])]
       (is (str/includes? (get failures "/usr/x.rb") "monorepo-lsp-no-such-program"))
-      (is (not (.exists (io/file (str (:cache b) "/usr/x.rb"))))))))
+      (is (not (.exists (io/file (str (:cache b) "/usr/x.rb")))))))
+  (testing "a read command that hangs, which is killed once its time runs out"
+    (let [b (assoc (backend "hung") :read-timeout-ms 200)
+          started (System/currentTimeMillis)
+          failures (fetched/fetch! b ["/usr/x.rb"])]
+      (is (= {"/usr/x.rb" "[\"sleep\" \"30\"] didn't finish within 200 ms"} failures))
+      (is (< (- (System/currentTimeMillis) started) 5000))
+      (is (= [] (vec (.list (io/file (str (:cache b) "/usr"))))) "no copy, partial or otherwise"))))

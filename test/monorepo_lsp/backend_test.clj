@@ -18,11 +18,25 @@ languages = ['x']
 prepare = ['touch', 'prepared-{proxy:backend_id}']
 start = ['cat']
 
+[runners.hung]
+prepare = ['sleep', '30']
+start = ['cat']
+
+[runners.slow]
+prepare = ['sleep', '1']
+start = ['cat']
+
 [scopes.'.']
 s = { runner = 'host', command = 's', paths = { '.' = '/src' } }
 
 [scopes.lib]
 s = { runner = 'cat' }
+
+[scopes.hung]
+s = { runner = 'hung' }
+
+[scopes.slow]
+s = { runner = 'slow' }
 "))
 
 (defn- temp-dir []
@@ -80,6 +94,37 @@ s = { runner = 'cat' }
     (is (= :failed (deref ran 2000 :timeout)) "queued functions still run")
     (is (= "initialize failed: no Gemfile" (:error @(:state b))))
     (is (= ["initialize"] (methods-received received)))))
+
+(deftest failing-to-answer-initialize-in-time
+  (testing "kills it"
+    (let [stopped (promise)
+          b (backend/backend config "s" "." "/r" "/cache" {:start-timeout-ms 100})
+          ran (promise)]
+      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/start! b (fake/connector (atom {}) (constantly nil)) {} #(when (nil? %) (deliver stopped true)))
+      (is (= :failed (deref ran 2000 :timeout)))
+      (is (= "it didn't answer initialize within 100 ms" (backend/error b)))
+      (is (= true (deref stopped 2000 :timeout)))))
+  (testing "says how much of the time prepare took"
+    (let [repo (temp-dir)
+          b (backend/backend config "s" "slow" repo "/cache" {:start-timeout-ms 1200})
+          ran (promise)]
+      (.mkdirs (io/file repo "slow"))
+      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/start! b backend/connect-process {} (fn [_]))
+      (is (= :failed (deref ran 5000 :timeout)))
+      (is (re-matches #"it didn't answer initialize within 1200 ms, of which prepare took 1\d\d\d ms"
+                      (backend/error b))))))
+
+(deftest failing-to-prepare-in-time
+  (let [repo (temp-dir)
+        b (backend/backend config "s" "hung" repo "/cache" {:start-timeout-ms 200})
+        ran (promise)]
+    (.mkdirs (io/file repo "hung"))
+    (backend/when-ready b #(deliver ran (backend/status b)))
+    (backend/start! b backend/connect-process {} (fn [_]))
+    (is (= :failed (deref ran 5000 :timeout)) "prepare is killed rather than left to finish")
+    (is (= "its prepare command [\"sleep\" \"30\"] didn't finish within 200 ms" (backend/error b)))))
 
 (deftest requests
   (let [stopped (promise)

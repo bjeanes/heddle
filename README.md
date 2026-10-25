@@ -183,11 +183,13 @@ scope's directory as its working directory.
   backend handles.
 - `prepare` is optional. If the runner has one, the proxy runs it to
   completion before each `start`, for example to start a container for the
-  server to run in. If it fails, the backend doesn't start.
+  server to run in. If it fails, the backend doesn't start. A backend has
+  120 s to start, which covers `prepare` as well as the server answering
+  `initialize`, so `prepare` can't take all of it.
 - `read` is optional. It prints a file from the server's side. The proxy runs
   it when a server refers to a file that `paths` doesn't cover, such as an
   installed gem, to copy the file out for you to open. Without it, you can't
-  open those files.
+  open those files. Each `read` has 10 s to finish.
 - `defaults` is optional. It gives values for the templates that a boot config
   can override.
 
@@ -430,8 +432,6 @@ likely to run into are:
 - If a backend stops, it starts again the next time you open one of its
   files. The proxy doesn't send it the files that were already open, which
   you'll need to reopen.
-- A backend that hangs while starting holds up every request for its files,
-  with no timeout.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
 - There's no VS Code extension or published release yet.

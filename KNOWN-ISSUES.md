@@ -38,11 +38,6 @@ them, under "Pinned for later".
   Until then, workspace symbol search and references don't cover it, and
   clients that only use what a server announces at startup won't use its
   features. `--eager` starts every server; there's no way to choose some.
-- **A server that hangs while starting holds up every request for its files.**
-  Nothing times out while a runner's `prepare` runs, or while the server is yet
-  to answer `initialize`. The requests never complete, and you aren't told
-  why. A `read` that hangs while copying a file out holds up everything that
-  server sends, its diagnostics included.
 - **A restarted server doesn't get the files that were already open.** You'll
   need to reopen them. Until you do, the proxy still sends that server your
   edits to them, which it may report as errors.

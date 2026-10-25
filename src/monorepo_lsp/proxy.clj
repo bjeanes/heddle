@@ -27,6 +27,8 @@
   - :eager, whether to start every backend when the client initializes, and
     wait up to :eager-timeout-ms (by default `eager-timeout-ms`) for them
     before answering;
+  - :start-timeout-ms and :read-timeout-ms, optionally, to override the
+    backends' `default-timeouts` (see monorepo-lsp.backend);
   - :cwd, where to look for the config if no workspace root the client names
     has one;
   - :exit, a function to call with the exit code once the client sends
@@ -299,7 +301,8 @@
 
 (defn- start-backend! [proxy [server-type scope :as k]]
   (let [{:keys [config repo cache-root client-params]} @(:state proxy)
-        b (backend/backend config server-type scope repo cache-root)]
+        timeouts (into {} (filter val) (select-keys proxy (keys backend/default-timeouts)))
+        b (backend/backend config server-type scope repo cache-root timeouts)]
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))

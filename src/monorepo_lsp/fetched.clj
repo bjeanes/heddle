@@ -83,16 +83,20 @@
 
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only
-  created or replaced if the command succeeds. Returns nil, or why it failed.
+  created or replaced if the command succeeds within `timeout-ms`. Returns nil,
+  or why it failed.
 
   Since other proxies may be reading or fetching `target` at the same time,
   each call writes to a `.part` file of its own and renames it over `target`."
-  [command dir ^File target]
+  [command dir ^File target timeout-ms]
   (let [part (io/file (str target "." (subs (str (UUID/randomUUID)) 0 8) ".part"))]
     (try
       (.mkdirs (.getParentFile target))
-      (let [{:keys [exit output]} (process/run command dir {:stdout part})]
+      (let [{:keys [exit timed-out output]} (process/run command dir {:stdout part :timeout-ms timeout-ms})]
         (cond
+          timed-out
+          (str (pr-str command) " didn't finish within " (process/duration timeout-ms))
+
           (not (zero? exit))
           (str (pr-str command) " exited with " exit
                (when-not (str/blank? output) (str ": " (str/trim output))))
@@ -107,11 +111,12 @@
 (defn- fetch-one!
   "Copies `file` into the backend's cache and records it as fetched. Returns
   nil, or why it couldn't."
-  [{:keys [config server-type scope repo cache fetched] :as backend} file]
+  [{:keys [config server-type scope repo cache fetched read-timeout-ms] :as backend} file]
   (let [command (config/command config server-type scope "read"
                                 (assoc (select-keys backend [:repo :backend-id]) :file file))
         problem (if command
-                  (read-into command (paths/client-path repo scope) (io/file (str cache file)))
+                  (read-into command (paths/client-path repo scope) (io/file (str cache file))
+                             read-timeout-ms)
                   "the runner has no read template")]
     (when-not problem
       (swap! fetched conj file))
@@ -121,8 +126,8 @@
   "Copies each of `files`, as server paths, into the backend's cache unless the
   backend has copied it already. `backend` has the :config, :server-type and
   :scope it was started for, the repo root as a client path under :repo, its
-  :backend-id, its :cache directory, and the set of files it has :fetched in
-  an atom.
+  :backend-id, its :cache directory, the set of files it has :fetched in an
+  atom, and how long each `read` may take in :read-timeout-ms.
 
   Since the cache outlives the backend, a copy left by an earlier one is
   replaced in case the file has changed. If it can't be replaced, it stays as

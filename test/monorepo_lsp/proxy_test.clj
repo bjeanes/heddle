@@ -41,7 +41,7 @@ read = ['cat', '{read:file}']
   keys of `refuse` fails, as described by the value. Returns the proxy and its
   repo, a queue of what it sends the client, an atom of what each backend
   receives, and an atom of the proxy's clock in milliseconds."
-  [& {:keys [respond refuse server-types eager eager-timeout-ms] :as opts}]
+  [& {:keys [respond refuse server-types eager eager-timeout-ms start-timeout-ms] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
@@ -59,6 +59,7 @@ read = ['cat', '{read:file}']
                            :server-types server-types
                            :eager eager
                            :eager-timeout-ms eager-timeout-ms
+                           :start-timeout-ms start-timeout-ms
                            :cwd (temp-dir)
                            :exit #(deliver exit-code %)
                            :clock #(deref now)})}))
@@ -270,6 +271,18 @@ read = ['cat', '{read:file}']
         (is (= "client/registerCapability" (get register "method")))
         (is (= ["textDocument/definition"] (map #(get % "method") (get-in register ["params" "registrations"])))))
       (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-with-a-hung-backend
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (when (and (= "initialize" method) (= "lint" server-type))
+                    [(lsp/response id {"capabilities" {"hoverProvider" true}})]))
+        t (start :respond respond :eager true :eager-timeout-ms 100 :start-timeout-ms 300)
+        caps (initialize! t {})]
+    (testing "answers initialize once the eager wait runs out"
+      (is (contains? caps "hoverProvider")))
+    (testing "then fails the hung backend once its own time runs out"
+      (is (= (shown 1 (failure "ruby in api failed to start: it didn't answer initialize within 300 ms"))
+             (from-proxy t))))))
 
 (deftest starting-backends-eagerly-holds-back-their-messages
   (let [log (fn [message] (lsp/notification "window/logMessage" {"type" 3 "message" message}))
@@ -921,6 +934,13 @@ read = ['cat', '{read:file}']
       (start-ruby! t)
       (is (= (shown 1 (failure "ruby in api failed to start: it exited with 0 before answering initialize"))
              (from-proxy t)))))
+  (testing "when a backend doesn't answer initialize in time, answering the requests that waited for it"
+    (let [t (start :server-types #{"ruby"} :start-timeout-ms 100 :respond (constantly nil))
+          ruby-failed (failure "ruby in api failed to start: it didn't answer initialize within 100 ms")]
+      (start-ruby! t)
+      (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+      (is (= #{(shown 1 ruby-failed) (lsp/error-response 1 -32803 ruby-failed)}
+             (set [(from-proxy t) (from-proxy t)])))))
   (testing "when a running backend stops"
     (let [t (start :server-types #{"ruby"})]
       (start-ruby! t)

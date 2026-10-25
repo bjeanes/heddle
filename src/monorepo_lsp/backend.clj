@@ -3,12 +3,12 @@
   each scope. See \"Terms\" in DESIGN.md.
 
   The proxy talks to a backend over a connection, which is a map of functions.
-  :send takes a message, :close ends the backend's input, and :wait takes a
-  timeout in milliseconds and returns the backend's exit code, or nil if it's
-  still running. A connector makes the connection, given the backend and a
-  function to call with each message the backend sends, then with nil once it
-  stops. `connect-process` is the real connector. Tests use fake backends in
-  the same process instead."
+  :send takes a message, :close ends the backend's input, :kill stops it
+  however it's stuck, and :wait takes a timeout in milliseconds and returns the
+  backend's exit code, or nil if it's still running. A connector makes the
+  connection, given the backend and a function to call with each message the
+  backend sends, then with nil once it stops. `connect-process` is the real
+  connector. Tests use fake backends in the same process instead."
   (:require [clojure.java.io :as io]
             [monorepo-lsp.config :as config]
             [monorepo-lsp.fetched :as fetched]
@@ -49,50 +49,66 @@
     (future (read-loop (BufferedInputStream. (.getInputStream proc)) on-message))
     {:send #(lsp/write-message out %)
      :close #(.close out)
+     :kill #(process/kill! proc)
      :wait (fn [ms]
              (when (.waitFor proc ms TimeUnit/MILLISECONDS)
                (.exitValue proc)))}))
 
 (defn- prepare!
-  "Runs `command` in `dir` to completion. Its output goes to stderr, since
-  stdout is the client's LSP stream."
-  [command dir]
-  (let [{:keys [exit output]} (process/run command dir {})]
+  "Runs `command` in `dir` to completion, killing it after `timeout-ms`. Its
+  output goes to stderr, since stdout is the client's LSP stream."
+  [command dir timeout-ms]
+  (let [{:keys [exit timed-out output]} (process/run command dir {:timeout-ms timeout-ms})]
     (binding [*out* *err*]
       (print output)
       (flush))
-    (when-not (zero? exit)
+    (cond
+      timed-out
+      (throw (ex-info (str "its prepare command " (pr-str command) " didn't finish within "
+                           (process/duration timeout-ms))
+                      {:command command}))
+
+      (not (zero? exit))
       (throw (ex-info (str "its prepare command " (pr-str command) " exited with " exit)
                       {:command command :exit exit})))))
 
 (defn connect-process
   "Connects to the backend by running its runner's `prepare` command, if it has
-  one, then its `start` command. Both run in the scope's directory."
-  [{:keys [config server-type scope repo backend-id]} on-message]
+  one, then its `start` command. Both run in the scope's directory. Since
+  connecting is the first part of starting, `prepare` has the whole of the
+  backend's :start-timeout-ms."
+  [{:keys [config server-type scope repo backend-id start-timeout-ms]} on-message]
   (let [runtime {:repo repo :backend-id backend-id}
         dir (paths/client-path repo scope)]
     (when-let [command (config/command config server-type scope "prepare" runtime)]
-      (prepare! command dir))
+      (prepare! command dir start-timeout-ms))
     (spawn (config/command config server-type scope "start" runtime) dir on-message)))
+
+(def default-timeouts
+  {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
+   :read-timeout-ms 10000}) ; for each `read` of a fetched file
 
 (defn backend
   "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
   root as a client path, and `cache-root` is where fetched files are cached.
-  The backend can be used as a context for monorepo-lsp.translate, and with
-  monorepo-lsp.fetched."
-  [config server-type scope repo cache-root]
-  (let [id (new-id)]
-    {:config config
-     :server-type server-type
-     :scope scope
-     :repo repo
-     :backend-id id
-     :paths (get (config/boot-config config server-type scope) "paths")
-     :cache (fetched/cache-dir cache-root repo server-type scope)
-     :fetched (atom #{})
-     :root (config/server-scope config server-type scope repo)
-     :state (atom {:status :starting :queue []})
-     :requests (atom {:last-id 0 :open {}})}))
+  `timeouts` overrides any of `default-timeouts`. The backend can be used as a
+  context for monorepo-lsp.translate, and with monorepo-lsp.fetched."
+  ([config server-type scope repo cache-root]
+   (backend config server-type scope repo cache-root {}))
+  ([config server-type scope repo cache-root timeouts]
+   (merge default-timeouts
+          timeouts
+          {:config config
+           :server-type server-type
+           :scope scope
+           :repo repo
+           :backend-id (new-id)
+           :paths (get (config/boot-config config server-type scope) "paths")
+           :cache (fetched/cache-dir cache-root repo server-type scope)
+           :fetched (atom #{})
+           :root (config/server-scope config server-type scope repo)
+           :state (atom {:status :starting :queue []})
+           :requests (atom {:last-id 0 :open {}})})))
 
 (defn status
   "One of :starting, :ready, :failed or :exited."
@@ -211,11 +227,22 @@
         (run! #(run-queued backend %) queue)
         (recur)))))
 
-(defn- initialize! [backend init-params]
-  (let [answer (promise)]
+(defn- initialize!
+  "Initializes the backend, killing it if it hasn't answered within its
+  :start-timeout-ms of `started`, in milliseconds since the epoch."
+  [{:keys [start-timeout-ms] :as backend} init-params started]
+  (let [answer (promise)
+        connect-ms (- (System/currentTimeMillis) started)]
     (request! backend "initialize" init-params #(deliver answer %))
-    (let [response @answer]
+    (let [response (deref answer (max 0 (- start-timeout-ms connect-ms)) ::timed-out)]
       (cond
+        (= ::timed-out response)
+        (do ((:kill (:conn @(:state backend))))
+            (throw (ex-info (str "it didn't answer initialize within " (process/duration start-timeout-ms)
+                                 (when (<= 1000 connect-ms)
+                                   (str ", of which prepare took " (process/duration connect-ms))))
+                            {})))
+
         (nil? response)
         (throw (ex-info (str "it exited" (some->> (exit-code backend 1000) (str " with "))
                              " before answering initialize")
@@ -229,13 +256,15 @@
   "Connects to the backend with the connector `connect` and initializes it with
   `init-params`, on a thread of its own. Returns the backend straight away.
   `on-message` gets every message from the backend except responses to
-  `request!`, then nil once the backend stops."
+  `request!`, then nil once the backend stops. The backend fails to start if
+  connecting and initializing take longer than its :start-timeout-ms."
   [backend connect init-params on-message]
   (future
     (try
-      (let [conn (connect backend #(receive backend on-message %))]
+      (let [started (System/currentTimeMillis)
+            conn (connect backend #(receive backend on-message %))]
         (swap! (:state backend) assoc :conn conn)
-        (swap! (:state backend) assoc :capabilities (initialize! backend init-params))
+        (swap! (:state backend) assoc :capabilities (initialize! backend init-params started))
         (notify! backend "initialized" {})
         (settle! backend :ready))
       (catch Exception e

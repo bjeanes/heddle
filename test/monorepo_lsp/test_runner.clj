@@ -13,6 +13,7 @@
             [monorepo-lsp.merge-test]
             [monorepo-lsp.origin-test]
             [monorepo-lsp.paths-test]
+            [monorepo-lsp.process-test]
             [monorepo-lsp.proxy-test]
             [monorepo-lsp.readme-test]
             [monorepo-lsp.runner-test]
