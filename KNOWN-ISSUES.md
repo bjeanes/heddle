@@ -74,10 +74,8 @@ them, under "Pinned for later".
 - **Nothing cleans up fetched copies.** By default they live under the
   system's temp directory. Tools such as `nix develop` give each shell a new
   one, which leaves an old cache behind each time. The `cache` table can keep
-  them somewhere stable, such as `env = "XDG_CACHE_HOME"`. However, macOS
-  doesn't set `XDG_CACHE_HOME` by default. If your editor doesn't inherit it,
-  the proxy warns and falls back to the temp directory. See
-  [The cache](README.md#the-cache).
+  them somewhere stable, such as `xdg = true`, but nothing sweeps that either.
+  See [The cache](README.md#the-cache).
 - **Locations in a server's notifications aren't fetched.** A location in a
   container-only file, such as a diagnostic's related information inside a
   gem, can point at a copy that hasn't been made.

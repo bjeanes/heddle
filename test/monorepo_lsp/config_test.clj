@@ -148,14 +148,19 @@ start = ['{read:file}', '--root={srv:scope}']
     (is (nil? (errors "cache = { env = 'XDG_CACHE_HOME' }")))
     (is (nil? (errors "cache = { path = '/var/cache' }")))
     (is (nil? (errors "[cache]\npath = '.cache/lsp'\n")))
+    (is (nil? (errors "cache = { xdg = true }")))
     (are [toml error] (= #{error} (errors toml))
-      "cache = '/var/cache'"                  "cache must be a table, such as { env = \"XDG_CACHE_HOME\" }"
-      "[cache]"                               "cache needs either env or path, but not both"
-      "cache = { env = 'A', path = '/b' }"    "cache needs either env or path, but not both"
+      "cache = '/var/cache'"                  "cache must be a table, such as { xdg = true }"
+      "[cache]"                               "cache needs exactly one of env, path or xdg"
+      "cache = { env = 'A', path = '/b' }"    "cache needs exactly one of env, path or xdg"
+      "cache = { xdg = true, env = 'A' }"     "cache needs exactly one of env, path or xdg"
+      "cache = { xdg = true, path = '/b' }"   "cache needs exactly one of env, path or xdg"
       "cache = { env = 'A', dir = '/b' }"     "cache: unknown key \"dir\""
       "cache = { env = '' }"                  "cache: env must be the name of an environment variable"
+      "cache = { xdg = false }"               "cache: xdg must be true"
+      "cache = { xdg = 'yes' }"               "cache: xdg must be true"
       "cache = { path = 1 }"                  "cache: path must be a string"
-      "cache = { path = '~/.cache' }"         "cache: path can't start with ~, which isn't expanded; use env or an absolute path"
+      "cache = { path = '~/.cache' }"         "cache: path can't start with ~, which isn't expanded; use xdg, env or an absolute path"
       "cache = { path = '../cache' }"         "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"
       "cache = { path = '/var/cache/' }"      "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"))
   (testing "the message lists every problem"

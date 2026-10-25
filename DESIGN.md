@@ -489,16 +489,23 @@ time. The backends of other proxies on the same repo use it too.
 
 However, the temp directory isn't always stable. `nix develop` points `TMPDIR`
 at a new directory for each shell. An editor started from one would then use a
-new cache each time and leave the old ones behind. So, `cache` can name an
-environment variable to read the root from, such as `XDG_CACHE_HOME`, or give
-the root as a path. A relative path is resolved against the config's
+new cache each time and leave the old ones behind. So, `cache` can follow the
+XDG Base Directory spec, name an environment variable to read the root from,
+or give the root as a path. A relative path is resolved against the config's
 directory, which is the repo root. The layout under the root is the same
 whichever way it's chosen. When the root is inside the repo,
 `monorepo-lsp/<repo>` adds two levels of directories that aren't needed. That
 being said, several checkouts of the repo can share an absolute root. `<repo>`
 keeps their copies apart.
 
-If the variable is unset, empty or a relative path, the proxy warns and falls
+With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
+path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set
+`XDG_CACHE_HOME`, a config that named it with `env` would fall back to the temp
+directory there. `xdg` behaves the same on every OS, which suits a config the
+whole team shares.
+
+If the variable that `env` names is unset, empty or a relative path, or `xdg`
+finds neither `XDG_CACHE_HOME` nor `HOME` usable, the proxy warns and falls
 back to the temp directory. Since the cache only saves fetching files again,
 refusing to serve over a missing variable would cost far more than it saves.
 `~` isn't expanded. A path that starts with it is an error, since it would

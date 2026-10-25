@@ -64,25 +64,29 @@
 
 (defn- cache-errors [cache]
   (if-not (map? cache)
-    ["cache must be a table, such as { env = \"XDG_CACHE_HOME\" }"]
-    (let [unknown (remove #{"env" "path"} (keys cache))
-          {:strs [env path]} cache]
+    ["cache must be a table, such as { xdg = true }"]
+    (let [unknown (remove #{"env" "path" "xdg"} (keys cache))
+          {:strs [env path xdg]} cache]
       (cond
         (seq unknown)
         (for [k unknown] (str "cache: unknown key " (pr-str k)))
 
-        (= (nil? env) (nil? path))
-        ["cache needs either env or path, but not both"]
+        (not= 1 (count (remove nil? [env path xdg])))
+        ["cache needs exactly one of env, path or xdg"]
 
         env
         (when-not (and (string? env) (seq env))
           ["cache: env must be the name of an environment variable"])
 
+        (some? xdg)
+        (when-not (true? xdg)
+          ["cache: xdg must be true"])
+
         (not (string? path))
         ["cache: path must be a string"]
 
         (str/starts-with? path "~")
-        ["cache: path can't start with ~, which isn't expanded; use env or an absolute path"]
+        ["cache: path can't start with ~, which isn't expanded; use xdg, env or an absolute path"]
 
         (not (or (paths/absolute-dir? path) (paths/relative-dir? path)))
         ["cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"]))))

@@ -142,7 +142,7 @@ command = ["ruby-lsp"]                   # replaces the server type's command
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
 
 [cache]                                  # optional, defaults to the system's temp directory
-env = "XDG_CACHE_HOME"                   # or path = "/absolute/dir" or "dir/in/the/repo"
+xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/in/the/repo"
 ```
 
 With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`
@@ -268,14 +268,18 @@ is the system's temp directory (`TMPDIR`) unless the `cache` table says
 otherwise. Each server refreshes a file the first time it needs it after
 starting. A stale copy therefore only lasts until then.
 
-`cache` takes one of two keys:
+`cache` takes one of three keys:
 
-- `env` names an environment variable that holds the root, such as
-  `env = "XDG_CACHE_HOME"`. If the variable is unset, empty or a relative path,
-  the proxy warns you and uses the temp directory.
+- `xdg = true` follows the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir-spec/latest/). The root is
+  `XDG_CACHE_HOME` if it's set to an absolute path, and `~/.cache` otherwise.
+  It works the same on every OS, macOS included. If `HOME` isn't usable
+  either, the proxy warns you and uses the temp directory.
+- `env` names an environment variable that holds the root. If the variable is
+  unset, empty or a relative path, the proxy warns you and uses the temp
+  directory.
 - `path` gives the root itself, either absolute or relative to the directory
-  holding the config. Since `~` isn't expanded, use `env` for a directory in
-  your home.
+  holding the config. Since `~` isn't expanded, use `xdg` or `env` for a
+  directory in your home.
 
 Each choice has its trade-offs:
 
@@ -283,12 +287,14 @@ Each choice has its trade-offs:
   time. However, some tools point `TMPDIR` at a new directory for each shell,
   such as `nix develop`. An editor started from one of those shells starts a
   new cache each time and leaves the old ones behind.
-- **`XDG_CACHE_HOME`** is the one I'd recommend, since it stays put across
-  shells. Nothing sweeps it, though. Since the proxy only copies files that
-  servers point you at, and replaces each copy rather than adding another, it
-  stays small. However, it does stay. Many systems, including macOS, don't set
-  it by default. If yours doesn't, set it where your editor will inherit it, or
-  the proxy will warn and use the temp directory.
+- **`xdg = true`** is the one I'd recommend, since it stays put across shells
+  and needs no setup on anyone's machine. That makes it a good fit for a config
+  the whole team shares. Nothing sweeps it, though. Since the proxy only copies
+  files that servers point you at, and replaces each copy rather than adding
+  another, it stays small. However, it does stay.
+- **An environment variable** suits a root that differs from machine to
+  machine. Everyone who uses the config has to set it where their editor will
+  inherit it, or the proxy will warn and use the temp directory.
 - **An absolute path** is the same for everyone who uses the config. That's
   awkward in a config checked into the repo, since machines lay out their
   directories differently.

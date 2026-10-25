@@ -74,6 +74,21 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
                        "which is empty"))
     (is (str/includes? (:warning (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "cache"}))
                        "which is a relative path, \"cache\"")))
+  (testing "can follow the XDG spec, preferring $XDG_CACHE_HOME"
+    (is (= {:root "/home/me/.xdg"}
+           (cache-root "{ xdg = true }" {"XDG_CACHE_HOME" "/home/me/.xdg" "HOME" "/home/me"}))))
+  (testing "can follow the XDG spec, using $HOME/.cache if $XDG_CACHE_HOME is unusable"
+    (is (= {:root "/home/me/.cache"} (cache-root "{ xdg = true }" {"HOME" "/home/me"})))
+    (is (= {:root "/home/me/.cache"}
+           (cache-root "{ xdg = true }" {"XDG_CACHE_HOME" "cache" "HOME" "/home/me"})))
+    (is (= {:root "/home/me/.cache"} (cache-root "{ xdg = true }" {"HOME" "/home/me/"}))))
+  (testing "fall back to the temp directory, with a warning, if XDG finds no usable directory"
+    (is (= {:root tmpdir
+            :warning (str "The config's cache follows XDG, but $XDG_CACHE_HOME isn't set "
+                          "and $HOME is empty. Fetched files are cached in " tmpdir " instead.")}
+           (cache-root "{ xdg = true }" {"HOME" ""})))
+    (is (str/includes? (:warning (cache-root "{ xdg = true }" {"HOME" "me"}))
+                       "and $HOME is a relative path, \"me\"")))
   (testing "can be an absolute path"
     (is (= {:root "/var/cache"} (cache-root "{ path = '/var/cache' }" {}))))
   (testing "can be a path relative to the config's directory"
