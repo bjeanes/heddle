@@ -18,10 +18,21 @@ This is an early prototype. It has been tried with ruby-lsp and RuboCop
 running in Docker Compose on macOS, from Neovim 0.12 and from the session
 driver in `dev/`. Expect rough edges.
 
+## Installing it
+
+Each GitHub release has a binary for macOS arm64, x86_64 Linux and arm64
+Linux. The `edge` prerelease is rebuilt from every push to `main`. Its files
+are named for the commit as `git describe` gives it, such as
+`monorepo-lsp-v0.1.0-12-gabc1234-linux-amd64.tar.gz`.
+
+The macOS binary isn't signed. After downloading it, clear macOS's quarantine
+flag with `xattr -d com.apple.quarantine monorepo-lsp`. Otherwise, macOS will
+refuse to run it.
+
 ## Building it
 
-You need Nix with flakes. The dev shell provides Jolt, for aarch64 macOS and
-x86_64 Linux.
+To build it yourself, you need Nix with flakes. The dev shell provides Jolt,
+for aarch64 macOS and x86_64 Linux.
 
 ```sh
 nix develop
