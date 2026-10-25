@@ -43,6 +43,15 @@
     ["textDocument/diagnostic" "diagnosticProvider" "diagnostic"
      {"interFileDependencies" false "workspaceDiagnostics" false}]]))
 
+(def ^:private resolve-methods
+  "Requests that resolve an item, and the requests whose answers hold the
+  items. A backend resolves them if its options for the feature say so."
+  {"completionItem/resolve" "textDocument/completion"
+   "codeAction/resolve" "textDocument/codeAction"
+   "codeLens/resolve" "textDocument/codeLens"
+   "documentLink/resolve" "textDocument/documentLink"
+   "inlayHint/resolve" "textDocument/inlayHint"})
+
 (def ^:private related-methods
   "Requests that belong to a feature registered under another method."
   {"textDocument/semanticTokens/full" "textDocument/semanticTokens"
@@ -66,6 +75,18 @@
   [server-caps feature]
   (let [v (get server-caps (:provider feature))]
     (and (some? v) (not= false v))))
+
+(defn resolve-method?
+  "Whether the request `method` resolves an item from an earlier answer."
+  [method]
+  (contains? resolve-methods method))
+
+(defn resolves?
+  "Whether a backend with the server capabilities `server-caps` answers the
+  request `method`, which resolves an item."
+  [server-caps method]
+  (let [provider (:provider (get by-method (get resolve-methods method)))]
+    (true? (get-in server-caps [provider "resolveProvider"]))))
 
 (defn- registrable? [client-caps feature]
   (true? (get-in client-caps ["textDocument" (:client feature) "dynamicRegistration"])))

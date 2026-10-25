@@ -13,6 +13,7 @@
             [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp]
             [monorepo-lsp.merge :as merge]
+            [monorepo-lsp.origin :as origin]
             [monorepo-lsp.paths :as paths]
             [monorepo-lsp.translate :as translate])
   (:import (java.net URI)))
@@ -282,13 +283,25 @@
 
 ;; Requests
 
+(defn- result-for-client
+  "The result of the request `method` from the backend `b`, ready for the
+  client."
+  [b method result]
+  (origin/mark-result method (:backend-id b) (to-client! b result)))
+
 (defn- forward-request! [proxy b {:strs [id method params]}]
   (backend/request! b method (translate/to-server b params) id
                     (fn [response]
                       (send-client! proxy
-                                    (if response
-                                      (assoc (to-client! b (dissoc response "id")) "id" id)
-                                      (lsp/error-response id -32603 (str (:server-type b) " stopped before answering")))))))
+                                    (cond
+                                      (nil? response)
+                                      (lsp/error-response id -32603 (str (:server-type b) " stopped before answering"))
+
+                                      (contains? response "error")
+                                      (assoc (to-client! b response) "id" id)
+
+                                      :else
+                                      (lsp/response id (result-for-client b method (get response "result"))))))))
 
 (defn- route-request!
   "Sends a request to the first of the backends `b` and `more`, in priority
@@ -335,7 +348,7 @@
   [id method backends responses]
   (let [answers (for [[b response] (map vector backends responses)
                       :when (answered? response)]
-                  [(:server-type b) (to-client! b (get response "result"))])]
+                  [(:server-type b) (result-for-client b method (get response "result"))])]
     (doseq [[b response] (map vector backends responses)
             :when (not (answered? response))]
       (log/info (:backend-id b) "didn't answer" method "-"
@@ -359,6 +372,19 @@
          (ask-all! offering msg
                    (fn [responses]
                      (send-client! proxy (combined-response id method offering responses))))))))
+
+(defn- backend-by-id [proxy backend-id]
+  (first (filter #(= backend-id (:backend-id %)) (vals (:backends @(:state proxy))))))
+
+(defn- resolve!
+  "Sends a request to resolve an item to the backend that made it. The item
+  comes back unchanged if that backend has stopped or doesn't resolve items."
+  [proxy {:strs [id method params] :as msg}]
+  (let [[backend-id item] (origin/unmark params)
+        b (some->> backend-id (backend-by-id proxy))]
+    (if (and b (backend/ready? b) (capabilities/resolves? (backend/capabilities b) method))
+      (forward-request! proxy b (assoc msg "params" item))
+      (send-client! proxy (lsp/response id params)))))
 
 (defn- cancel!
   "Passes on the client's cancellation of a request it sent a backend."
@@ -404,6 +430,7 @@
       (= "initialize" method) (initialize! proxy msg)
       (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
+      (capabilities/resolve-method? method) (resolve! proxy msg)
       (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))
       uri (route-request! proxy msg (running-handlers proxy uri))
       :else (send-client! proxy (lsp/response id nil)))))

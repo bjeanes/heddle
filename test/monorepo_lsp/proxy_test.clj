@@ -260,14 +260,56 @@ read = ['cat', '{read:file}']
     (open! t "api/a.rb" "ruby")
     (testing "from every backend for the file that offers the feature, in priority order"
       (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
-      (is (= (lsp/response 1 {"isIncomplete" true "items" [{"label" "lint"} {"label" "ruby"}]})
-             (from-proxy t))))
+      (let [{:strs [id result]} (from-proxy t)]
+        (is (= 1 id))
+        (is (true? (get result "isIncomplete")))
+        (is (= ["lint" "ruby"] (map #(get % "label") (get result "items"))))))
     (testing "without the backends that failed to answer"
       (client! t (request-about t 2 "textDocument/references" "api/a.rb"))
       (is (= (lsp/response 2 [{"uri" (uri t "api/a.rb")}]) (from-proxy t))))
     (testing "or with the first error if they all failed"
       (client! t (request-about t 3 "textDocument/codeLens" "api/a.rb"))
       (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
+
+(defn- backend-id [t k]
+  (get-in @(:state (:proxy t)) [:backends k :backend-id]))
+
+(deftest resolving-items
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"completionProvider" {"resolveProvider" (= "lint" server-type)}}})]
+                    "textDocument/completion" [(lsp/response id [{"label" server-type "data" {"n" 1}}
+                                                                 {"label" (str server-type "-bare")}])]
+                    "completionItem/resolve" [(lsp/response id (assoc params "detail" server-type))]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (let [items (into {} (for [item (get-in (from-proxy t) ["result" "items"])]
+                           [(get item "label") item]))]
+      (testing "wraps each item's data with the backend that made it"
+        (is (= {"monorepo-lsp/backend" (backend-id t ["lint" "."]) "data" {"n" 1}}
+               (get-in items ["lint" "data"])))
+        (is (= {"monorepo-lsp/backend" (backend-id t ["lint" "."])}
+               (get-in items ["lint-bare" "data"]))))
+      (testing "sends resolve requests to that backend, with the data it gave"
+        (client! t (lsp/request 2 "completionItem/resolve" (get items "lint")))
+        (is (= (lsp/response 2 (assoc (get items "lint") "detail" "lint")) (from-proxy t)))
+        (is (= {"label" "lint" "data" {"n" 1}}
+               (get-in (received t ["lint" "."] "completionItem/resolve") [0 "params"])))
+        (client! t (lsp/request 3 "completionItem/resolve" (get items "lint-bare")))
+        (is (= (lsp/response 3 (assoc (get items "lint-bare") "detail" "lint")) (from-proxy t)))
+        (is (= {"label" "lint-bare"}
+               (get-in (received t ["lint" "."] "completionItem/resolve") [1 "params"]))))
+      (testing "answers with the item unchanged if its backend doesn't resolve items"
+        (client! t (lsp/request 4 "completionItem/resolve" (get items "ruby")))
+        (is (= (lsp/response 4 (get items "ruby")) (from-proxy t)))
+        (is (= [] (received t ["ruby" "api"] "completionItem/resolve"))))
+      (testing "or if its backend is gone"
+        (let [item (assoc-in (get items "lint") ["data" "monorepo-lsp/backend"] "monorepo-lsp-gone")]
+          (client! t (lsp/request 5 "completionItem/resolve" item))
+          (is (= (lsp/response 5 item) (from-proxy t))))))))
 
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]
