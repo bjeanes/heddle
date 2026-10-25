@@ -82,6 +82,9 @@ read = ['cat', '{read:file}']
 (defn- methods-received [t k]
   (mapv #(get % "method") (get @(:received t) k)))
 
+(defn- shown [type message]
+  (lsp/notification "window/showMessage" {"type" type "message" message}))
+
 (deftest initializing
   (testing "answers with full sync, and finds the config at the client's root"
     (let [t (start)]
@@ -93,15 +96,36 @@ read = ['cat', '{read:file}']
       (spit (io/file cwd ".monorepo-lsp.toml") config)
       (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
       (is (contains? (from-proxy t) "result"))))
-  (testing "answers with an error without a config"
-    (let [t (start)]
-      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
-      (is (str/starts-with? (get-in (from-proxy t) ["error" "message"])
-                            "no .monorepo-lsp.toml in /nowhere or "))))
   (testing "refuses other requests until initialized"
     (let [t (start)]
       (client! t (lsp/request 1 "textDocument/hover" {}))
       (is (= -32002 (get-in (from-proxy t) ["error" "code"]))))))
+
+(defn- serves-nothing? [t]
+  (open! t "api/a.rb" "ruby")
+  (client! t (lsp/request 1 "textDocument/hover" {"textDocument" {"uri" (uri t "api/a.rb")}}))
+  (and (= (lsp/response 1 nil) (from-proxy t))
+       (= {} @(:received t))))
+
+(deftest without-a-usable-config
+  (testing "warns that there's no config, and serves nothing"
+    (let [t (start)
+          cwd (get-in t [:proxy :cwd])]
+      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+      (is (contains? (from-proxy t) "result"))
+      (is (= (shown 2 (str "There's no .monorepo-lsp.toml in /nowhere or " cwd ".\n"
+                           "monorepo-lsp is serving nothing until there is one and it restarts."))
+             (from-proxy t)))
+      (is (serves-nothing? t))))
+  (testing "shows the config's errors, and serves nothing"
+    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = { runner = 'host' }\n")]
+      (is (= {"openClose" true "change" 1 "save" true}
+             (get (initialize! t {}) "textDocumentSync")))
+      (let [{:strs [method params]} (from-proxy t)]
+        (is (= "window/showMessage" method))
+        (is (= 1 (get params "type")))
+        (is (str/includes? (get params "message") "server type \"ruby\" matches no files")))
+      (is (serves-nothing? t)))))
 
 (deftest starting-backends
   (let [t (start)]

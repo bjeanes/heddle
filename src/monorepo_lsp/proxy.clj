@@ -76,29 +76,54 @@
           :when (= origin (:origin request))]
     (send-client! proxy (lsp/notification "$/cancelRequest" {"id" id}))))
 
+(def ^:private message-type {:error 1 :warning 2})
+
+(defn- show-message!
+  "Shows `message` to the user and logs it."
+  [proxy type message]
+  (send-client! proxy (lsp/notification "window/showMessage" {"type" (message-type type)
+                                                              "message" message}))
+  (log/info message))
+
 ;; Initialization
 
-(defn- config-root
-  "The first directory with a config: the workspace roots the client named in
+(defn- config-roots
+  "Where to look for a config: the workspace roots the client named in
   `initialize`, then `cwd`."
   [params cwd]
-  (let [roots (concat (keep uri->path (cons (get params "rootUri")
-                                            (map #(get % "uri") (get params "workspaceFolders"))))
-                      [cwd])]
-    (or (first (filter #(.exists (io/file % config/file-name)) roots))
-        (throw (ex-info (str "no " config/file-name " in " (str/join " or " (distinct roots))) {})))))
+  (distinct (concat (keep uri->path (cons (get params "rootUri")
+                                          (map #(get % "uri") (get params "workspaceFolders"))))
+                    [cwd])))
+
+(def ^:private no-config {"servers" {} "scopes" {} "runners" {}})
+
+(defn- load-config
+  "The repo and its config, from the first of `roots` with a config. Without a
+  usable config, the proxy serves nothing, and :problem has the type and text
+  of a message for the user."
+  [roots]
+  (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
+    (try
+      {:repo repo :config (config/read-config repo)}
+      (catch Exception e
+        {:repo repo
+         :config no-config
+         :problem [:error (str (ex-message e) "\nmonorepo-lsp is serving nothing until the config is fixed and it restarts.")]}))
+    {:repo (first roots)
+     :config no-config
+     :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) "."
+                             "\nmonorepo-lsp is serving nothing until there is one and it restarts.")]}))
 
 (defn- initialize! [proxy {:strs [id params]}]
-  (try
-    (let [repo (config-root params (:cwd proxy))
-          config (config/read-config repo)]
+  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))]
+    (when-not problem
       (doseq [name (:server-types proxy)
               :when (not (contains? (get config "servers") name))]
-        (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name)))
-      (swap! (:state proxy) assoc :repo repo :config config :client-params params)
-      (send-client! proxy (lsp/response id (capabilities/initialize-result (get params "capabilities")))))
-    (catch Exception e
-      (send-client! proxy (lsp/error-response id -32603 (ex-message e))))))
+        (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
+    (swap! (:state proxy) assoc :repo repo :config config :client-params params)
+    (send-client! proxy (lsp/response id (capabilities/initialize-result (get params "capabilities"))))
+    (when-let [[type message] problem]
+      (show-message! proxy type message))))
 
 ;; Backends
 
