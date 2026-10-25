@@ -25,7 +25,7 @@ s = { runner = 'fake', command = 's', paths = { '.' = '/src' } }
 
 [runners.where]
 start = ['{cfg:command}']
-read = ['pwd']
+read = ['pwd', '-P']
 
 [runners.hung]
 start = ['{cfg:command}']
