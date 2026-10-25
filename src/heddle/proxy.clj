@@ -13,6 +13,7 @@
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.merge :as merge]
+            [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
             [heddle.translate :as translate])
@@ -616,7 +617,7 @@
   "The result of the request `method` from the backend `b`, ready for the
   client."
   [b method result]
-  (let [result (cond->> (to-client! b result)
+  (let [result (cond->> (to-client! b (normalise/result method result))
                  (contains? methods-with-commands method) (origin/qualify-commands (:server-type b)))]
     (origin/mark-result method (:backend-id b) result)))
 

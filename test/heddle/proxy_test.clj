@@ -565,6 +565,25 @@ read = ['cat', '{read:file}']
           (client! t (lsp/request 5 "completionItem/resolve" item))
           (is (= (lsp/response 5 item) (from-proxy t))))))))
 
+(deftest resolving-items-with-data-from-their-list
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"completionProvider" {"resolveProvider" (= "lint" server-type)}}})]
+                    "textDocument/completion" [(lsp/response id {"isIncomplete" false
+                                                                 "itemDefaults" {"data" {"n" 1}}
+                                                                 "items" [{"label" server-type}]})]
+                    "completionItem/resolve" [(lsp/response id params)]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (let [lint (first (filter #(= "lint" (get % "label")) (get-in (from-proxy t) ["result" "items"])))]
+      (client! t (lsp/request 2 "completionItem/resolve" lint))
+      (from-proxy t)
+      (is (= {"label" "lint" "data" {"n" 1}}
+             (get-in (received t ["lint" "."] "completionItem/resolve") [0 "params"]))))))
+
 (deftest following-hierarchies
   (let [respond (fn [[server-type] {:strs [id method params]}]
                   (when id

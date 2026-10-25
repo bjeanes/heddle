@@ -3,29 +3,16 @@
             [heddle.merge :as merge]))
 
 (deftest combining-completions
-  (testing "concatenates items, from lists or bare arrays"
+  (testing "concatenates items"
     (is (= {"isIncomplete" false "items" [{"label" "a"} {"label" "b"}]}
            (merge/combine "textDocument/completion"
                           [["x" {"isIncomplete" false "items" [{"label" "a"}]}]
-                           ["y" [{"label" "b"}]]]))))
+                           ["y" {"isIncomplete" false "items" [{"label" "b"}]}]]))))
   (testing "is incomplete if any list is"
     (is (true? (get (merge/combine "textDocument/completion"
-                                   [["x" [{"label" "a"}]]
+                                   [["x" {"isIncomplete" false "items" [{"label" "a"}]}]
                                     ["y" {"isIncomplete" true "items" []}]])
-                    "isIncomplete"))))
-  (testing "applies each list's item defaults to its own items"
-    (let [range {"start" {"line" 0 "character" 0} "end" {"line" 0 "character" 2}}]
-      (is (= [{"label" "a" "data" 1 "insertTextFormat" 2
-               "textEdit" {"range" range "newText" "a"}}
-              {"label" "b" "data" 3 "insertTextFormat" 2 "textEditText" "bee"
-               "textEdit" {"range" range "newText" "bee"}}
-              {"label" "c"}]
-             (get (merge/combine "textDocument/completion"
-                                 [["x" {"isIncomplete" false
-                                        "itemDefaults" {"data" 1 "insertTextFormat" 2 "editRange" range}
-                                        "items" [{"label" "a"} {"label" "b" "data" 3 "textEditText" "bee"}]}]
-                                  ["y" [{"label" "c"}]]])
-                  "items"))))))
+                    "isIncomplete")))))
 
 (deftest combining-code-actions
   (testing "names each action's server type when more than one offers any"

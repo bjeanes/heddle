@@ -27,11 +27,11 @@
             {"title" "run" "command" "x.run"}]
            (origin/mark-result "textDocument/codeAction" "b1"
                                [{"title" "fix"} {"title" "run" "command" "x.run"}]))))
-  (testing "marks completion items with the data their list's defaults give them"
+  (testing "marks the items in a completion list"
     (is (= {"isIncomplete" false
             "items" [{"label" "a" "data" {"heddle/backend" "b1" "data" 7}}]}
            (origin/mark-result "textDocument/completion" "b1"
-                               {"isIncomplete" false "itemDefaults" {"data" 7} "items" [{"label" "a"}]}))))
+                               {"isIncomplete" false "items" [{"label" "a" "data" 7}]}))))
   (testing "marks the hierarchy items in calls, so they can be followed further"
     (is (= [{"from" {"name" "a" "data" {"heddle/backend" "b1"}} "fromRanges" []}]
            (origin/mark-result "callHierarchy/incomingCalls" "b1" [{"from" {"name" "a"} "fromRanges" []}])))

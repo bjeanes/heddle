@@ -2,8 +2,7 @@
   "Marks the items and commands in backends' answers, so that requests
   following up on one reach the backend that made it. See \"Requests about
   one file\" in DESIGN.md."
-  (:require [clojure.string :as str]
-            [heddle.merge :as merge]))
+  (:require [clojure.string :as str]))
 
 (defn qualify-command
   "A command ID that a backend of `server-type` chose, made unique among all
@@ -59,14 +58,15 @@
   (string? (get v "command")))
 
 (defn mark-result
-  "The result of the request `method` from the backend `backend-id`, with
-  every item in it that a client can resolve or follow up on later marked."
+  "The result of the request `method` from the backend `backend-id`, after
+  heddle.normalise, with every item in it that a client can resolve or follow
+  up on later marked."
   [method backend-id result]
   (let [mark-all (fn [items] (mapv #(mark backend-id %) items))
         mark-calls (fn [k calls] (mapv #(update % k (partial mark backend-id)) calls))]
     (case method
       "textDocument/completion"
-      (some-> result merge/completion-list (update "items" mark-all))
+      (some-> result (update "items" mark-all))
 
       ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint" "workspace/symbol"
        "textDocument/prepareCallHierarchy" "textDocument/prepareTypeHierarchy"
