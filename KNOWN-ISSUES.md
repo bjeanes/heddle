@@ -74,9 +74,12 @@ them, under "Pinned for later".
 
 ## Building and platforms
 
-- **Nothing has been published as a release yet.** For now, you build it
-  yourself with the Nix dev shell, which provides Jolt for aarch64 macOS and
-  x86_64 Linux only.
+- **There's no tagged release yet**, only the `edge` prerelease, built from
+  every push to `main`.
+- **The macOS binary isn't signed or notarised.** macOS refuses to run it if a
+  browser downloaded it. See [Installing it](README.md#installing-it).
+- **Building it yourself needs the Nix dev shell**, which provides Jolt for
+  aarch64 macOS and x86_64 Linux only.
 - **Linux binaries need glibc 2.28 or newer**, which rules out musl-based
   systems such as Alpine.
 - **Windows hosts and remote Docker contexts aren't supported.**

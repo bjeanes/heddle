@@ -55,14 +55,38 @@ driver in `dev/`. Expect rough edges.
 
 ## Installing it
 
-Each GitHub release has a binary for macOS arm64, x86_64 Linux and arm64
-Linux. The `edge` prerelease is rebuilt from every push to `main`. Its files
-are named for the commit as `git describe` gives it, such as
-`heddle-v0.1.0-12-gabc1234-linux-amd64.tar.gz`.
+Each [GitHub release](https://github.com/bjeanes/heddle/releases) has a
+binary for macOS arm64 (`darwin-arm64`), x86_64 Linux (`linux-amd64`) and
+arm64 Linux (`linux-arm64`). So far, the only release is the
+[`edge`](https://github.com/bjeanes/heddle/releases/tag/edge) prerelease,
+which is rebuilt from every push to `main`.
 
-The macOS binary isn't signed. After downloading it, clear macOS's quarantine
-flag with `xattr -d com.apple.quarantine heddle`. Otherwise, macOS will
-refuse to run it.
+Use `curl` rather than your browser if you're on macOS. The macOS binary isn't
+signed, and browsers mark what they download as quarantined. macOS then
+refuses to run it, saying that Apple could not verify heddle is free of
+malware. curl doesn't set that flag. If you've already downloaded it through a
+browser, clear the flag with `xattr -d com.apple.quarantine heddle`.
+
+The `edge` archives are named for the commit, as `git describe` gives it, such
+as `heddle-e448ed6-darwin-arm64.tar.gz`. Since the name changes with every
+build, there's no fixed URL to download. Instead, this asks GitHub's API for
+the release's files, picks out the one for your platform, and unpacks the
+`heddle` binary into the current directory. Set `platform` to `darwin-arm64`,
+`linux-amd64` or `linux-arm64` first:
+
+```sh
+platform=darwin-arm64
+curl -fsSL https://api.github.com/repos/bjeanes/heddle/releases/tags/edge \
+  | grep -o "https://[^\"]*-$platform\.tar\.gz" \
+  | xargs curl -fL \
+  | tar -xz
+```
+
+A tagged release names its archives for the version, so you can write the link
+out yourself, as in
+`https://github.com/bjeanes/heddle/releases/download/v0.1.0/heddle-v0.1.0-darwin-arm64.tar.gz`.
+For any release, you can also copy the archive's link from the release page and
+run `curl -fL <link> | tar -xz`.
 
 ## Building it
 
@@ -486,6 +510,7 @@ likely to run into are:
   files, and no sooner than 30 s after it stopped.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
-- There's no VS Code extension or published release yet.
+- There's no VS Code extension yet. The only release is `edge`, built from
+  `main`.
 
 [1]: https://github.com/isaacphi/mcp-language-server

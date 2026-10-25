@@ -119,7 +119,9 @@ jobs:
             fi
             echo "Each archive holds a single \`heddle\` binary. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
             echo
-            echo "The macOS binary isn't signed or notarised. After downloading it, clear macOS's quarantine flag with \`xattr -d com.apple.quarantine heddle\`, or macOS will refuse to run it."
+            echo "The macOS binary isn't signed or notarised. Download it with curl, as in \`curl -fL <link> | tar -xz\`, since macOS refuses to run binaries that a browser has marked as quarantined. If you've already downloaded it through a browser, clear the flag with \`xattr -d com.apple.quarantine heddle\`."
+            echo
+            echo "The README's [Installing it](https://github.com/bjeanes/heddle#installing-it) section has a command that finds the right file for your platform."
           } > "$RUNNER_TEMP/notes.md"
 
       - name: Publish ${{ env.VERSION }}
