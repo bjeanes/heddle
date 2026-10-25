@@ -402,8 +402,13 @@ Messages are larger as a result. Applying incremental edits correctly means
 converting UTF-16 offsets into the implementation language's own strings. That
 can come later if message size turns out to matter.
 
-A backend starts on the first `didOpen` for one of its files, which means no
-other file of its can already be open. There is nothing to replay to it.
+A backend only hears about a file once it has been sent `didOpen` for it. A
+backend can start after some of its files opened, if it restarted or was
+waiting to start again after failing (see "Failures"). Since the server knows
+nothing of those files, the proxy keeps track of which files each backend has
+been sent `didOpen` for. It sends `didChange`, `didSave` and `didClose` only to
+those backends, and asks only them about the file. A restarted backend counts
+as a new one.
 
 ### Requests about one file
 
@@ -586,9 +591,11 @@ If a running backend exits, the proxy reports it the same way, as a warning,
 and withdraws its diagnostics. A backend that failed either way starts again
 on the next `didOpen` for one of its files, but no sooner than 30 s after it
 failed. The message says so. Files that were already open aren't replayed to
-the new backend. That is the same with `--eager`. Only the first start is
-eager, and a backend that failed then starts again on a `didOpen` like any
-other.
+the new backend. Until the client opens them again, the proxy doesn't tell the
+new backend about them or ask it about them (see "Open files"). Some servers
+would otherwise log errors, and others would answer from what's on disk. That
+is the same with `--eager`. Only the first start is eager, and a backend that
+failed then starts again on a `didOpen` like any other.
 
 A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type

@@ -37,6 +37,7 @@
   [opts]
   (assoc opts :state (atom {:backends {}
                             :documents {}
+                            :opened {}
                             :last-id 0
                             :to-client {}
                             :progress {}
@@ -376,6 +377,7 @@
                             (cond-> state
                               (identical? b (get-in state [:backends k]))
                               (-> (update :backends dissoc k)
+                                  (update :opened dissoc (:backend-id b))
                                   (assoc-in [:failures k] {:message message :at now})))))]
     (when (identical? b (get-in old [:backends k]))
       (clear-diagnostics! proxy b)
@@ -502,16 +504,41 @@
               :when scope]
           [server-type scope])))))
 
+(defn- opened?
+  "Whether the backend `b` has been sent `didOpen` for the file at `uri`."
+  [state b uri]
+  (contains? (get-in state [:opened (:backend-id b)]) uri))
+
+(defn- opened-in
+  "The running backends that have been sent `didOpen` for the file at `uri`,
+  in priority order."
+  [proxy uri]
+  (let [state @(:state proxy)]
+    (filter #(opened? state % uri) (running-backends proxy))))
+
 (defn- running-handlers
-  "The running backends that handle the open file at `uri`."
+  "The running backends that handle the file at `uri`. While the client has
+  the file open, those are the ones that have been sent `didOpen` for it. A
+  backend that started after the file opened knows nothing of it."
   [proxy uri]
   (let [{:keys [documents backends]} @(:state proxy)]
-    (keep backends (handlers proxy uri (get-in documents [uri :language])))))
+    (if (contains? documents uri)
+      (opened-in proxy uri)
+      (keep backends (handlers proxy uri nil)))))
 
 (defn- notify-backend! [b method params]
   (let [params (translate/to-server b params)]
     (backend/when-ready b #(when (backend/ready? b)
                              (backend/notify! b method params)))))
+
+(defn- open-in!
+  "Sends the backend `b` the `didOpen` with `params`, unless it has been sent
+  one for the file already."
+  [proxy b params]
+  (let [uri (get-in params ["textDocument" "uri"])
+        [old] (swap-vals! (:state proxy) update-in [:opened (:backend-id b)] (fnil conj #{}) uri)]
+    (when-not (opened? old b uri)
+      (notify-backend! b "textDocument/didOpen" params))))
 
 (defn- open! [proxy {:strs [textDocument] :as params}]
   (let [{:strs [uri languageId]} textDocument]
@@ -519,14 +546,19 @@
     (doseq [k (handlers proxy uri languageId)
             :let [b (backend-for! proxy k)]
             :when b]
-      (notify-backend! b "textDocument/didOpen" params))))
+      (open-in! proxy b params))))
+
+(defn- close [state uri]
+  (-> state
+      (update :documents dissoc uri)
+      (update :opened #(into {} (for [[backend-id uris] %] [backend-id (disj uris uri)])))))
 
 (defn- document-notification! [proxy method params]
   (let [uri (get-in params ["textDocument" "uri"])]
-    (doseq [b (running-handlers proxy uri)]
+    (doseq [b (opened-in proxy uri)]
       (notify-backend! b method params))
     (when (= "textDocument/didClose" method)
-      (swap! (:state proxy) update :documents dissoc uri))))
+      (swap! (:state proxy) close uri))))
 
 ;; The workspace
 

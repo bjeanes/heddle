@@ -184,6 +184,26 @@ read = ['cat', '{read:file}']
                           (methods-received t ["lint" "."]))))
       (is (= [["lint" "."]] (keys @(:received t)))))))
 
+(defn- change! [t path version text]
+  (client! t (lsp/notification "textDocument/didChange"
+                               {"textDocument" {"uri" (uri t path) "version" version}
+                                "contentChanges" [{"text" text}]})))
+
+(defn- close! [t path]
+  (client! t (lsp/notification "textDocument/didClose" {"textDocument" {"uri" (uri t path)}})))
+
+(deftest closing-a-file
+  (let [t (start :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (close! t "api/a.rb")
+    (change! t "api/a.rb" 2 "")
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen" "textDocument/didClose"
+                         "textDocument/didOpen"]
+                        (methods-received t ["ruby" "api"])))
+        "stops the backend hearing about it until it opens again")))
+
 (deftest notifying-a-starting-backend
   (let [started (promise)
         respond (fn [_ {:strs [id method]}]
@@ -989,6 +1009,46 @@ read = ['cat', '{read:file}']
       (swap! (:now t) inc)
       (open! t "api/a.rb" "ruby")
       (is (eventually #(= 2 (opens)))))))
+
+(defn- uris-received [t k method]
+  (mapv #(get-in % ["params" "textDocument" "uri"]) (received t k method)))
+
+(deftest files-a-backend-was-never-told-about
+  (testing "because it restarted after they opened"
+    (let [t (start :server-types #{"ruby"})]
+      (start-ruby! t)
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+      (stop-backend! t ["ruby" "api"])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (swap! (:now t) + 30000)
+      (open! t "api/b.rb" "ruby")
+      (change! t "api/a.rb" 2 "a")
+      (change! t "api/b.rb" 2 "b")
+      (testing "aren't changed in it"
+        (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
+        (is (= ["file:///app/b.rb"] (uris-received t ["ruby" "api"] "textDocument/didChange"))))
+      (testing "aren't asked about in it"
+        (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+        (is (= (lsp/response 1 nil) (from-proxy t)))
+        (is (= [] (received t ["ruby" "api"] "textDocument/hover"))))))
+  (testing "because they opened while it was waiting to start again"
+    (let [starts (atom 0)
+          respond (fn [_ {:strs [id method]}]
+                    (when (= "initialize" method)
+                      (if (= 1 (swap! starts inc))
+                        [(lsp/error-response id -32603 "no Gemfile")]
+                        [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+          t (start :server-types #{"ruby"} :respond respond)]
+      (start-ruby! t)
+      (is (= 1 (get-in (from-proxy t) ["params" "type"])))
+      (open! t "api/b.rb" "ruby")
+      (swap! (:now t) + 30000)
+      (open! t "api/c.rb" "ruby")
+      (change! t "api/b.rb" 2 "b")
+      (change! t "api/c.rb" 2 "c")
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
+      (is (= ["file:///app/c.rb"] (uris-received t ["ruby" "api"] "textDocument/didChange"))
+          "aren't changed in it once another file starts it"))))
 
 (deftest telling-the-user-about-a-backend-at-most-once-a-minute
   (let [t (start :server-types #{"ruby"})
