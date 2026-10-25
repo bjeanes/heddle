@@ -2,4 +2,6 @@
 
  :aliases
  {:test {:extra-paths ["test"]
-         :main-opts ["-m" "monorepo-lsp.test-runner"]}}}
+         :main-opts ["-m" "monorepo-lsp.test-runner"]}
+  :drive {:extra-paths ["dev"]
+          :main-opts ["-m" "monorepo-lsp.dev.drive"]}}}
