@@ -314,6 +314,47 @@ startup. For a feature the client can't register later, the proxy announces it
 at startup and answers with an empty result whenever no backend for the file
 offers it.
 
+Starting backends lazily has its costs, though. Some clients only use what a
+server announced when it started. Neovim, for example, only runs the commands
+listed in the `initialize` reply. An agent's MCP bridge would find no
+workspace symbols, or references in other services, until some file had been
+opened. Semantic tokens and on-type formatting can't be announced at all,
+since only a backend can supply their options.
+
+So, `monorepo-lsp --eager` starts every backend it serves, meaning every
+server type in every scope, as soon as the client sends `initialize`. It waits
+for them to start before answering. The answer then announces every feature
+those backends offer, with their options combined the same way as a
+registration's, including their commands with the server-type prefixes
+described below. Since the announcement has no document selector, it covers
+every file, and the proxy answers for files with no backend offering the
+feature as above. A feature announced in the answer is never registered later.
+Semantic tokens are only announced if every backend numbers them with the same
+legend, since the client decodes every file's tokens with the one legend it was
+given. Otherwise the proxy leaves them to registration as usual.
+
+The spec doesn't let a server send the client requests before it has answered
+`initialize`. Anything the backends send the client while the proxy waits,
+such as log messages or requests for configuration, is therefore held back
+until the answer has gone.
+
+The proxy waits up to 30 s. That is long enough for a server in a running
+container to answer `initialize`, which the example's servers take about a
+second to do. A hung backend still can't hold the client up indefinitely. A
+backend that is still starting when the time runs out joins later, in the same
+way as a lazily started one. Its features are registered if the answer didn't
+already announce them. If they were announced, the client already sends their
+requests to the proxy. However, the answer can't be widened afterwards. A
+client like Neovim won't run any commands the late backend adds, unless the
+Neovim module sends them on. The client won't use its extra trigger characters
+either, and it decodes the late backend's semantic tokens with the legend it
+was given. A backend that fails to start doesn't hold up the answer. The proxy
+reports it once it has answered, as "Failures" below describes.
+
+It's a flag, since whether it suits depends on the client more than the repo.
+An agent wants the whole repo at once. An editor may well not want every
+container's server started whenever it opens one file.
+
 ### Position encoding
 
 Positions in LSP are a line and a character offset. By default the offset counts
@@ -388,7 +429,8 @@ backends whose scopes contain them.
 The proxy announces workspace symbol search at startup, whether or not the
 client could register it later. Since the search isn't about any one file,
 there's nothing for a registration's document selector to narrow. Until a
-backend has started, the proxy answers with no symbols.
+backend has started, the proxy answers with no symbols. With `--eager`, every
+backend has started (or failed) by the time the client can ask.
 
 ### Requests from backends
 
@@ -472,7 +514,9 @@ If a running backend exits, the proxy reports it the same way, as a warning,
 and withdraws its diagnostics. A backend that failed either way starts again
 on the next `didOpen` for one of its files, but no sooner than 30 s after it
 failed. The message says so. Files that were already open aren't replayed to
-the new backend.
+the new backend. That is the same with `--eager`. Only the first start is
+eager, and a backend that failed then starts again on a `didOpen` like any
+other.
 
 A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
@@ -513,10 +557,9 @@ that search across backends.
 
 These may become worth doing once we've used the prototype.
 
-- **Starting backends eagerly.** With the bare command, some server types could
-  start with the proxy. Workspace symbol search would then cover services nobody
-  has opened a file in yet. However, it would also start containers people may
-  not want. A slow or failing start would hold up everything else too.
+- **Choosing which backends start eagerly.** `--eager` starts all of them.
+  Some server types, or scopes, may be worth starting with the proxy even in an
+  editor, while others start containers people may not want.
 - **Starting stopped containers.** The Neovim harness runs `compose up
   --detach` when a service isn't running, then execs into it. With `prepare`,
   that is one line of config, such as

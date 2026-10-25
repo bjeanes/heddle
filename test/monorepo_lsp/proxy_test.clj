@@ -41,7 +41,7 @@ read = ['cat', '{read:file}']
   keys of `refuse` fails, as described by the value. Returns the proxy and its
   repo, a queue of what it sends the client, an atom of what each backend
   receives, and an atom of the proxy's clock in milliseconds."
-  [& {:keys [respond refuse server-types] :as opts}]
+  [& {:keys [respond refuse server-types eager eager-timeout-ms] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
@@ -57,6 +57,8 @@ read = ['cat', '{read:file}']
      :proxy (proxy/create {:send #(.put out %)
                            :connect (fake/refusing (fake/connector received (or respond offers-hover)) refuse)
                            :server-types server-types
+                           :eager eager
+                           :eager-timeout-ms eager-timeout-ms
                            :cwd (temp-dir)
                            :exit #(deliver exit-code %)
                            :clock #(deref now)})}))
@@ -224,6 +226,83 @@ read = ['cat', '{read:file}']
             (is (= (selector lint) (take (count (selector lint)) (selector register))))
             (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
                       (selector register)))))))))
+
+(def ^:private registers-hover-and-commands
+  {"textDocument" {"hover" {"dynamicRegistration" true}
+                   "definition" {"dynamicRegistration" true}}
+   "workspace" {"executeCommand" {"dynamicRegistration" true}}})
+
+(defn- nothing-more? [t]
+  (nil? (.poll (:out t) 200 TimeUnit/MILLISECONDS)))
+
+(deftest starting-backends-eagerly
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {"hoverProvider" true
+                                                       "executeCommandProvider" {"commands" ["fix"]}}})]))
+        t (start :respond respond :eager true)
+        caps (initialize! t registers-hover-and-commands)]
+    (testing "starts every backend before answering initialize"
+      (is (eventually #(= ["initialize" "initialized"] (methods-received t ["ruby" "api"]))))
+      (is (eventually #(= ["initialize" "initialized"] (methods-received t ["lint" "."])))))
+    (testing "announces their features in the answer, with every command qualified"
+      (is (= {} (get caps "hoverProvider")))
+      (is (= {"commands" ["lint:fix" "ruby:fix"]} (get caps "executeCommandProvider"))))
+    (testing "and doesn't register those features again"
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-with-a-slow-backend
+  (let [started (promise)
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (if (= "ruby" server-type)
+                      (do @started
+                          [(lsp/response id {"capabilities" {"hoverProvider" true "definitionProvider" true}})])
+                      [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+        t (start :respond respond :eager true :eager-timeout-ms 100)
+        caps (initialize! t registers-hover-and-commands)]
+    (testing "answers initialize once the timeout runs out, with the backends that have started"
+      (is (contains? caps "hoverProvider"))
+      (is (not (contains? caps "definitionProvider"))))
+    (testing "registers the features only a late backend offers once it starts"
+      (deliver started true)
+      (let [register (from-proxy t)]
+        (is (= "client/registerCapability" (get register "method")))
+        (is (= ["textDocument/definition"] (map #(get % "method") (get-in register ["params" "registrations"])))))
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-holds-back-their-messages
+  (let [log (fn [message] (lsp/notification "window/logMessage" {"type" 3 "message" message}))
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (cond-> [(lsp/response id {"capabilities" {}})]
+                      (= "ruby" server-type) (->> (into [(log "one") (log "two")])))))
+        t (start :respond respond :eager true)]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "until the proxy has answered initialize, then sends them in order"
+      (is (= 0 (get (from-proxy t) "id")))
+      (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-with-a-failed-backend
+  (let [ruby-starts (atom 0)
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (if (and (= "ruby" server-type) (= 1 (swap! ruby-starts inc)))
+                      [(lsp/error-response id -32603 "no Gemfile")]
+                      [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+        t (start :respond respond :eager true)
+        caps (initialize! t {})]
+    (testing "answers initialize with the backends that did start"
+      (is (= {} (get caps "hoverProvider"))))
+    (testing "then tells the user as usual"
+      (is (= (shown 1 (failure "ruby in api failed to start: initialize failed: no Gemfile")) (from-proxy t))))
+    (testing "and starts it again only when one of its files opens"
+      (swap! (:now t) + 30000)
+      (is (nothing-more? t))
+      (is (= 1 @ruby-starts))
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 @ruby-starts))))))
 
 (defn- received [t k method]
   (filterv #(= method (get % "method")) (get @(:received t) k)))

@@ -58,6 +58,22 @@ To check which languages a config covers, run `monorepo-lsp --languages` from
 the repo root, or give it the root as an argument. It prints them as JSON,
 such as `{"languages":["ruby"]}`, or the config's problems if there are any.
 
+## Starting servers eagerly
+
+By default, the proxy starts each server the first time you open one of its
+files. That keeps an editor from starting every container's server when you
+only open one file. However, until then, the proxy can't tell the client
+about that server's features, and workspace symbol search doesn't cover it.
+
+`monorepo-lsp --eager` (or `monorepo-lsp --eager ruby-lsp`, naming server
+types as usual) starts every server in the config as soon as the client
+connects, and waits up to 30 s for them before finishing its handshake. The
+client then learns every feature and command up front. Use it for agents, and
+for clients that only use what a server announces at startup. A server that
+takes longer joins when it's ready, as it would without the flag. A server
+that fails to start is reported as usual, and starts again the next time you
+open one of its files.
+
 For more, see the examples:
 
 - [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.
@@ -109,6 +125,14 @@ Neovim only runs the commands a server lists when it starts, but the proxy
 learns them from its backends later. The module sends the proxy any command
 that Neovim doesn't run itself.
 
+With `--eager`, the proxy lists every command when it starts, so Neovim can
+run them without the module's help. You can then configure the client
+yourself and skip the module, or keep using the module with
+`cmd = { 'monorepo-lsp', '--eager' }`. Either works. The module still covers
+the commands of any server that took longer than 30 s to start. Since the
+module runs `cmd` with `--languages` appended, the proxy accepts
+`--eager --languages` and ignores `--eager` there.
+
 If you'd rather not install the module, you can leave the host's servers out
 with a repo-local `.nvim.lua` instead, using `'exrc'`:
 
@@ -138,18 +162,21 @@ If your `nvim` is wrapped by Nix with plugins, it loads them even under
 
 Bridges such as [mcp-language-server][1] give an agent a language server's
 tools over MCP. Give it the bare command, which serves every server type in
-the config, and the repo root as the workspace:
+the config, with `--eager`, and the repo root as the workspace:
 
 ```sh
-mcp-language-server --workspace /path/to/repo --lsp monorepo-lsp
+mcp-language-server --workspace /path/to/repo --lsp monorepo-lsp -- --eager
 ```
+
+Without `--eager`, workspace symbol search and references across services
+find nothing until the agent opens a file in each service.
 
 I haven't tried this with a bridge yet.
 
 ## Known limitations
 
-- Backends start when you first open one of their files. Until then,
-  workspace symbol search doesn't cover them.
+- Unless you pass `--eager`, backends start when you first open one of their
+  files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
   files. The proxy doesn't send it the files that were already open, which
   you'll need to reopen.

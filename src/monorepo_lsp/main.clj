@@ -9,10 +9,14 @@
   (:import (java.io BufferedInputStream)))
 
 (def ^:private usage
-  "usage: monorepo-lsp [SERVER-TYPE...]
+  "usage: monorepo-lsp [--eager] [SERVER-TYPE...]
        monorepo-lsp --languages [DIR]
 
 Serves every server type in the config, or only those named.
+
+--eager starts every backend when the client initializes, and waits up to
+30 s for them before answering, so that the answer lists their features and
+commands. Otherwise each backend starts when one of its files opens.
 
 --languages prints, as JSON, the languages that the config at the root of DIR
 covers. DIR is the current directory unless given.")
@@ -50,14 +54,11 @@ covers. DIR is the current directory unless given.")
       (when (and (contains? msg "id") (contains? msg "method"))
         (lsp/write-message System/out (lsp/error-response (get msg "id") -32603 (ex-message e)))))))
 
-(defn -main [& server-types]
-  (when (= "--languages" (first server-types))
-    (languages! (rest server-types)))
-  (when (some #(str/starts-with? % "-") server-types)
-    (usage!))
+(defn- serve! [eager? server-types]
   (let [proxy (proxy/create {:send #(lsp/write-message System/out %)
                              :connect backend/connect-process
                              :server-types (when (seq server-types) (set server-types))
+                             :eager eager?
                              :cwd (System/getProperty "user.dir")
                              :exit #(System/exit %)})
         in (BufferedInputStream. System/in)]
@@ -66,3 +67,12 @@ covers. DIR is the current directory unless given.")
         (do (handle! proxy msg)
             (recur))
         (handle! proxy (lsp/notification "exit" nil))))))
+
+(defn -main [& args]
+  (let [eager? (= "--eager" (first args))
+        args (if eager? (rest args) args)]
+    (when (= "--languages" (first args))
+      (languages! (rest args)))
+    (when (some #(str/starts-with? % "-") args)
+      (usage!))
+    (serve! eager? args)))

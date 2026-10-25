@@ -21,6 +21,30 @@
       (is (not (contains? caps "semanticTokensProvider")))
       (is (not (contains? caps "documentOnTypeFormattingProvider"))))))
 
+(deftest initialize-result-with-backends-started
+  (let [caps #(get (capabilities/initialize-result registers-hover %) "capabilities")
+        legend (fn [& types] {"tokenTypes" (vec types) "tokenModifiers" []})]
+    (testing "announces the features they offer, with their options combined"
+      (let [c (caps [[{"hoverProvider" true
+                       "executeCommandProvider" {"commands" ["a"]}
+                       "documentOnTypeFormattingProvider" {"firstTriggerCharacter" "\n"}}
+                      [{"language" "ruby"}]]
+                     [{"executeCommandProvider" {"commands" ["b"]}} [{"language" "erb"}]]])]
+        (is (= {} (get c "hoverProvider")))
+        (is (= {"commands" ["a" "b"]} (get c "executeCommandProvider")))
+        (is (= {"firstTriggerCharacter" "\n"} (get c "documentOnTypeFormattingProvider")))
+        (testing "which are then never registered later"
+          (is (contains? (capabilities/announced-methods c) "textDocument/hover"))
+          (is (contains? (capabilities/announced-methods c) "workspace/executeCommand")))))
+    (testing "announces semantic tokens only if they share one legend"
+      (is (= {"legend" (legend "type")}
+             (get (caps [[{"semanticTokensProvider" {"legend" (legend "type")}} []]
+                         [{"semanticTokensProvider" {"legend" (legend "type")}} []]])
+                  "semanticTokensProvider")))
+      (is (not (contains? (caps [[{"semanticTokensProvider" {"legend" (legend "type")}} []]
+                                 [{"semanticTokensProvider" {"legend" (legend "class")}} []]])
+                          "semanticTokensProvider"))))))
+
 (deftest registrations
   (let [selector [{"language" "ruby"}]
         server-caps {"hoverProvider" {"workDoneProgress" true}

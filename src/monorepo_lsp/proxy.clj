@@ -24,6 +24,9 @@
   - :send, a function to call with each message for the client;
   - :connect, the connector for backends (see monorepo-lsp.backend);
   - :server-types, the set of server types to serve, or nil to serve all;
+  - :eager, whether to start every backend when the client initializes, and
+    wait up to :eager-timeout-ms (by default `eager-timeout-ms`) for them
+    before answering;
   - :cwd, where to look for the config if no workspace root the client names
     has one;
   - :exit, a function to call with the exit code once the client sends
@@ -41,8 +44,14 @@
 (defn- now-ms [proxy]
   ((or (:clock proxy) #(System/currentTimeMillis))))
 
-(defn- send-client! [proxy msg]
-  ((:send proxy) msg))
+(defn- send-client!
+  "Sends `msg` to the client, or holds it under :held while the proxy is yet
+  to answer `initialize`."
+  [proxy msg]
+  (locking (:state proxy)
+    (if (:held @(:state proxy))
+      (swap! (:state proxy) update :held conj msg)
+      ((:send proxy) msg))))
 
 (defn- uri->path [uri]
   (try
@@ -119,14 +128,47 @@
      :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) "."
                              "\nmonorepo-lsp is serving nothing until there is one and it restarts.")]}))
 
+(declare start-backend! ready-backends register! when-all-ready)
+
+(def ^:private eager-timeout-ms 30000)
+
+(defn- start-every-backend!
+  "Starts a backend for every server type the proxy serves in every scope, and
+  waits until they have all started or failed, or the timeout runs out."
+  [proxy]
+  (let [{:keys [config]} @(:state proxy)
+        only (:server-types proxy)
+        started (promise)]
+    (when-all-ready (doall (for [[scope entries] (sort-by key (get config "scopes"))
+                                 server-type (sort (keys entries))
+                                 :when (or (nil? only) (contains? only server-type))]
+                             (start-backend! proxy [server-type scope])))
+      #(deliver started true))
+    (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
+
+(defn- answer-initialize!
+  "Sends the client the answer to `initialize`, then everything held back
+  while the proxy was yet to send it."
+  [proxy response]
+  (locking (:state proxy)
+    (let [[old] (swap-vals! (:state proxy) dissoc :held)]
+      ((:send proxy) response)
+      (run! (:send proxy) (:held old)))))
+
 (defn- initialize! [proxy {:strs [id params]}]
-  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))]
+  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))
+        eager? (and (:eager proxy) (not problem))]
     (when-not problem
       (doseq [name (:server-types proxy)
               :when (not (contains? (get config "servers") name))]
         (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
-    (swap! (:state proxy) assoc :repo repo :config config :client-params params)
-    (send-client! proxy (lsp/response id (capabilities/initialize-result (get params "capabilities"))))
+    (swap! (:state proxy) assoc :repo repo :config config :client-params params :held (when eager? []))
+    (when eager?
+      (start-every-backend! proxy))
+    (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
+      (swap! (:state proxy) assoc :announced (capabilities/announced-methods (get result "capabilities")))
+      (answer-initialize! proxy (lsp/response id result)))
+    (register! proxy)
     (when-let [[type message] problem]
       (show-message! proxy type message))))
 
@@ -160,6 +202,14 @@
     (update-in ["executeCommandProvider" "commands"]
                #(mapv (partial origin/qualify-command (:server-type b)) %))))
 
+(defn- ready-backends
+  "The server capabilities and document selector of each running backend that
+  has started, in priority order."
+  [proxy]
+  (for [b (running-backends proxy)
+        :when (backend/ready? b)]
+    [(server-capabilities b) (document-selector b)]))
+
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
   refuses."
@@ -174,14 +224,15 @@
   covering all of their files. Some clients, such as VS Code, ask every
   registration that matches a file, so a registration per backend would bring
   the proxy each request several times. When a registration has to change, the
-  proxy unregisters it and registers it again."
+  proxy unregisters it and registers it again. Features announced in the
+  answer to `initialize` aren't registered, and nothing is until it's sent."
   [proxy]
   (locking (:state proxy)
-    (let [{:keys [client-params registered]} @(:state proxy)
-          wanted (capabilities/registrations (get client-params "capabilities")
-                                             (for [b (running-backends proxy)
-                                                   :when (backend/ready? b)]
-                                               [(server-capabilities b) (document-selector b)]))
+    (let [{:keys [client-params registered announced held]} @(:state proxy)
+          wanted (when-not held
+                   (remove #(contains? announced (get % "method"))
+                           (capabilities/registrations (get client-params "capabilities")
+                                                       (ready-backends proxy))))
           changed (remove #(= % (get registered (get % "method"))) wanted)
           replaced (filter #(contains? registered (get % "method")) changed)]
       (swap! (:state proxy) update :registered into (map (juxt #(get % "method") identity)) changed)
