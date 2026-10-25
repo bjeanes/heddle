@@ -810,10 +810,19 @@
             "window/workDoneProgress/cancel" (cancel-progress! proxy (get params "token"))
             nil)))
 
+(defn- without-partial-results
+  "The client's request `msg` without its token for partial results. A backend
+  would send those straight to the client, past the marking, qualifying and
+  fetching that the proxy does to every answer, so backends answer in full
+  instead."
+  [msg]
+  (cond-> msg
+    (map? (get msg "params")) (update "params" dissoc "partialResultToken")))
+
 (defn handle-client!
   "Handles one message from the client."
   [proxy msg]
   (cond
     (lsp/response? msg) (client-response! proxy msg)
-    (contains? msg "id") (client-request! proxy msg)
+    (contains? msg "id") (client-request! proxy (without-partial-results msg))
     :else (client-notification! proxy msg)))

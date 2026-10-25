@@ -403,6 +403,20 @@ read = ['cat', '{read:file}']
       (is (= (lsp/response 9 nil) (from-proxy t)))
       (is (= 1 (count (received t ["lint" "."] "custom/request")))))))
 
+(deftest requests-for-partial-results
+  (let [t (start :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (assoc-in (request-about t 1 "textDocument/hover" "api/a.rb")
+                         ["params" "partialResultToken"] "p"))
+    (client! t (assoc-in (request-about t 2 "textDocument/hover" "api/a.rb")
+                         ["params" "workDoneToken"] "w"))
+    (is (= [(lsp/response 1 nil) (lsp/response 2 nil)] [(from-proxy t) (from-proxy t)]))
+    (let [[in-parts work-done] (map #(get % "params") (received t ["ruby" "api"] "textDocument/hover"))]
+      (is (not (contains? in-parts "partialResultToken"))
+          "are answered in full, so that the proxy can process the answer")
+      (is (= "w" (get work-done "workDoneToken")) "keep their progress token"))))
+
 (deftest requests-by-priority
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case method

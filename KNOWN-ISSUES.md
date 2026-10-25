@@ -19,12 +19,6 @@ them, under "Pinned for later".
 - **A server that registers a feature itself is registered once for each
   scope it runs in.** Clients such as VS Code may then ask the proxy, and show
   the answer, once per registration.
-- **Results streamed in parts can misbehave.** If your client asks for partial
-  results, the proxy passes each part on as the server sent it. Resolving an
-  item from one gives back nothing more, running its command fails as an
-  unknown command, and a location in a container-only file can point at a copy
-  that hasn't been made. I believe VS Code asks for partial results for some
-  features, but I haven't checked. Neovim doesn't.
 - **Pulled diagnostics are always reported in full**, since the proxy drops
   each server's result IDs.
 - **The client sends whole files on every change.** Messages are larger than
