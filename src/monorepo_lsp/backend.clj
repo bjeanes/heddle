@@ -65,7 +65,7 @@
       (print output)
       (flush))
     (when-not (zero? exit)
-      (throw (ex-info (str (pr-str command) " exited with " exit)
+      (throw (ex-info (str "its prepare command " (pr-str command) " exited with " exit)
                       {:command command :exit exit})))))
 
 (defn connect-process
@@ -107,6 +107,18 @@
   "The server capabilities the backend answered `initialize` with."
   [backend]
   (:capabilities @(:state backend)))
+
+(defn error
+  "Why the backend failed to start, if it did."
+  [backend]
+  (:error @(:state backend)))
+
+(defn exit-code
+  "The backend's exit code, waiting up to `ms` for it to exit, or nil if it
+  hasn't or was never connected."
+  [backend ms]
+  (when-let [{:keys [wait]} (:conn @(:state backend))]
+    (wait ms)))
 
 (defn send! [backend msg]
   (if-let [conn (:conn @(:state backend))]
@@ -206,7 +218,9 @@
     (let [response @answer]
       (cond
         (nil? response)
-        (throw (ex-info "it stopped before answering initialize" {}))
+        (throw (ex-info (str "it exited" (some->> (exit-code backend 1000) (str " with "))
+                             " before answering initialize")
+                        {}))
 
         (contains? response "error")
         (throw (ex-info (str "initialize failed: " (get-in response ["error" "message"])) {})))
@@ -226,7 +240,6 @@
         (notify! backend "initialized" {})
         (settle! backend :ready))
       (catch Exception e
-        (log/info (:server-type backend) "in" (pr-str (:scope backend)) "failed to start:" (ex-message e))
         (swap! (:state backend) assoc :error (ex-message e))
         (settle! backend :failed))))
   backend)

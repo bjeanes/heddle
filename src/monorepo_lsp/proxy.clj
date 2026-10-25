@@ -27,14 +27,19 @@
   - :cwd, where to look for the config if no workspace root the client names
     has one;
   - :exit, a function to call with the exit code once the client sends
-    `exit`."
+    `exit`;
+  - :clock, optionally, a function that returns the time in milliseconds."
   [opts]
   (assoc opts :state (atom {:backends {}
                             :documents {}
                             :last-id 0
                             :to-client {}
                             :progress {}
-                            :registered {}})))
+                            :registered {}
+                            :reported {}})))
+
+(defn- now-ms [proxy]
+  ((or (:clock proxy) #(System/currentTimeMillis))))
 
 (defn- send-client! [proxy msg]
   ((:send proxy) msg))
@@ -201,6 +206,30 @@
                                     ["general" "positionEncodings"] ["utf-16"])
            "trace" (get client-params "trace")})))
 
+(defn- describe [{:keys [server-type scope]}]
+  (str server-type " in " (if (= "." scope) "the repo root" scope)))
+
+(defn- elapsed?
+  "Whether `ms` or more have passed between `since` and `now`, or there's no
+  `since`."
+  [since now ms]
+  (or (nil? since) (<= ms (- now since))))
+
+(def ^:private report-interval-ms 60000)
+
+(defn- report!
+  "Shows the user a message about the backend `b`, unless one was shown for its
+  server type and scope in the last `report-interval-ms`, as a backend that
+  keeps failing would otherwise flood them."
+  [proxy b type message]
+  (let [k [(:server-type b) (:scope b)]
+        now (now-ms proxy)
+        due? #(elapsed? (get-in % [:reported k]) now report-interval-ms)
+        [old] (swap-vals! (:state proxy) #(cond-> % (due? %) (assoc-in [:reported k] now)))]
+    (if (due? old)
+      (show-message! proxy type message)
+      (log/info message))))
+
 (declare from-backend!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
@@ -209,7 +238,9 @@
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
-    (backend/when-ready b #(register! proxy))
+    (backend/when-ready b #(if (backend/ready? b)
+                             (register! proxy)
+                             (report! proxy b :error (str (describe b) " failed to start: " (backend/error b)))))
     b))
 
 (defn- backend-for! [proxy k]
@@ -255,13 +286,22 @@
           :when (contains? for-file (:backend-id b))]
     (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
 
-(defn- stopped! [proxy b]
+(defn- stopped!
+  "Forgets the backend `b`, which has stopped, and tells the user if it had
+  been running. A backend that stops while starting has failed to start, which
+  is reported once it settles."
+  [proxy b]
   (log/info (:backend-id b) "stopped")
   (swap! (:state proxy) update :backends
          (fn [backends]
            (let [k [(:server-type b) (:scope b)]]
              (cond-> backends (identical? b (get backends k)) (dissoc k)))))
-  (clear-diagnostics! proxy b))
+  (clear-diagnostics! proxy b)
+  (let [{:keys [shut-down exiting]} @(:state proxy)]
+    (when (and (= :exited (backend/status b)) (not (or shut-down exiting)))
+      (report! proxy b :warning (str (describe b) " stopped"
+                                     (some->> (backend/exit-code b 1000) (str " with exit code "))
+                                     ". It will restart when one of its files next opens.")))))
 
 (defn- qualify
   "An ID that the backend `b` chose for the client, made unique among all
@@ -595,6 +635,7 @@
       (send-client! proxy (lsp/response id nil)))))
 
 (defn- exit! [proxy]
+  (swap! (:state proxy) assoc :exiting true)
   (run! deref (mapv #(future (backend/exit! % 2000)) (vals (:backends @(:state proxy)))))
   ((:exit proxy) (if (:shut-down @(:state proxy)) 0 1)))
 
