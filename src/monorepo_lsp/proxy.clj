@@ -241,7 +241,7 @@
 
 (defn- handlers
   "The [server-type scope] of each backend that handles the file at `uri` when
-  it's opened as `language`, in sorted order."
+  it's opened as `language`, in priority order."
   [proxy uri language]
   (let [{:keys [config repo backends]} @(:state proxy)
         only (:server-types proxy)
@@ -249,11 +249,11 @@
     (if-let [k (fetched-by backends path)]
       [k]
       (when-let [path (repo-relative repo path)]
-        (sort (for [server-type (config/server-types config path language)
-                    :when (or (nil? only) (contains? only server-type))
-                    :let [scope (config/scope-for config server-type path)]
-                    :when scope]
-                [server-type scope]))))))
+        (for [server-type (config/by-priority config (config/server-types config path language))
+              :when (or (nil? only) (contains? only server-type))
+              :let [scope (config/scope-for config server-type path)]
+              :when scope]
+          [server-type scope])))))
 
 (defn- running-handlers
   "The running backends that handle the open file at `uri`."
@@ -290,10 +290,10 @@
                                       (lsp/error-response id -32603 (str (:server-type b) " stopped before answering")))))))
 
 (defn- route-request!
-  "Sends a request to the first of the backends `b` and `more` that offers the
-  request's feature, or answers it with an empty result if none does. A
-  request for a feature the proxy doesn't know about goes to the first backend
-  that has started."
+  "Sends a request to the first of the backends `b` and `more`, in priority
+  order, that offers the request's feature, or answers it with an empty result
+  if none does. A request for a feature the proxy doesn't know about goes to
+  the first backend that has started."
   [proxy {:strs [id method] :as msg} [b & more]]
   (if (nil? b)
     (send-client! proxy (lsp/response id (capabilities/empty-result method)))

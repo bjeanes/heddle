@@ -108,6 +108,9 @@ A server type's `boot` table holds defaults for starting it. Scopes override
 them one key at a time. That avoids repeating a command in every scope, without
 tying the command to the server type. Any scope can still replace it.
 
+A server type's optional `priority` decides which backend answers when several
+handle a file. "Requests about one file" below covers how.
+
 ### Scopes
 
 Each scope is keyed by a directory, relative to the repo root, with `.` as the
@@ -324,10 +327,21 @@ other file of its can already be open. There is nothing to replay to it.
 These go to the backends handling that file. Usually that's one.
 
 When several backends handle the file, the proxy sends requests that want one
-answer (such as hover, definition, rename and formatting) to one of them. Which
-one is an open question below. Requests whose answers can be combined, such as
-completion and code actions, go to all of them. The proxy concatenates the
-results.
+answer (such as hover, definition, rename and formatting) to one of them. It
+picks the backend whose server type has the highest `priority`, among those
+that offer the feature. A server type's priority is an integer and defaults
+to 0. Ties go to the server type whose name sorts first. Config order would be
+the obvious way to choose instead. However, TOML doesn't guarantee the order of
+a table's keys, even though most parsers keep it.
+
+```toml
+[servers.ruby-lsp]
+languages = ["ruby"]
+priority = 10
+```
+
+Requests whose answers can be combined, such as completion and code actions,
+go to all of them. The proxy concatenates the results.
 
 The spec gives a code action no unique ID, only a title. Two servers may well
 offer actions with the same title. When a response combines code actions from
@@ -440,13 +454,6 @@ These may become worth doing once we've used the prototype.
 - **Incremental sync**, if full contents on every change turns out to be too
   slow.
 - **Smarter merging** of answers from several servers.
-
-## Open questions
-
-- When several backends handle a file, which one answers a request that wants
-  one answer? Config order is the obvious choice. However, TOML doesn't
-  guarantee the order of a table's keys, even though most parsers keep it. An
-  explicit `priority` on server types would avoid relying on that.
 
 [1]: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#client_registerCapability
 [2]: https://github.com/Shopify/ruby-lsp/discussions/3738

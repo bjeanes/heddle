@@ -35,15 +35,15 @@ read = ['cat', '{read:file}']
   (fake/answering {"initialize" (constantly {"capabilities" {"hoverProvider" true}})}))
 
 (defn- start
-  "A proxy for a repo with `config`, with fake backends that answer with
-  `respond`. Returns the proxy and its repo, a queue of what it sends the
-  client, and an atom of what each backend receives."
-  [& {:keys [respond server-types]}]
+  "A proxy for a repo with `config` (or the `config` option), with fake
+  backends that answer with `respond`. Returns the proxy and its repo, a queue
+  of what it sends the client, and an atom of what each backend receives."
+  [& {:keys [respond server-types] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
         exit-code (promise)]
-    (spit (io/file repo ".monorepo-lsp.toml") config)
+    (spit (io/file repo ".monorepo-lsp.toml") (get opts :config config))
     (.mkdirs (io/file repo "api"))
     {:repo repo
      :out out
@@ -204,7 +204,7 @@ read = ['cat', '{read:file}']
     (spit gem "module Rainbow; end\n")
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (testing "go to the first backend, in server type order, that offers the feature"
+    (testing "go to the first backend that offers the feature, by name when priorities tie"
       (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
       (let [response (from-proxy t)
             cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
@@ -225,6 +225,20 @@ read = ['cat', '{read:file}']
       (client! t (request-about t 9 "custom/request" "api/a.rb"))
       (is (= (lsp/response 9 nil) (from-proxy t)))
       (is (= 1 (count (received t ["lint" "."] "custom/request")))))))
+
+(deftest requests-by-priority
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"definitionProvider" true}})]
+                    "textDocument/definition" [(lsp/response id server-type)]
+                    nil))
+        t (start :respond respond
+                 :config (str/replace config "[servers.ruby]\n" "[servers.ruby]\npriority = 1\n"))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
+    (is (= (lsp/response 1 "ruby") (from-proxy t))
+        "go to the highest priority backend that offers the feature")))
 
 (deftest requests-past-a-backend-that-failed-to-start
   (let [respond (fn [[server-type] {:strs [id method]}]

@@ -19,6 +19,22 @@
   (is (= #{"typescript"} (config/server-types design "services/web/app.tsx" "typescriptreact")))
   (is (= #{} (config/server-types design "README.md" "markdown"))))
 
+(deftest priorities
+  (let [c (config/parse "
+[servers.a]
+languages = ['x']
+[servers.b]
+languages = ['x']
+priority = -1
+[servers.c]
+languages = ['x']
+priority = 2
+[servers.d]
+languages = ['x']
+")]
+    (is (= ["c" "a" "d" "b"] (config/by-priority c ["a" "b" "c" "d"]))
+        "highest first, then by name, with 0 as the default")))
+
 (deftest scopes
   (testing "the longest scope that starts the server type"
     (is (= "services/api" (config/scope-for design "ruby-lsp" "services/api/app/models/user.rb")))
@@ -61,11 +77,13 @@ boot = { runner = 'host', command = 's' }
   (testing "server types"
     (is (= #{"server type \"a\": languages must be a list of strings"
              "server type \"a\": boot must be a table"
+             "server type \"a\": priority must be an integer"
              "server type \"b\" matches no files; give it languages or globs"}
            (errors "
 [servers.a]
 languages = 'ruby'
 boot = 1
+priority = 'high'
 
 [servers.b]
 "))))
