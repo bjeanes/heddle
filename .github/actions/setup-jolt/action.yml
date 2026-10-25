@@ -1,0 +1,98 @@
+name: Set up Jolt
+description: >-
+  Puts Jolt on the PATH. It downloads Jolt's own release where there is one,
+  and builds Jolt from source on arm64 Linux, which Jolt doesn't publish a
+  release for.
+
+runs:
+  using: composite
+  steps:
+    # The version and hashes must match flake.nix, which this step checks.
+    - id: release
+      shell: bash
+      run: |
+        version=v0.8.23
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          macOS-ARM64)
+            asset=aarch64-macos
+            sha256=ebcb856554c9ef9dfd866883aa2e65e1a42a347cae15c90e16db49b07e08aa63 ;;
+          Linux-X64)
+            asset=x86_64-linux
+            sha256=90031be43241e61d0788a2f1bbd3da56d8f4324ae9fa87271f9637b43a6071f2 ;;
+          Linux-ARM64)
+            asset=
+            sha256= ;;
+          *)
+            echo "::error::no Jolt for $RUNNER_OS-$RUNNER_ARCH"
+            exit 1 ;;
+        esac
+        if ! grep -qF "joltVersion = \"${version#v}\";" flake.nix ||
+          { [ -n "$sha256" ] && ! grep -qF "$sha256" flake.nix; }; then
+          echo "::error::Jolt's version or hash in setup-jolt doesn't match flake.nix"
+          exit 1
+        fi
+        {
+          echo "version=$version"
+          echo "asset=$asset"
+          echo "sha256=$sha256"
+          echo "dir=$RUNNER_TEMP/jolt"
+        } >> "$GITHUB_OUTPUT"
+
+    - if: steps.release.outputs.asset != ''
+      shell: bash
+      env:
+        VERSION: ${{ steps.release.outputs.version }}
+        ASSET: ${{ steps.release.outputs.asset }}
+        SHA256: ${{ steps.release.outputs.sha256 }}
+        DIR: ${{ steps.release.outputs.dir }}
+      run: |
+        tarball="$RUNNER_TEMP/jolt.tar.gz"
+        curl -fsSL -o "$tarball" \
+          "https://github.com/jolt-lang/jolt/releases/download/$VERSION/jolt-$VERSION-$ASSET.tar.gz"
+        echo "$SHA256  $tarball" | shasum -a 256 -c -
+        mkdir -p "$DIR"
+        tar -xzf "$tarball" -C "$DIR" --strip-components 1
+
+    - if: steps.release.outputs.asset == ''
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.release.outputs.dir }}
+        key: jolt-${{ steps.release.outputs.version }}-aarch64-linux-${{ hashFiles('.github/actions/setup-jolt/action.yml') }}
+
+    # The same build Jolt's release workflow runs for x86_64 Linux, in the
+    # aarch64 build of the same image. Since the image's glibc is old, the
+    # launcher that Jolt copies into every binary it builds runs on older
+    # distros too.
+    - if: steps.release.outputs.asset == '' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.release.outputs.version }}
+        DIR: ${{ steps.release.outputs.dir }}
+        IMAGE: quay.io/pypa/manylinux2014_aarch64:2026.10.16-1@sha256:01984696ca71627d9f61991da836e5d542aa21695e8337ab0dc1f27a4559502f
+      run: |
+        src="$RUNNER_TEMP/jolt-src"
+        chez="$RUNNER_TEMP/chez-src"
+        git clone --depth 1 --branch "$VERSION" --recurse-submodules \
+          https://github.com/jolt-lang/jolt "$src"
+        git clone --depth 1 --branch v10.4.1 --recurse-submodules \
+          https://github.com/cisco/ChezScheme "$chez"
+        sh "$src/ci/apply-chez-patches.sh" "$chez"
+        mkdir -p "$RUNNER_TEMP/chez-opt"
+        docker run --rm \
+          -v "$src":/src \
+          -v "$chez":/chez-src:ro \
+          -v "$RUNNER_TEMP/chez-opt":/opt/chez \
+          -w /src \
+          -e JOLT_VERSION="$VERSION" \
+          -e STATIC_DEPS=1 \
+          "$IMAGE" sh ci/glibc-floor-build.sh
+        mkdir -p "$DIR"
+        cp "$src/target/release/jolt" "$DIR/jolt"
+
+    - shell: bash
+      env:
+        DIR: ${{ steps.release.outputs.dir }}
+      run: |
+        echo "$DIR" >> "$GITHUB_PATH"
+        "$DIR/jolt" --version
