@@ -567,6 +567,13 @@ These may become worth doing once we've used the prototype.
   `["{cfg:compose}", "up", "--detach", "{cfg:service}"]` or
   `["docker", "start", "{cfg:container}"]`. Not everyone will want it, which is
   why the built-in runners leave it out for now.
+- **A `stop` template.** A runner whose `prepare` starts a container leaves it
+  running after the backend exits. A `stop` template could run when a backend
+  exits or the proxy shuts down. We'd need to decide whether it runs after a
+  crash as well as a clean exit, and how long to wait for it. It can't help if
+  the proxy itself is killed. Cleaning up after that would need a container
+  name or label that a restarted proxy can work out again, which a random
+  backend ID isn't.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the
