@@ -6,7 +6,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [monorepo-lsp.glob :as glob]
-            [monorepo-lsp.paths :as paths]))
+            [monorepo-lsp.paths :as paths]
+            [monorepo-lsp.runner :as runner]))
 
 (def file-name ".monorepo-lsp.toml")
 
@@ -57,7 +58,7 @@
         (str where ", server type " (pr-str server-type) " " problem)))))
 
 (defn- structure-errors [config]
-  (let [{:strs [servers scopes]} config]
+  (let [{:strs [servers scopes runners]} config]
     (concat
      (for [k (keys config)
            :when (not (#{"servers" "scopes" "runners"} k))]
@@ -67,7 +68,52 @@
        (str k " must be a table"))
      (when (map? servers) (mapcat (fn [[k v]] (server-errors k v)) servers))
      (when (and (map? servers) (map? scopes))
-       (mapcat (fn [[k v]] (scope-errors servers k v)) scopes)))))
+       (mapcat (fn [[k v]] (scope-errors servers k v)) scopes))
+     (when (map? runners)
+       (for [[name runner] runners
+             e (runner/runner-errors runner)]
+         (str "runner " (pr-str name) ": " e))))))
+
+(declare boot-config)
+
+(defn- paths-errors [paths]
+  (cond
+    (nil? paths) nil
+    (not (map? paths)) ["paths must be a table"]
+    :else (for [[dir server] paths
+                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
+                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
+                :when problem]
+            (str "paths entry " (pr-str dir) " " problem))))
+
+(def ^:private stand-ins
+  "Runtime values for checking templates before any backend is running."
+  {:repo "/repo" :backend-id "id" :file "/file"})
+
+(defn- boot-errors [config scope server-type]
+  (let [boot (boot-config config server-type scope)
+        runner-name (get boot "runner")
+        runner (get-in config ["runners" runner-name])
+        path-errors (paths-errors (get boot "paths"))]
+    (cond
+      (nil? runner-name) ["names no runner"]
+      (not (string? runner-name)) ["runner must be a string"]
+      (nil? runner) [(str "unknown runner " (pr-str runner-name))]
+      (seq path-errors) path-errors
+      :else
+      (let [ctx (runner/context runner boot scope stand-ins)]
+        (if-not (:server-scope ctx)
+          [runner/uncovered-scope]
+          (for [t runner/templates
+                :when (contains? runner t)
+                e (second (runner/expand* runner t ctx))]
+            (str "runner " (pr-str runner-name) ", " t ": " e)))))))
+
+(defn- scope-runner-errors [config]
+  (for [[scope entries] (get config "scopes")
+        server-type (keys entries)
+        e (boot-errors config scope server-type)]
+    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " e)))
 
 (defn- checked [config source find-errors]
   (let [errors (find-errors config)]
@@ -75,12 +121,15 @@
     config))
 
 (defn parse
-  "Parses and checks config from a TOML string. Throws ex-info listing every
-  problem found, under :errors. `source` names the file in that message."
+  "Parses and checks config from a TOML string, with the built-in runners added.
+  Throws ex-info listing every problem found, under :errors. `source` names the
+  file in that message."
   ([s] (parse s file-name))
   ([s source]
    (-> (merge {"servers" {} "scopes" {} "runners" {}} (parse-toml source s))
-       (checked source structure-errors))))
+       (checked source structure-errors)
+       (update "runners" #(merge runner/builtins %))
+       (checked source scope-runner-errors))))
 
 (defn read-config
   "Reads the config at the root of the repo at `root`, or returns nil if it has
@@ -117,3 +166,20 @@
   [config server-type scope]
   (merge (get-in config ["servers" server-type "boot"])
          (get-in config ["scopes" scope server-type])))
+
+(defn server-scope
+  "The scope's directory as a server path, which is also the backend's root.
+  `repo` is the repo root as a client path."
+  [config server-type scope repo]
+  (let [boot (boot-config config server-type scope)]
+    (paths/to-server (get boot "paths") repo (paths/client-path repo scope))))
+
+(defn command
+  "The arguments for the runner's `template` (\"start\", \"read\" or
+  \"prepare\") for a server type in a scope, or nil if the runner has no such
+  template. `runtime` has the repo root as a client path under :repo, the
+  :backend-id and, for `read`, the server path of the :file to print."
+  [config server-type scope template runtime]
+  (let [boot (boot-config config server-type scope)
+        runner (get-in config ["runners" (get boot "runner")])]
+    (runner/expand runner template (runner/context runner boot scope runtime))))

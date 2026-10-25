@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "resources"]
 
  :deps
  {clj-toml/clj-toml {:git/url "https://github.com/vmfhrmfoaj/clj-toml"

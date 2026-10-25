@@ -30,6 +30,7 @@
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
+boot = { runner = 'host', command = 's' }
 
 [scopes.'abcdef'.s]
 [scopes.'abcdef/g'.s]
@@ -84,6 +85,20 @@ languages = ['x']
 a = 1
 b = {}
 "))))
+  (testing "runners"
+    (is (= #{"runner \"r\": unknown key \"stat\""
+             "runner \"r\": has no start template"
+             "runner \"r\": read: unknown placeholder {client:file}"
+             "runner \"p\": start: {read:file} is only available in read"
+             "runner \"p\": start: unknown placeholder {srv:scope}"}
+           (errors "
+[runners.r]
+stat = []
+read = ['{client:file}']
+
+[runners.p]
+start = ['{read:file}', '--root={srv:scope}']
+"))))
   (testing "sections"
     (is (= #{"unknown section \"other\"" "servers must be a table"}
            (errors "servers = 1\n[other]\n"))))
@@ -93,3 +108,77 @@ b = {}
       (is (str/starts-with? msg "invalid config in here.toml:\n"))
       (is (str/includes? msg "unknown section \"x\""))
       (is (str/includes? msg "unknown section \"y\"")))))
+
+(defn- scope-errors
+  "Errors for a scope `s` that starts the server type `a`, given the TOML for
+  `a`'s boot config and anything after it."
+  [boot & more]
+  (errors (apply str "[servers.a]\nlanguages = ['x']\n[scopes.s]\na = " boot "\n" more)))
+
+(deftest checks-scopes-against-runners
+  (testing "the runner has to exist"
+    (is (= #{"scope \"s\", server type \"a\": names no runner"}
+           (scope-errors "{ command = 'a' }")))
+    (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
+           (scope-errors "{ runner = 'nope' }"))))
+  (testing "every {cfg:…} a template uses needs a value"
+    (is (= #{"scope \"s\", server type \"a\": runner \"compose\", start: no value for {cfg:service}"
+             "scope \"s\", server type \"a\": runner \"compose\", read: no value for {cfg:service}"}
+           (scope-errors "{ runner = 'compose', command = 'a' }"))))
+  (testing "paths"
+    (is (= #{"scope \"s\", server type \"a\": paths entry \"/abs\" must be relative to the repo root"
+             "scope \"s\", server type \"a\": paths entry \"s\" must map to an absolute directory"}
+           (scope-errors "{ runner = 'host', command = 'a', paths = { '/abs' = '/app', 's' = 'app' } }")))
+    (is (= #{"scope \"s\", server type \"a\": paths don't cover the scope's directory"}
+           (scope-errors "{ runner = 'host', command = 'a', paths = { 'other' = '/app' } }"))))
+  (testing "values follow the placeholder rules"
+    (is (= #{"scope \"s\", server type \"a\": runner \"wrap\", start: {cfg:command} is a list, which has to make up a whole element"}
+           (scope-errors "{ runner = 'wrap', command = ['x', 'y'] }"
+                         "[runners.wrap]\nstart = ['sh', '-c', 'run {cfg:command}']\n")))
+    (is (= #{"scope \"s\", server type \"a\": runner \"host\", start: {read:file} is only available in read"
+             "scope \"s\", server type \"a\": runner \"host\", start: the value of {cfg:command} can't use {cfg:other}"}
+           (scope-errors "{ runner = 'host', command = ['{read:file}', '--x={cfg:other}'], other = 'o' }")))))
+
+(def ^:private runtime {:repo "/r" :backend-id "monorepo-lsp-1"})
+
+(deftest commands
+  (testing "the example in DESIGN.md"
+    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]
+           (config/command design "ruby-lsp" "services/api" "start" runtime)))
+    (is (= ["docker" "compose" "exec" "-T" "api" "cat" "/usr/lib/ruby/x.rb"]
+           (config/command design "ruby-lsp" "services/api" "read" (assoc runtime :file "/usr/lib/ruby/x.rb"))))
+    (is (nil? (config/command design "ruby-lsp" "services/api" "prepare" runtime)))
+    (is (= ["ruby-lsp"] (config/command design "ruby-lsp" "services/legacy" "start" runtime)))
+    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/src" "lints" "rubocop" "--lsp"]
+           (config/command design "rubocop" "." "start" runtime)))
+    (is (= ["docker" "run" "--rm" "--interactive" "--name" "monorepo-lsp-1" "--volume" "/r:/src"
+            "--workdir" "/src/services/web" "web-tools" "typescript-language-server" "--stdio"]
+           (config/command design "typescript" "services/web" "start" runtime))))
+  (testing "a project's runner replaces a built-in of the same name"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+
+[runners.host]
+start = ['env', '{cfg:command}']
+
+[scopes.'.']
+s = { runner = 'host', command = 's' }
+")]
+      (is (= ["env" "s"] (config/command c "s" "." "start" runtime)))
+      (is (contains? (get c "runners") "compose") "the other built-ins remain")))
+  (testing "a runner's defaults fill in values the boot config leaves out"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+
+[scopes.a]
+s = { runner = 'docker-run', image = 'i', command = 's' }
+")]
+      (is (= ["docker" "run" "--rm" "--interactive" "--name" "monorepo-lsp-1" "--workdir" "/r/a" "i" "s"]
+             (config/command c "s" "a" "start" runtime))))))
+
+(deftest server-scopes
+  (is (= "/app" (config/server-scope design "ruby-lsp" "services/api" "/r")))
+  (is (= "/r/services/legacy" (config/server-scope design "ruby-lsp" "services/legacy" "/r")))
+  (is (= "/src" (config/server-scope design "rubocop" "." "/r"))))
