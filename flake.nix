@@ -40,10 +40,37 @@
           };
       });
 
-      devShells = forEachSystem (pkgs: {
-        default = pkgs.mkShellNoCC {
-          packages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.jolt ];
-        };
-      });
+      devShells = forEachSystem (
+        pkgs:
+        let
+          jolt = self.packages.${pkgs.stdenv.hostPlatform.system}.jolt;
+          install-heddle = pkgs.writeShellScriptBin "install-heddle" ''
+            # Usage: install-heddle [DIR], from the repo root. DIR defaults to ~/bin.
+            set -eu
+            dest=''${1:-$HOME/bin}
+            if [ ! -f src/heddle/main.clj ]; then
+              echo "install-heddle: run this from the root of the heddle repo" >&2
+              exit 1
+            fi
+            tmp=$(mktemp -d)
+            trap 'rm -rf "$tmp"' EXIT
+            ${jolt}/bin/jolt build -m heddle.main -o "$tmp/heddle"
+            mkdir -p "$dest"
+            # Replace the file rather than writing over it, since macOS can kill
+            # a signed binary whose file was changed in place.
+            cp "$tmp/heddle" "$dest/.heddle.new"
+            mv -f "$dest/.heddle.new" "$dest/heddle"
+            echo "Installed $dest/heddle"
+          '';
+        in
+        {
+          default = pkgs.mkShellNoCC {
+            packages = [
+              jolt
+              install-heddle
+            ];
+          };
+        }
+      );
     };
 }

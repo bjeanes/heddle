@@ -101,6 +101,11 @@ jolt build -m heddle.main -o out/heddle
 That writes a single binary to `out/heddle`. Put it on your `PATH`,
 or point your editor at it directly.
 
+To build it and install it as `~/bin/heddle` in one go, run `install-heddle`
+from the repo root. Since the command comes with the dev shell, run it inside
+`nix develop`, or with direnv loading the shell for you. Give it a directory
+to install somewhere else, as in `install-heddle ~/.local/bin`.
+
 ## Configuring a repo
 
 The proxy looks for `.heddle.toml` at the root of the workspace your
