@@ -1010,28 +1010,32 @@ read = ['cat', '{read:file}']
       (open! t "api/a.rb" "ruby")
       (is (eventually #(= 2 (opens)))))))
 
-(defn- uris-received [t k method]
-  (mapv #(get-in % ["params" "textDocument" "uri"]) (received t k method)))
+(defn- opened-documents
+  "Each document the backend `k` received `didOpen` for, by URI."
+  [t k]
+  (into {} (for [msg (received t k "textDocument/didOpen")
+                 :let [document (get-in msg ["params" "textDocument"])]]
+             [(get document "uri") document])))
 
-(deftest files-a-backend-was-never-told-about
-  (testing "because it restarted after they opened"
+(deftest files-opened-before-a-backend-started
+  (testing "are opened in a backend that restarted, as last changed, before anything else"
     (let [t (start :server-types #{"ruby"})]
       (start-ruby! t)
-      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+      (change! t "api/a.rb" 2 "changed")
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
       (stop-backend! t ["ruby" "api"])
       (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (reset! (:received t) {})
       (swap! (:now t) + 30000)
       (open! t "api/b.rb" "ruby")
-      (change! t "api/a.rb" 2 "a")
-      (change! t "api/b.rb" 2 "b")
-      (testing "aren't changed in it"
-        (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
-        (is (= ["file:///app/b.rb"] (uris-received t ["ruby" "api"] "textDocument/didChange"))))
-      (testing "aren't asked about in it"
-        (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
-        (is (= (lsp/response 1 nil) (from-proxy t)))
-        (is (= [] (received t ["ruby" "api"] "textDocument/hover"))))))
-  (testing "because they opened while it was waiting to start again"
+      (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 1 nil) (from-proxy t)))
+      (is (= ["initialize" "initialized" "textDocument/didOpen" "textDocument/didOpen" "textDocument/hover"]
+             (methods-received t ["ruby" "api"])))
+      (is (= {"file:///app/a.rb" {"uri" "file:///app/a.rb" "languageId" "ruby" "version" 2 "text" "changed"}
+              "file:///app/b.rb" {"uri" "file:///app/b.rb" "languageId" "ruby" "version" 1 "text" ""}}
+             (opened-documents t ["ruby" "api"])))))
+  (testing "are opened in a backend that another file starts after it failed"
     (let [starts (atom 0)
           respond (fn [_ {:strs [id method]}]
                     (when (= "initialize" method)
@@ -1044,11 +1048,9 @@ read = ['cat', '{read:file}']
       (open! t "api/b.rb" "ruby")
       (swap! (:now t) + 30000)
       (open! t "api/c.rb" "ruby")
-      (change! t "api/b.rb" 2 "b")
-      (change! t "api/c.rb" 2 "c")
-      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
-      (is (= ["file:///app/c.rb"] (uris-received t ["ruby" "api"] "textDocument/didChange"))
-          "aren't changed in it once another file starts it"))))
+      (is (eventually #(= #{"file:///app/a.rb" "file:///app/b.rb" "file:///app/c.rb"}
+                          (set (keys (opened-documents t ["ruby" "api"]))))))
+      (is (= 3 (count (received t ["ruby" "api"] "textDocument/didOpen"))) "once each"))))
 
 (deftest telling-the-user-about-a-backend-at-most-once-a-minute
   (let [t (start :server-types #{"ruby"})

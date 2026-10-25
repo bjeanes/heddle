@@ -402,13 +402,19 @@ Messages are larger as a result. Applying incremental edits correctly means
 converting UTF-16 offsets into the implementation language's own strings. That
 can come later if message size turns out to matter.
 
-A backend only hears about a file once it has been sent `didOpen` for it. A
-backend can start after some of its files opened, if it restarted or was
-waiting to start again after failing (see "Failures"). Since the server knows
-nothing of those files, the proxy keeps track of which files each backend has
-been sent `didOpen` for. It sends `didChange`, `didSave` and `didClose` only to
-those backends, and asks only them about the file. A restarted backend counts
-as a new one.
+A backend can start after some of its files opened, if it restarted or was
+waiting to start again after failing (see "Failures"). Since the client sends a
+file's full contents on every change, the proxy keeps the latest contents and
+version of each open file. When a backend starts, the proxy sends it a
+`didOpen` for each open file it handles, before anything else. So, a backend
+that starts late still sees every file it handles as the client last changed
+it.
+
+The proxy keeps track of which files each backend has been sent `didOpen` for.
+It sends each backend one `didOpen` per file, even for the file whose
+`didOpen` started it. It sends `didChange`, `didSave` and `didClose` only to
+backends that have the file open, and asks only them about the file. A
+restarted backend counts as a new one.
 
 ### Requests about one file
 
@@ -590,12 +596,10 @@ feature that ruby-lsp doesn't offer into the linter's error.
 If a running backend exits, the proxy reports it the same way, as a warning,
 and withdraws its diagnostics. A backend that failed either way starts again
 on the next `didOpen` for one of its files, but no sooner than 30 s after it
-failed. The message says so. Files that were already open aren't replayed to
-the new backend. Until the client opens them again, the proxy doesn't tell the
-new backend about them or ask it about them (see "Open files"). Some servers
-would otherwise log errors, and others would answer from what's on disk. That
-is the same with `--eager`. Only the first start is eager, and a backend that
-failed then starts again on a `didOpen` like any other.
+failed. The message says so. The proxy sends the new backend the files that
+were already open (see "Open files"). That is the same with `--eager`. Only the
+first start is eager, and a backend that failed then starts again on a
+`didOpen` like any other.
 
 A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
@@ -668,9 +672,6 @@ These may become worth doing once we've used the prototype.
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the
   repetition starts to bite.
-- **Replaying open files to a restarted backend.** Since the client sends a
-  file's full contents on every change, the proxy only needs to keep the latest
-  one.
 - **Incremental sync**, if full contents on every change turns out to be too
   slow.
 - **Smarter merging** of answers from several servers.

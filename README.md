@@ -476,8 +476,7 @@ likely to run into are:
 - Unless you pass `--eager`, backends start when you first open one of their
   files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
-  files. The proxy doesn't send it the files that were already open, which
-  you'll need to reopen.
+  files, and no sooner than 30 s after it stopped.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
 - There's no VS Code extension or published release yet.

@@ -298,7 +298,7 @@
       (show-message! proxy type message)
       (log/info message))))
 
-(declare from-backend! failed!)
+(declare from-backend! failed! open-documents-in!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
   (let [{:keys [config repo cache-root client-params]} @(:state proxy)
@@ -307,6 +307,7 @@
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
+    (open-documents-in! proxy b)
     (backend/when-ready b #(if (backend/ready? b)
                              (register! proxy)
                              (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
@@ -540,13 +541,34 @@
     (when-not (opened? old b uri)
       (notify-backend! b "textDocument/didOpen" params))))
 
+(defn- open-documents-in!
+  "Sends the backend `b` a `didOpen` for each document the client has open
+  that it handles, as the client last changed it. The backend gets these
+  before anything sent to it later."
+  [proxy b]
+  (let [k [(:server-type b) (:scope b)]]
+    (doseq [[uri {:keys [language version text]}] (:documents @(:state proxy))
+            :when (some #{k} (handlers proxy uri language))]
+      (open-in! proxy b {"textDocument" {"uri" uri "languageId" language "version" version "text" text}}))))
+
 (defn- open! [proxy {:strs [textDocument] :as params}]
-  (let [{:strs [uri languageId]} textDocument]
-    (swap! (:state proxy) assoc-in [:documents uri] {:language languageId})
+  (let [{:strs [uri languageId version text]} textDocument]
+    (swap! (:state proxy) assoc-in [:documents uri] {:language languageId :version version :text text})
     (doseq [k (handlers proxy uri languageId)
             :let [b (backend-for! proxy k)]
             :when b]
       (open-in! proxy b params))))
+
+(defn- change
+  "`state` with the latest version and text of the document that `didChange`
+  is about. The proxy asks the client for the full text on every change."
+  [state {:strs [textDocument contentChanges]}]
+  (let [uri (get textDocument "uri")]
+    (cond-> state
+      (contains? (:documents state) uri)
+      (update-in [:documents uri] assoc
+                 :version (get textDocument "version")
+                 :text (get (last contentChanges) "text")))))
 
 (defn- close [state uri]
   (-> state
@@ -557,8 +579,10 @@
   (let [uri (get-in params ["textDocument" "uri"])]
     (doseq [b (opened-in proxy uri)]
       (notify-backend! b method params))
-    (when (= "textDocument/didClose" method)
-      (swap! (:state proxy) close uri))))
+    (case method
+      "textDocument/didChange" (swap! (:state proxy) change params)
+      "textDocument/didClose" (swap! (:state proxy) close uri)
+      nil)))
 
 ;; The workspace
 
