@@ -6,9 +6,6 @@ them, under "Pinned for later".
 
 ## Language features
 
-- **Call and type hierarchies come back empty.** The proxy announces them and
-  answers the first request. However, it answers the follow-up requests (such
-  as incoming calls, or a type's supertypes) with nothing.
 - **Some requests are answered by only one server.** When several servers
   handle a file, hover, definition, rename, formatting and the like go to the
   server type with the highest `priority`. Completion, code actions, references

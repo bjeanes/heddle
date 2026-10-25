@@ -80,13 +80,22 @@
    "inlayHint/resolve" "textDocument/inlayHint"
    "workspaceSymbol/resolve" "workspace/symbol"})
 
+(def ^:private follow-up-methods
+  "Requests about an item, held in their `item` param, from the answer to
+  another request, and those requests."
+  {"callHierarchy/incomingCalls" "textDocument/prepareCallHierarchy"
+   "callHierarchy/outgoingCalls" "textDocument/prepareCallHierarchy"
+   "typeHierarchy/supertypes" "textDocument/prepareTypeHierarchy"
+   "typeHierarchy/subtypes" "textDocument/prepareTypeHierarchy"})
+
 (def ^:private related-methods
   "Requests that belong to a feature registered under another method."
-  {"textDocument/semanticTokens/full" "textDocument/semanticTokens"
-   "textDocument/semanticTokens/full/delta" "textDocument/semanticTokens"
-   "textDocument/semanticTokens/range" "textDocument/semanticTokens"
-   "textDocument/colorPresentation" "textDocument/documentColor"
-   "textDocument/prepareRename" "textDocument/rename"})
+  (merge follow-up-methods
+         {"textDocument/semanticTokens/full" "textDocument/semanticTokens"
+          "textDocument/semanticTokens/full/delta" "textDocument/semanticTokens"
+          "textDocument/semanticTokens/range" "textDocument/semanticTokens"
+          "textDocument/colorPresentation" "textDocument/documentColor"
+          "textDocument/prepareRename" "textDocument/rename"}))
 
 (def ^:private by-method
   (into {} (map (juxt :method identity)) (conj features workspace-symbol)))
@@ -108,6 +117,12 @@
   "Whether the request `method` resolves an item from an earlier answer."
   [method]
   (contains? resolve-methods method))
+
+(defn follow-up-method?
+  "Whether the request `method` is about an item, held in its `item` param,
+  from an earlier answer."
+  [method]
+  (contains? follow-up-methods method))
 
 (defn resolves?
   "Whether a backend with the server capabilities `server-caps` answers the

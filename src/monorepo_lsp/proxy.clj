@@ -671,15 +671,33 @@
 (defn- backend-by-id [proxy backend-id]
   (first (filter #(= backend-id (:backend-id %)) (vals (:backends @(:state proxy))))))
 
+(defn- item-maker
+  "The running backend that made the marked `item`, and the item as that
+  backend made it. Nil if the item isn't marked or the backend has stopped."
+  [proxy item]
+  (let [[backend-id item] (origin/unmark item)
+        b (some->> backend-id (backend-by-id proxy))]
+    (when (and b (backend/ready? b))
+      [b item])))
+
 (defn- resolve!
   "Sends a request to resolve an item to the backend that made it. The item
   comes back unchanged if that backend has stopped or doesn't resolve items."
   [proxy {:strs [id method params] :as msg}]
-  (let [[backend-id item] (origin/unmark params)
-        b (some->> backend-id (backend-by-id proxy))]
-    (if (and b (backend/ready? b) (capabilities/resolves? (backend/capabilities b) method))
+  (let [[b item] (item-maker proxy params)]
+    (if (and b (capabilities/resolves? (backend/capabilities b) method))
       (forward-request! proxy b (assoc msg "params" item))
       (send-client! proxy (lsp/response id params)))))
+
+(defn- follow-up!
+  "Sends a request about an item from an earlier answer, such as the incoming
+  calls of a call hierarchy item, to the backend that made the item. The
+  answer is null if that backend has stopped or doesn't offer the feature."
+  [proxy {:strs [id method params] :as msg}]
+  (let [[b item] (item-maker proxy (get params "item"))]
+    (if (and b (capabilities/offers? (backend/capabilities b) (capabilities/feature method)))
+      (forward-request! proxy b (assoc-in msg ["params" "item"] item))
+      (send-client! proxy (lsp/response id nil)))))
 
 (defn- command-backend
   "The running backend of `server-type` to run a command with `arguments`.
@@ -771,6 +789,7 @@
       (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
       (capabilities/resolve-method? method) (resolve! proxy msg)
+      (capabilities/follow-up-method? method) (follow-up! proxy msg)
       (= "workspace/executeCommand" method) (execute-command! proxy msg)
       (= "workspace/symbol" method) (combine-request! proxy msg (running-backends proxy))
       (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))

@@ -494,6 +494,54 @@ read = ['cat', '{read:file}']
           (client! t (lsp/request 5 "completionItem/resolve" item))
           (is (= (lsp/response 5 item) (from-proxy t))))))))
 
+(deftest following-hierarchies
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (when id
+                    [(lsp/response
+                      id
+                      (case [server-type method]
+                        ["ruby" "initialize"] {"capabilities" {"callHierarchyProvider" true
+                                                               "typeHierarchyProvider" true}}
+                        ["lint" "initialize"] {"capabilities" {}}
+                        (["ruby" "textDocument/prepareCallHierarchy"] ["ruby" "textDocument/prepareTypeHierarchy"])
+                        [{"name" "a" "uri" (get-in params ["textDocument" "uri"]) "data" {"n" 1}}]
+                        ["ruby" "callHierarchy/incomingCalls"]
+                        [{"from" (update (get params "item") "name" #(str "caller of " %)) "fromRanges" []}]
+                        ["ruby" "typeHierarchy/supertypes"]
+                        [(update (get params "item") "name" #(str "super of " %))]
+                        nil))]))
+        t (start :respond respond)
+        follow (fn [id method item]
+                 (client! t (lsp/request id method {"item" item}))
+                 (from-proxy t))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/prepareCallHierarchy" "api/a.rb"))
+    (let [[item] (get (from-proxy t) "result")
+          ruby (backend-id t ["ruby" "api"])]
+      (testing "marks prepared items with the backend that made them"
+        (is (= {"name" "a" "uri" (uri t "api/a.rb") "data" {"monorepo-lsp/backend" ruby "data" {"n" 1}}}
+               item)))
+      (testing "sends follow-ups to that backend, with the item as it made it"
+        (let [[call] (get (follow 2 "callHierarchy/incomingCalls" item) "result")]
+          (is (= {"name" "a" "uri" "file:///app/a.rb" "data" {"n" 1}}
+                 (get-in (received t ["ruby" "api"] "callHierarchy/incomingCalls") [0 "params" "item"])))
+          (is (= "caller of a" (get-in call ["from" "name"])))
+          (testing "and marks the items in their answers, so they can be followed further"
+            (is (= "caller of caller of a"
+                   (get-in (follow 3 "callHierarchy/incomingCalls" (get call "from")) ["result" 0 "from" "name"]))))))
+      (testing "follows type hierarchies the same way"
+        (client! t (request-about t 4 "textDocument/prepareTypeHierarchy" "api/a.rb"))
+        (let [[item] (get (from-proxy t) "result")
+              [super] (get (follow 5 "typeHierarchy/supertypes" item) "result")]
+          (is (= "super of super of a"
+                 (get-in (follow 6 "typeHierarchy/supertypes" super) ["result" 0 "name"])))))
+      (testing "answers with null for an item no running backend made"
+        (is (= (lsp/response 7 nil) (follow 7 "callHierarchy/outgoingCalls" (dissoc item "data"))))
+        (is (= (lsp/response 8 nil)
+               (follow 8 "callHierarchy/outgoingCalls"
+                       (assoc-in item ["data" "monorepo-lsp/backend"] "monorepo-lsp-gone"))))))))
+
 (deftest running-commands
   (let [respond (fn [[server-type] {:strs [id method params]}]
                   (case method

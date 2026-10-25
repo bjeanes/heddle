@@ -32,6 +32,11 @@
             "items" [{"label" "a" "data" {"monorepo-lsp/backend" "b1" "data" 7}}]}
            (origin/mark-result "textDocument/completion" "b1"
                                {"isIncomplete" false "itemDefaults" {"data" 7} "items" [{"label" "a"}]}))))
+  (testing "marks the hierarchy items in calls, so they can be followed further"
+    (is (= [{"from" {"name" "a" "data" {"monorepo-lsp/backend" "b1"}} "fromRanges" []}]
+           (origin/mark-result "callHierarchy/incomingCalls" "b1" [{"from" {"name" "a"} "fromRanges" []}])))
+    (is (= [{"to" {"name" "a" "data" {"monorepo-lsp/backend" "b1"}} "fromRanges" []}]
+           (origin/mark-result "callHierarchy/outgoingCalls" "b1" [{"to" {"name" "a"} "fromRanges" []}]))))
   (testing "marks a resolved item"
     (is (= {"title" "l" "data" {"monorepo-lsp/backend" "b1"}}
            (origin/mark-result "codeLens/resolve" "b1" {"title" "l"}))))
