@@ -1,0 +1,7 @@
+[servers.ruby-lsp]
+languages = ["ruby"]
+globs = ["**/Gemfile"]
+boot = { command = ["bundle", "exec", "ruby-lsp"] }
+
+[scopes."."]
+ruby-lsp = { runner = "compose", service = "app", paths = { "." = "/app" } }
