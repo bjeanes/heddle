@@ -533,6 +533,21 @@ read = ['cat', '{read:file}']
                                  (received t ["ruby" "api"] "window/workDoneProgress/cancel")))))
         (is (= [] (received t ["lint" "."] "window/workDoneProgress/cancel")))))))
 
+(deftest backends-own-registrations
+  (let [respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
+                                                         {"registrations" [{"id" "f" "method" "textDocument/formatting"
+                                                                            "registerOptions" {"documentSelector" [{"language" "ruby"}]}}]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
+              (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
+        "are limited to the backend's files")))
+
 (deftest cancelling-a-request
   (let [respond (fn [_ {:strs [id method]}]
                   (when (= "initialize" method)

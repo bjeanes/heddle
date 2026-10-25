@@ -45,6 +45,24 @@
            (get-in (capabilities/initialize-result {}) ["capabilities" "executeCommandProvider"]))
         "announced with no commands when the client can't register them")))
 
+(deftest limiting-a-backends-selector
+  (let [scope {"language" "ruby" "pattern" {"baseUri" "file:///r/api" "pattern" "**/*"}}
+        gemfile {"pattern" {"baseUri" "file:///r" "pattern" "**/Gemfile"}}
+        own [scope gemfile]]
+    (testing "a null selector becomes the proxy's"
+      (is (= own (capabilities/limit-selector nil own))))
+    (testing "a language is limited to the backend's files"
+      (is (= [scope (assoc gemfile "language" "ruby")]
+             (capabilities/limit-selector [{"language" "ruby"}] own)))
+      (is (= [(assoc gemfile "language" "erb")]
+             (capabilities/limit-selector [{"language" "erb"}] own))))
+    (testing "a relative glob is moved under the scope"
+      (is (= [{"language" "ruby" "scheme" "file" "pattern" {"baseUri" "file:///r/api" "pattern" "**/*.rb"}}]
+             (capabilities/limit-selector [{"scheme" "file" "pattern" "**/*.rb"}] own))))
+    (testing "an absolute glob is kept only inside the scope"
+      (is (= [{"language" "ruby" "pattern" "/r/api/lib/**"}]
+             (capabilities/limit-selector [{"pattern" "/r/api/lib/**"} {"pattern" "/r/web/**"}] own))))))
+
 (deftest features-by-method
   (is (= "hoverProvider" (:provider (capabilities/feature "textDocument/hover"))))
   (is (= "semanticTokensProvider" (:provider (capabilities/feature "textDocument/semanticTokens/full"))))

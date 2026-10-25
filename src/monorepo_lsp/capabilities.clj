@@ -4,7 +4,9 @@
 
   A client says, feature by feature, whether it accepts registrations after
   startup. Those features are registered for each backend once it has started.
-  The rest are announced in the proxy's own `initialize` reply.")
+  The rest are announced in the proxy's own `initialize` reply."
+  (:require [clojure.string :as str])
+  (:import (java.net URI)))
 
 (def ^:private document-features
   "Each feature's request method, the server capability that offers it, its
@@ -145,6 +147,52 @@
           "method" (:method f)
           "registerOptions" (cond-> (if (map? options) options {})
                               (document-feature? f) (assoc "documentSelector" document-selector))})))
+
+(defn- uri-path [uri]
+  (when (string? uri)
+    (try (.getPath (URI. uri)) (catch Exception _ nil))))
+
+(defn- under? [dir path]
+  (and dir path (or (= dir path) (str/starts-with? path (str dir "/")))))
+
+(defn- narrow-pattern
+  "A backend's `pattern` limited to the proxy's `own` relative pattern, or nil
+  if a document filter can't express that. Two globs can't be combined, so
+  only a pattern for a whole directory can narrow another."
+  [pattern own]
+  (let [base (uri-path (get own "baseUri"))]
+    (cond
+      (not= "**/*" (get own "pattern")) nil
+      (map? pattern) (when (under? base (uri-path (get pattern "baseUri"))) pattern)
+      (not (string? pattern)) nil
+      (str/starts-with? pattern "/") (when (under? base pattern) pattern)
+      :else (assoc own "pattern" pattern))))
+
+(defn- narrow-filter
+  "A document filter for the files that both a backend's filter `theirs` and
+  the proxy's filter `own` match, or nil if there are none or a filter can't
+  express them."
+  [theirs own]
+  (let [language (get theirs "language")
+        own-language (get own "language")]
+    (when-not (and language own-language (not= language own-language))
+      (if-let [pattern (get theirs "pattern")]
+        (some->> (narrow-pattern pattern (get own "pattern"))
+                 (assoc (merge own theirs) "pattern"))
+        (merge own theirs)))))
+
+(defn limit-selector
+  "A backend's document `selector`, from a registration of its own, limited to
+  `own`, the selector the proxy registers the backend's features with. A
+  null selector stands for the client's, which `own` replaces."
+  [selector own]
+  (if (nil? selector)
+    own
+    (vec (distinct (for [f selector
+                         o own
+                         :let [narrowed (narrow-filter f o)]
+                         :when narrowed]
+                     narrowed)))))
 
 (def ^:private combined-methods
   "The requests whose answers can be combined. They go to every backend for the

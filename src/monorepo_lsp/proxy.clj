@@ -265,13 +265,26 @@
           (assoc params "token" qualified))
       params)))
 
+(defn- limit-selectors
+  "The params of `client/registerCapability` from the backend `b`, as client
+  paths, with each document selector limited to the backend's files."
+  [b params]
+  (update params "registrations"
+          (fn [registrations]
+            (mapv #(cond-> %
+                     (contains? (get % "registerOptions") "documentSelector")
+                     (update-in ["registerOptions" "documentSelector"]
+                                capabilities/limit-selector (document-selector b)))
+                  registrations))))
+
 (defn- from-backend! [proxy b {:strs [id method params] :as msg}]
   (cond
     (nil? msg)
     (stopped! proxy b)
 
     (contains? msg "id")
-    (request-client! proxy method (translate/to-client b (request-params proxy b method params))
+    (request-client! proxy method (cond->> (translate/to-client b (request-params proxy b method params))
+                                    (= "client/registerCapability" method) (limit-selectors b))
                      [(:backend-id b) id]
                      (fn [response]
                        (backend/send! b (assoc (translate/to-server b (dissoc response "id")) "id" id))))
