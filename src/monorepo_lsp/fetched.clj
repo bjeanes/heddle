@@ -4,7 +4,8 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [monorepo-lsp.config :as config]
-            [monorepo-lsp.paths :as paths])
+            [monorepo-lsp.paths :as paths]
+            [monorepo-lsp.process :as process])
   (:import (java.io File)
            (java.net URLEncoder)
            (java.util UUID)
@@ -90,15 +91,11 @@
   (let [part (io/file (str target "." (subs (str (UUID/randomUUID)) 0 8) ".part"))]
     (try
       (.mkdirs (.getParentFile target))
-      (let [proc (.start (doto (ProcessBuilder. ^java.util.List command)
-                           (.directory (io/file dir))
-                           (.redirectOutput part)))
-            stderr (slurp (.getErrorStream proc))
-            exit (.waitFor proc)]
+      (let [{:keys [exit output]} (process/run command dir {:stdout part})]
         (cond
           (not (zero? exit))
           (str (pr-str command) " exited with " exit
-               (when-not (str/blank? stderr) (str ": " (str/trim stderr))))
+               (when-not (str/blank? output) (str ": " (str/trim output))))
 
           (not (and (.setReadOnly part) (.renameTo part target)))
           (str "couldn't move " part " into place")))

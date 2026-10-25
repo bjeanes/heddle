@@ -14,7 +14,8 @@
             [monorepo-lsp.fetched :as fetched]
             [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp]
-            [monorepo-lsp.paths :as paths])
+            [monorepo-lsp.paths :as paths]
+            [monorepo-lsp.process :as process])
   (:import (java.io BufferedInputStream InputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.util UUID)
@@ -56,11 +57,7 @@
   "Runs `command` in `dir` to completion. Its output goes to stderr, since
   stdout is the client's LSP stream."
   [command dir]
-  (let [proc (.start (doto (ProcessBuilder. ^java.util.List command)
-                       (.directory (io/file dir))
-                       (.redirectErrorStream true)))
-        output (slurp (.getInputStream proc))
-        exit (.waitFor proc)]
+  (let [{:keys [exit output]} (process/run command dir {})]
     (binding [*out* *err*]
       (print output)
       (flush))
