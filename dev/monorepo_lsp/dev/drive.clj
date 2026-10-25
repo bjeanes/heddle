@@ -10,15 +10,17 @@
   "usage: jolt -M:drive --root URI --file PATH --uri URI --language ID
                     [--delay MS] [--hover LINE:CHAR] [--definition LINE:CHAR]
                     [--register FEATURE,...] [--diagnostic true]
+                    [--capabilities true]
                     -- COMMAND [ARG...]
 
-  --root        workspace root URI to send in initialize
-  --file        file on this machine whose contents are opened
-  --uri         URI to open it as (may differ from --file, e.g. a container path)
-  --delay       time to wait after opening the file, e.g. for indexing
-  --register    textDocument features to accept registrations for after
-                startup, such as hover,definition
-  --diagnostic  pull the file's diagnostics and list them")
+  --root          workspace root URI to send in initialize
+  --file          file on this machine whose contents are opened
+  --uri           URI to open it as (may differ from --file, e.g. a container path)
+  --delay         time to wait after opening the file, e.g. for indexing
+  --register      textDocument features to accept registrations for after
+                  startup, such as hover,definition
+  --diagnostic    pull the file's diagnostics and list them
+  --capabilities  print the server's capabilities from initialize in full")
 
 (defn- parse-args
   "Options are `--name value` pairs, and the rest is the command. jolt itself
@@ -65,13 +67,14 @@
           (do (println "  <- notified" (get msg "method") (abbreviate (get msg "params")))
               (recur)))))))
 
-(defn- capabilities [register]
+(defn- client-capabilities [register]
   {"textDocument" (into {}
                         (for [feature (some-> register (str/split #","))]
                           [feature {"dynamicRegistration" true}]))})
 
 (defn -main [& args]
-  (let [{:keys [root file uri language delay hover definition register diagnostic command]} (parse-args args)]
+  (let [{:keys [root file uri language delay hover definition register diagnostic capabilities command]}
+        (parse-args args)]
     (when (some nil? [root file uri language (first command)])
       (binding [*out* *err*] (println usage))
       (System/exit 2))
@@ -81,10 +84,12 @@
           out (.getOutputStream proc)
           notify #(lsp/write-message out {"jsonrpc" "2.0" "method" %1 "params" %2})
           doc {"textDocument" {"uri" uri}}]
-      (request in out 1 "initialize" {"processId" nil
-                                       "rootUri" root
-                                       "workspaceFolders" [{"uri" root "name" "root"}]
-                                       "capabilities" (capabilities register)})
+      (let [initialized (request in out 1 "initialize" {"processId" nil
+                                                        "rootUri" root
+                                                        "workspaceFolders" [{"uri" root "name" "root"}]
+                                                        "capabilities" (client-capabilities register)})]
+        (when capabilities
+          (println "  capabilities" (json/write-str (get-in initialized ["result" "capabilities"])))))
       (notify "initialized" {})
       (notify "textDocument/didOpen" {"textDocument" {"uri" uri "languageId" language
                                                        "version" 1 "text" (slurp file)}})
