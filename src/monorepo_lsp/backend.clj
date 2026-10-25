@@ -91,6 +91,7 @@
      :backend-id id
      :paths (get (config/boot-config config server-type scope) "paths")
      :cache (fetched/cache-dir repo server-type scope)
+     :fetched (atom #{})
      :root (config/server-scope config server-type scope repo)
      :state (atom {:status :starting :queue []})
      :requests (atom {:last-id 0 :open {}})}))

@@ -434,6 +434,15 @@ None of this depends on the backend ID. A restarted backend reuses the
 directory of the one it replaced, rather than leaving a new one behind each
 time. The backends of other proxies on the same repo use it too.
 
+Copies persist across restarts. However, the container's libraries may have
+changed since an earlier backend fetched them. So, each backend fetches a file
+again the first time it needs it, then reuses that copy until it stops. The
+new copy is written beside the old one under a name of its own, then renamed
+over it. A client reading the file, possibly through another proxy, sees
+either the old copy or the new one. If the fetch fails, the old copy stays,
+since a stale file is more use to the client than a location that leads
+nowhere.
+
 ### Failures
 
 If a backend can't start, for example because its service won't come up or its
