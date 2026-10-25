@@ -1,5 +1,6 @@
 (ns monorepo-lsp.test-runner
   (:require [clojure.test :as t]
+            [monorepo-lsp.backend-test]
             [monorepo-lsp.config-test]
             [monorepo-lsp.fetched-test]
             [monorepo-lsp.glob-test]

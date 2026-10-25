@@ -53,3 +53,22 @@
       (.write out header)
       (.write out body)
       (.flush out))))
+
+(defn notification [method params]
+  (cond-> {"jsonrpc" "2.0" "method" method}
+    (some? params) (assoc "params" params)))
+
+(defn request [id method params]
+  (assoc (notification method params) "id" id))
+
+(defn response [id result]
+  {"jsonrpc" "2.0" "id" id "result" result})
+
+(defn error-response [id code message]
+  {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}})
+
+(defn response?
+  "Whether `msg` answers a request, as opposed to being a request or
+  notification itself."
+  [msg]
+  (and (contains? msg "id") (not (contains? msg "method"))))
