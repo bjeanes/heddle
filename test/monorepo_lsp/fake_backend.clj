@@ -39,7 +39,8 @@
   [received respond]
   (fn [backend on-message]
     (let [k [(:server-type backend) (:scope backend)]
-          inbox (LinkedBlockingQueue.)]
+          inbox (LinkedBlockingQueue.)
+          exited (promise)]
       (future
         (loop []
           (let [msg (.take inbox)]
@@ -49,10 +50,11 @@
                 (run! on-message replies)
                 (when (empty? hung-up)
                   (recur))))))
+        (deliver exited 0)
         (on-message nil))
       {:send #(.put inbox %)
        :close #(.put inbox ::closed)
-       :wait (constantly 0)})))
+       :wait #(deref exited % nil)})))
 
 (defn refusing
   "The connector `connect`, except that connecting a backend whose
