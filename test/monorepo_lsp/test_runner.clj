@@ -5,7 +5,8 @@
             [monorepo-lsp.json-test]
             [monorepo-lsp.lsp-test]
             [monorepo-lsp.paths-test]
-            [monorepo-lsp.runner-test]))
+            [monorepo-lsp.runner-test]
+            [monorepo-lsp.translate-test]))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (t/run-all-tests #"monorepo-lsp\..*-test")]
