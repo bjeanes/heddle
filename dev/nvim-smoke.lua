@@ -33,6 +33,20 @@ vim.lsp.config('monorepo_lsp', {
   cmd = { 'monorepo-lsp' },
   root_markers = { '.monorepo-lsp.toml' },
   workspace_required = true,
+  on_init = function(client)
+    -- Neovim only runs the commands a server lists when it starts, but the
+    -- proxy learns its backends' commands later. Send it every command that
+    -- Neovim doesn't run itself.
+    setmetatable(client.commands, {
+      __index = function(_, command)
+        if not vim.lsp.commands[command] then
+          return function(cmd, ctx)
+            client:request('workspace/executeCommand', { command = command, arguments = cmd.arguments }, nil, ctx.bufnr)
+          end
+        end
+      end,
+    })
+  end,
 })
 vim.lsp.enable('monorepo_lsp')
 
@@ -146,6 +160,8 @@ local function check_file(case)
   for _, d in ipairs(vim.diagnostic.get(bufnr)) do
     print(('     %d:%d %s %s %s'):format(d.lnum, d.col, d.source or '?', d.code or '', short(d.message)))
   end
+
+  return client, bufnr
 end
 
 check_file({
@@ -157,7 +173,7 @@ check_file({
   sources = { 'RuboCop' },
 })
 
-check_file({
+local client, bufnr = check_file({
   file = 'services/billing/lib/invoice.rb',
   hover = { line = 8, character = 9 },
   hover_text = 'Dry::Inflector',
@@ -165,6 +181,39 @@ check_file({
   definition_file = 'gems/dry-inflector-1.3.1/lib/dry/inflector.rb',
   sources = { 'RuboCop', 'Prism' },
 })
+
+if client then
+  print('\ncommands')
+  local provider = client.server_capabilities.executeCommandProvider
+  print(('     executeCommandProvider at startup: %s'):format(vim.inspect(provider, { newline = ' ', indent = '' })))
+  local before = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+  client:exec_cmd({
+    title = 'Autocorrect',
+    command = 'rubocop:rubocop.formatAutocorrects',
+    arguments = { { uri = vim.uri_from_bufnr(bufnr) } },
+  }, { bufnr = bufnr })
+  local first
+  vim.wait(20000, function()
+    first = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+    return first ~= before
+  end, 100)
+  check(first == "require 'dry/inflector'", "RuboCop's autocorrect command edited the buffer", first)
+  check(
+    vim.wait(20000, function()
+      return vim.iter(pairs(client.requests)):all(function(_, r)
+        return r.method ~= 'workspace/executeCommand'
+      end)
+    end, 100),
+    "RuboCop's autocorrect command answered"
+  )
+
+  local ran_locally = false
+  vim.lsp.commands['smoke.local'] = function()
+    ran_locally = true
+  end
+  client:exec_cmd({ title = 'Local', command = 'smoke.local' }, { bufnr = bufnr })
+  check(ran_locally, "Neovim's own commands still run in Neovim")
+end
 
 for _, c in ipairs(vim.lsp.get_clients()) do
   c:stop()
