@@ -4,6 +4,7 @@
             [monorepo-lsp.backend :as backend]
             [monorepo-lsp.config :as config]
             [monorepo-lsp.fake-backend :as fake :refer [eventually]]
+            [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -110,6 +111,28 @@ s = { runner = 'cat' }
       (let [response (promise)]
         (backend/request! b "late" nil #(deliver response %))
         (is (nil? (deref response 0 :timeout)))))))
+
+(deftest exiting-after-the-backend-has-stopped
+  (let [stopped (promise)
+        logged (atom [])
+        respond (fn [_ msg]
+                  (case (get msg "method")
+                    "initialize" [(lsp/response (get msg "id") {"capabilities" {}})]
+                    "shutdown" [(lsp/response (get msg "id") nil) fake/hang-up]
+                    nil))
+        b (backend/start! (backend/backend config "s" "." "/r")
+                          (fake/connector (atom {}) respond)
+                          {}
+                          #(when (nil? %) (deliver stopped true)))]
+    (is (eventually #(backend/ready? b)))
+    (is (= true (deref (backend/shutdown! b) 2000 :timeout)))
+    (is (= true (deref stopped 2000 :timeout)))
+    (let [previous-writer (log/set-writer! #(swap! logged conj %))]
+      (try
+        (is (= 0 (backend/exit! b 1000)))
+        (is (= [] @logged))
+        (finally
+          (log/set-writer! previous-writer))))))
 
 (deftest a-real-process
   (let [repo (temp-dir)

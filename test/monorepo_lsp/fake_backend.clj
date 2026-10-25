@@ -35,7 +35,8 @@
   order, on a thread of its own. It passes each to (respond k msg), where `k`
   is its [server-type scope], and sends whatever messages that returns back to
   the proxy. Every message a backend receives is added to the vector under its
-  `k` in the atom `received`."
+  `k` in the atom `received`. Sending to one that has stopped throws, as
+  writing to a process that has exited does."
   [received respond]
   (fn [backend on-message]
     (let [k [(:server-type backend) (:scope backend)]
@@ -52,7 +53,9 @@
                   (recur))))))
         (deliver exited 0)
         (on-message nil))
-      {:send #(.put inbox %)
+      {:send #(if (realized? exited)
+                (throw (ex-info "write to child failed" {}))
+                (.put inbox %))
        :close #(.put inbox ::closed)
        :wait #(deref exited % nil)})))
 
