@@ -154,8 +154,8 @@ scope's directory as its working directory.
   Every runner needs one. The proxy runs it the first time you open a file the
   backend handles.
 - `prepare` is optional. If the runner has one, the proxy runs it to
-  completion before each `start`, for example to start a stopped container. If
-  it fails, the backend doesn't start.
+  completion before each `start`, for example to start a container for the
+  server to run in. If it fails, the backend doesn't start.
 - `read` is optional. It prints a file from the server's side. The proxy runs
   it when a server refers to a file that `paths` doesn't cover, such as an
   installed gem, to copy the file out for you to open. Without it, you can't
@@ -185,23 +185,34 @@ When the proxy loads the config, it checks every scope against its runner. It
 reports a value the runner needs but nobody gives, an unknown placeholder, or
 `paths` that don't cover the scope's directory.
 
-To run a server in a Nix dev shell, for example, add a runner and name it from
-a scope:
+`prepare` is for anything that has to be in place before the server can start.
+The built-in `docker-run` makes the server the container's main process. If
+you'd rather start the container first and run the server inside it, add a
+runner whose `prepare` starts the container, and name it from a scope:
 
 <!-- example: custom runner -->
 ```toml
-[runners.nix]                                    # a runner, named as you like
-defaults = { shell = "{client:repo}" }           # optional
-prepare = ["nix", "develop", "{cfg:shell}", "--command", "true"]
-start = ["nix", "develop", "{cfg:shell}", "--command", "{cfg:command}"]
+[runners.docker-detached]                        # a runner, named as you like
+defaults = { args = [] }                         # optional
+prepare = ["docker", "run", "--rm", "--detach", "--name", "{proxy:backend_id}", "{cfg:args}", "{cfg:image}", "sleep", "infinity"]
+start = ["docker", "exec", "--interactive", "--workdir", "{server:scope}", "{proxy:backend_id}", "{cfg:command}"]
+read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 
 [scopes."tools/cli".ruby-lsp]
-runner = "nix"
+runner = "docker-detached"
+image = "ruby:3.3"
+args = ["--volume", "{client:repo}:/src"]
+paths = { "." = "/src" }
 ```
 
-Added to the config above, this starts `nix develop /path/to/repo --command
-bundle exec ruby-lsp` in `tools/cli`. Since the server runs on your machine,
-its paths need no translating and the runner needs no `read`.
+Added to the config above, this starts a `ruby:3.3` container with the repo
+mounted at `/src`, then runs `bundle exec ruby-lsp` in it from
+`/src/tools/cli`. Since `docker run --detach` returns once the container has
+started, the container is ready by the time `start` runs.
+
+However, the proxy has no teardown step yet. When the backend exits, the
+container keeps running until you `docker stop` it. Only then does `--rm`
+remove it.
 
 ### The built-in runners
 

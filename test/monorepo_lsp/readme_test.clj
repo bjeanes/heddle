@@ -30,7 +30,9 @@
 (deftest custom-runner-parses
   (let [c (config/parse (str (toml-after "example: full config") "\n"
                              (toml-after "example: custom runner")))]
-    (is (= ["nix" "develop" "/r" "--command" "true"]
+    (is (= ["docker" "run" "--rm" "--detach" "--name" "monorepo-lsp-1"
+            "--volume" "/r:/src" "ruby:3.3" "sleep" "infinity"]
            (config/command c "ruby-lsp" "tools/cli" "prepare" runtime)))
-    (is (= ["nix" "develop" "/r" "--command" "bundle" "exec" "ruby-lsp"]
+    (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "monorepo-lsp-1"
+            "bundle" "exec" "ruby-lsp"]
            (config/command c "ruby-lsp" "tools/cli" "start" runtime)))))
