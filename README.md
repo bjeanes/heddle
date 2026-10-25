@@ -390,13 +390,18 @@ I haven't tried this with a bridge yet.
 
 ## Known limitations
 
+[KNOWN-ISSUES.md](KNOWN-ISSUES.md) lists them all. The ones you're most
+likely to run into are:
+
 - Unless you pass `--eager`, backends start when you first open one of their
   files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
   files. The proxy doesn't send it the files that were already open, which
   you'll need to reopen.
-- Copies of files fetched from containers are read-only, and live under
-  your temp directory.
-- There's no VS Code extension yet, and no release binaries.
+- A backend that hangs while starting holds up every request for its files,
+  with no timeout.
+- Copies of files fetched from containers are read-only. Nothing cleans them
+  up, wherever [the cache](#the-cache) keeps them.
+- There's no VS Code extension or published release yet.
 
 [1]: https://github.com/isaacphi/mcp-language-server
