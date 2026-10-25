@@ -1,0 +1,95 @@
+(ns monorepo-lsp.config-test
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [monorepo-lsp.config :as config]))
+
+(def design (config/read-config "test/monorepo_lsp/fixtures/design"))
+
+(defn- errors [toml]
+  (try
+    (config/parse toml)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (set (:errors (ex-data e))))))
+
+(deftest server-types
+  (is (= #{"ruby-lsp" "rubocop"} (config/server-types design "services/api/app/models/user.rb" "ruby")))
+  (is (= #{"ruby-lsp"} (config/server-types design "services/api/Gemfile" nil)) "by glob alone")
+  (is (= #{"ruby-lsp"} (config/server-types design "lib/tasks/db.rake" "plaintext")))
+  (is (= #{"typescript"} (config/server-types design "services/web/app.tsx" "typescriptreact")))
+  (is (= #{} (config/server-types design "README.md" "markdown"))))
+
+(deftest scopes
+  (testing "the longest scope that starts the server type"
+    (is (= "services/api" (config/scope-for design "ruby-lsp" "services/api/app/models/user.rb")))
+    (is (= "." (config/scope-for design "rubocop" "services/api/app/models/user.rb"))))
+  (testing "a scope must contain the file"
+    (is (nil? (config/scope-for design "ruby-lsp" "lib/tasks/db.rake")))
+    (is (nil? (config/scope-for design "ruby-lsp" "services/apiary/x.rb"))))
+  (testing "a nested scope wins over its parent, whatever the names' lengths"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+
+[scopes.'abcdef'.s]
+[scopes.'abcdef/g'.s]
+[scopes.'.'.s]
+")]
+      (is (= "abcdef/g" (config/scope-for c "s" "abcdef/g/h")))
+      (is (= "abcdef" (config/scope-for c "s" "abcdef/h")))
+      (is (= "." (config/scope-for c "s" "z"))))))
+
+(deftest boot-configs
+  (is (= {"command" ["bundle" "exec" "ruby-lsp"]
+          "runner" "compose"
+          "service" "api"
+          "paths" {"services/api" "/app"}}
+         (config/boot-config design "ruby-lsp" "services/api")))
+  (is (= ["ruby-lsp"] (get (config/boot-config design "ruby-lsp" "services/legacy") "command"))
+      "a scope's value replaces the server type's"))
+
+(deftest read-config
+  (is (map? design))
+  (is (nil? (config/read-config "test/monorepo_lsp")) "no config"))
+
+(deftest reports-invalid-toml-with-position
+  (is (= #{"TOML syntax error at line 3, column 8"}
+         (errors "[servers.a]\nlanguages = ['x']\nboot = = 1\n"))))
+
+(deftest reports-structural-problems
+  (testing "server types"
+    (is (= #{"server type \"a\": languages must be a list of strings"
+             "server type \"a\": boot must be a table"
+             "server type \"b\" matches no files; give it languages or globs"}
+           (errors "
+[servers.a]
+languages = 'ruby'
+boot = 1
+
+[servers.b]
+"))))
+  (testing "scopes"
+    (is (= #{"scope \"a/\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
+             "scope \"../a\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
+             "scope \".\", server type \"b\" is not a server type"
+             "scope \".\", server type \"a\" must be a table"}
+           (errors "
+[servers.a]
+languages = ['x']
+
+[scopes.'a/'.a]
+[scopes.'../a'.a]
+
+[scopes.'.']
+a = 1
+b = {}
+"))))
+  (testing "sections"
+    (is (= #{"unknown section \"other\"" "servers must be a table"}
+           (errors "servers = 1\n[other]\n"))))
+  (testing "the message lists every problem"
+    (let [msg (try (config/parse "x = 1\ny = 2\n" "here.toml")
+                   (catch clojure.lang.ExceptionInfo e (ex-message e)))]
+      (is (str/starts-with? msg "invalid config in here.toml:\n"))
+      (is (str/includes? msg "unknown section \"x\""))
+      (is (str/includes? msg "unknown section \"y\"")))))
