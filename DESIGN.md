@@ -424,14 +424,34 @@ _before_ forwarding the reply. The client can then open it like any other file.
 ### Failures
 
 If a backend can't start, for example because its service won't come up or its
-command is missing, the proxy tells the user with `window/showMessage`. It also
-answers any request for a file that backend would have handled with an error
-explaining why. An agent sees that error in its tool's result, even if its
-bridge doesn't pass messages on.
+command is missing, the proxy tells the user with `window/showMessage`. The
+message names the server type, the scope and the reason.
 
-If a backend exits, the proxy reports it the same way and starts it again on
-the next `didOpen` for one of its files. Files that were already open aren't
-replayed to the new backend.
+When none of the backends that handle a file is running, because some have
+failed and the rest never started, the proxy answers every request about the
+file with `RequestFailed` (`-32803`). The error has the same message the user
+was shown for each failed backend. An agent sees that error in its tool's
+result, even if its bridge doesn't pass messages on. A command whose server
+type's backends have all failed gets the same error. However, if any backend
+for the file is running, a request that none of them can answer gets the usual
+empty answer. Otherwise a file's failed linter would turn every request for a
+feature that ruby-lsp doesn't offer into the linter's error.
+
+If a running backend exits, the proxy reports it the same way, as a warning,
+and withdraws its diagnostics. A backend that failed either way starts again
+on the next `didOpen` for one of its files, but no sooner than 30 s after it
+failed. The message says so. Files that were already open aren't replayed to
+the new backend.
+
+A backend that keeps failing would otherwise show the user the same message
+every 30 s. The proxy shows at most one message a minute for each server type
+and scope, and logs the rest.
+
+If the config is missing or invalid, the proxy still answers `initialize`, then
+shows a message saying so, with the config's errors. It then serves nothing
+until it restarts, answering every request with an empty result. Failing
+`initialize` instead would leave many clients retrying the proxy or giving up
+on it, with the reason only in a log.
 
 ## Clients
 
