@@ -9,12 +9,14 @@
 (def ^:private usage
   "usage: jolt -M:drive --root URI --file PATH --uri URI --language ID
                     [--delay MS] [--hover LINE:CHAR] [--definition LINE:CHAR]
-                    -- COMMAND [ARG...]
+                    [--register FEATURE,...] -- COMMAND [ARG...]
 
   --root      workspace root URI to send in initialize
   --file      file on this machine whose contents are opened
   --uri       URI to open it as (may differ from --file, e.g. a container path)
-  --delay     time to wait after opening the file, e.g. for indexing")
+  --delay     time to wait after opening the file, e.g. for indexing
+  --register  textDocument features to accept registrations for after
+              startup, such as hover,definition")
 
 (defn- parse-args
   "Options are `--name value` pairs, and the rest is the command. jolt itself
@@ -53,7 +55,7 @@
               msg)
 
           (contains? msg "id")
-          (do (println "  <- request " (get msg "method"))
+          (do (println "  <- request " (get msg "method") (abbreviate (get msg "params")))
               (lsp/write-message out {"jsonrpc" "2.0" "id" (get msg "id") "result" nil})
               (recur))
 
@@ -61,8 +63,13 @@
           (do (println "  <- notified" (get msg "method") (abbreviate (get msg "params")))
               (recur)))))))
 
+(defn- capabilities [register]
+  {"textDocument" (into {}
+                        (for [feature (some-> register (str/split #","))]
+                          [feature {"dynamicRegistration" true}]))})
+
 (defn -main [& args]
-  (let [{:keys [root file uri language delay hover definition command]} (parse-args args)]
+  (let [{:keys [root file uri language delay hover definition register command]} (parse-args args)]
     (when (some nil? [root file uri language (first command)])
       (binding [*out* *err*] (println usage))
       (System/exit 2))
@@ -75,7 +82,7 @@
       (request in out 1 "initialize" {"processId" nil
                                        "rootUri" root
                                        "workspaceFolders" [{"uri" root "name" "root"}]
-                                       "capabilities" {}})
+                                       "capabilities" (capabilities register)})
       (notify "initialized" {})
       (notify "textDocument/didOpen" {"textDocument" {"uri" uri "languageId" language
                                                        "version" 1 "text" (slurp file)}})
