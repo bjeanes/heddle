@@ -19,12 +19,6 @@ them, under "Pinned for later".
 - **A server that registers a feature itself is registered once for each
   scope it runs in.** Clients such as VS Code may then ask the proxy, and show
   the answer, once per registration.
-- **Results streamed in parts can misbehave.** If your client asks for partial
-  results, the proxy passes each part on as the server sent it. Resolving an
-  item from one gives back nothing more, running its command fails as an
-  unknown command, and a location in a container-only file can point at a copy
-  that hasn't been made. I believe VS Code asks for partial results for some
-  features, but I haven't checked. Neovim doesn't.
 - **Pulled diagnostics are always reported in full**, since the proxy drops
   each server's result IDs.
 - **The client sends whole files on every change.** Messages are larger than
@@ -82,10 +76,10 @@ them, under "Pinned for later".
 - **There's no VS Code extension yet.**
 - **Neovim needs the module to run servers' commands**, unless you use
   `--eager`. Neovim only runs commands announced at startup.
-- **The Neovim module doesn't work with server types in `cmd`.** With a `cmd`
-  such as `{ 'monorepo-lsp', 'ruby-lsp' }`, the module can't ask the proxy
-  which languages it covers. It then warns and lets your usual servers start
-  too.
+- **The Neovim module ignores server types in `cmd`.** With a `cmd` such as
+  `{ 'monorepo-lsp', 'serve', 'ruby-lsp' }`, the module still stops your usual
+  servers for every language in the config, including those the proxy won't
+  serve.
 - **Nobody has tried an MCP bridge with it yet.**
 - **It has only been tried with ruby-lsp and RuboCop**, in Docker Compose on
   macOS, from Neovim 0.12.

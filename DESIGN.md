@@ -38,24 +38,38 @@ matters for agents in particular. Running one bridge per language would put a
 copy of the same tools into the agent's context for every language, with names
 that are easy to confuse.
 
-So, the proxy can be run either way. Running `monorepo-lsp` on its own serves
-every server type in the config. Naming server types, as in
-`monorepo-lsp ruby-lsp` or `monorepo-lsp ruby-lsp rubocop`, serves only those.
-Both are the same code. The names only filter which server types the proxy will
-start.
+So, the proxy can be run either way. Running `monorepo-lsp` on its own, which
+is short for `monorepo-lsp serve`, serves every server type in the config.
+Naming server types, as in `monorepo-lsp serve ruby-lsp` or
+`monorepo-lsp serve ruby-lsp rubocop`, serves only those. Both are the same
+code. The names only filter which server types the proxy will start.
+
+The bare command is what editors and bridges run, so it has to mean `serve`.
+However, a server type can be named anything, including the name of another
+command. So, a bare word in first position is always a command, and server
+types can only be named after `serve`. An unknown command is an error. Since
+the word could be a misspelt command or a server type missing its `serve`, the
+error doesn't guess which. It only points out where server types go.
 
 The proxy finds its config by looking for `.monorepo-lsp.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
 in. The file name will likely change along with the project's name.
 
-`monorepo-lsp --languages [DIR]` doesn't start the proxy. Instead, it prints
+`monorepo-lsp languages [DIR]` doesn't start the proxy. Instead, it prints
 the languages that the config at the root of DIR covers, as JSON such as
 `{"languages":["ruby"]}`. DIR defaults to the directory it was started in. Only
 server types that some scope starts count. If there's no config, or it's
 invalid, it prints the problems to stderr and exits non-zero. A client uses
 this to stop its own servers for those languages from starting alongside the
-proxy, since few clients can parse TOML themselves. It's a flag so that it
-can't be mistaken for a server type's name.
+proxy, since few clients can parse TOML themselves.
+
+`monorepo-lsp check [DIR]` reads the same config and prints its errors and
+warnings, exiting non-zero if there are errors. That way, someone editing the
+config can see its problems without starting an editor.
+
+`monorepo-lsp help`, `--help` or `-h` prints the usage to stdout and exits 0.
+A command line it can't parse is a usage error instead. It prints the error and
+the usage to stderr, and exits 2.
 
 ## Configuration
 
@@ -560,7 +574,7 @@ runner's templates never use. Since that is often deliberate, it isn't an
 error. However, an unused value can also be a misspelt key, such as `arg` for
 `args`. So, after answering `initialize`, the proxy shows one warning that
 lists every unused value in every scope. It then serves as usual.
-`--languages` prints the same warnings to stderr and still succeeds.
+`languages` and `check` print the same warnings to stderr and still succeed.
 
 ## Clients
 
