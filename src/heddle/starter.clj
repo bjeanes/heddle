@@ -101,4 +101,12 @@
 
 # [cache]
 # xdg = true                                   # or env = \"VAR\", or path = \"/absolute/dir\" or \"dir/in/the/repo\"
+
+## 5. Tracing (optional) -------------------------------------------------------
+##
+## To see every message between your editor, heddle and the servers, name a
+## file to append them to. `heddle serve --trace FILE` overrides this.
+
+# [trace]
+# path = \"heddle-trace.jsonl\"                  # relative to this file, or absolute
 ")

@@ -27,6 +27,14 @@
             (when (compare-and-set! failed false true)
               (log/info "couldn't write the trace to" path "-" (ex-message e)))))))))
 
+(defn switchable
+  "A function that traces with the tracer in the atom `current`, or traces
+  nothing while it holds nil."
+  [current]
+  (fn [party msg]
+    (when-let [trace @current]
+      (trace party msg))))
+
 (defn from-client
   "Traces `msg` as received from the client."
   [trace msg]
