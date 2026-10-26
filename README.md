@@ -20,7 +20,7 @@ to pass between, much as heddle picks out the servers that match each file.
 [KICKOFF.md](KICKOFF.md) covers why it exists and
 [DESIGN.md](DESIGN.md) covers how it works.
 
-## What it's for
+## Why you might use it
 
 - **A multi-service monorepo.** Each service's servers run in that service's
   own container, with the language and gem versions it actually uses. Two Ruby
@@ -47,11 +47,20 @@ to pass between, much as heddle picks out the servers that match each file.
   environment. You get the versions the project pins, instead of whatever
   happens to be installed globally.
 
-## Status
+## Why you might not
 
-This is an early prototype. It has been tried with ruby-lsp and RuboCop
-running in Docker Compose on macOS, from Neovim 0.12 and from the session
-driver in `dev/`. Expect rough edges.
+- **It's brand new.** heddle is an early prototype. So far it has only been
+  tried with ruby-lsp and RuboCop running in Docker Compose on macOS, from
+  Neovim 0.12 and from the session driver in `dev/`. Expect rough edges.
+- **It was built with AI.** Most of the code was written by Claude Code, an
+  AI coding agent, with me directing the design. It has tests, but it hasn't
+  had the scrutiny of a project that people have relied on for years.
+- **Your current setup may be fine.** If your editor already starts the
+  servers you need on the host, and they work, heddle adds a process between
+  your editor and those servers for little in return. It's for the
+  scenarios above.
+- **It's one more layer to debug.** When something goes wrong, the cause
+  could be the server, the runner that starts it, or heddle itself.
 
 ## Installing it
 
