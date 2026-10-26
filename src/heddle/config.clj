@@ -148,20 +148,23 @@
   "The structurally valid `config` with each scope's entry for a server type
   made into that slot's whole boot config: the scope's values over the server
   type's `boot` table, over the defaults of the runner they name, other than
-  any `runner` or `paths` in those defaults. Under :sources, each entry's
-  metadata says where any value the scope didn't set came from, as
-  [:boot server-type] or [:defaults runner]. The `boot` tables and runners'
-  `defaults` are then left out, since the scopes hold every value of theirs
-  that applies."
+  any `runner` or `paths` in those defaults. A key whose value ends up `false`
+  is left out, which is how a layer unsets a value from one below it. Under
+  :sources, each entry's metadata says where any value the scope didn't set
+  came from, as [:boot server-type] or [:defaults runner]. The `boot` tables
+  and runners' `defaults` are then left out, since the scopes hold every value
+  of theirs that applies."
   [{:strs! [servers scopes runners] :as config}]
   (let [expand-entry (fn [server-type own]
                        (let [boot (get-in servers [server-type "boot"])
                              runner (get (merge boot own) "runner")
                              defaults (runner/cfg (get-in runners [runner "defaults"]))
+                             layered (merge defaults boot own)
+                             unset (for [[k v] layered :when (false? v)] k)
                              sources (merge (zipmap (keys defaults) (repeat [:defaults runner]))
                                             (zipmap (keys boot) (repeat [:boot server-type])))]
-                         (with-meta (merge defaults boot own)
-                           {:sources (apply dissoc sources (keys own))})))]
+                         (with-meta (apply dissoc layered unset)
+                           {:sources (apply dissoc sources (concat (keys own) unset))})))]
     (assoc config
            "servers" (update-vals servers #(dissoc % "boot"))
            "runners" (update-vals runners #(dissoc % "defaults"))

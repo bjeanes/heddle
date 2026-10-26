@@ -143,6 +143,12 @@ A server type's `boot` table holds defaults for starting it. Scopes override
 them one key at a time. That avoids repeating a command in every scope, without
 tying the command to the server type. Any scope can still replace it.
 
+Since TOML has no null, setting a key to `false` unsets it, along with
+whatever a lower layer gave it. A scope on the host can then drop the `paths`
+that a `boot` table gives for a container, which would otherwise translate
+its paths to ones that don't exist on the host. `false` is never a value of its
+own, since none of the keys takes a boolean.
+
 A server type's optional `priority` decides which backend answers when several
 handle a file. "Requests about one file" below covers how.
 

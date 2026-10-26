@@ -314,6 +314,12 @@ say where it runs in each scope. Two keys in the result belong to the proxy.
 absolute directories the server sees, such as where a container mounts them.
 Every other key, `command` included, is a value for the runner's templates.
 
+Setting a key to `false` unsets it, since TOML has no null. Say the server
+type's `boot` runs it in Compose with `paths = { "." = "/srv" }`. A scope that
+runs it on the host instead needs `paths = false` as well. Otherwise, the proxy
+would still translate its paths to `/srv`. In the same way, a `false` in `boot`
+unsets a value from the runner's `defaults`.
+
 <!-- example: full config -->
 ```toml
 [servers.ruby-lsp]                       # a server type, named as you like

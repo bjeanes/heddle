@@ -96,9 +96,10 @@
   [{:keys! [templates cfg] :as spec} template runtime]
   (runner/expand templates template (runner/context cfg spec runtime)))
 
-(defn- paths-errors [paths]
+(defn- paths-errors [{:strs [paths] :as boot}]
   (cond
-    (nil? paths) nil
+    (not (contains? boot "paths")) nil
+    (or (nil? paths) (= {} paths)) ["paths can't be empty; use paths = false to unset it"] ; an inline {} reads as nil
     (not (map? paths)) ["paths must be a table"]
     :else (for [[dir server] paths
                 :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
@@ -115,8 +116,8 @@
   expands the templates with stand-ins for the values only known once a
   backend runs."
   [config slot]
-  (let [{:strs [runner paths]} (boot config slot)
-        path-errors (paths-errors paths)]
+  (let [{:strs [runner] :as boot} (boot config slot)
+        path-errors (paths-errors boot)]
     (cond
       (nil? runner) ["names no runner"]
       (not (string? runner)) ["runner must be a string"]

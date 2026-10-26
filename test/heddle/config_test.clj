@@ -79,6 +79,38 @@ y = 's'
       (is (= {"languages" ["ruby"]} (get-in c ["servers" "ruby-lsp"])))
       (is (not-any? #(contains? % "defaults") (vals (get c "runners")))))))
 
+(deftest unsets-values-set-to-false
+  (let [c (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'r', service = 'app', command = 'ruby-lsp', paths = { '.' = '/srv' }, x = false }
+
+[runners.r]
+defaults = { x = 'd', y = 'd' }
+start = ['{cfg:command}']
+
+[scopes.a.ruby-lsp]
+[scopes.b.ruby-lsp]
+runner = 'host'
+service = false
+paths = false
+[scopes.c.ruby-lsp]
+x = 's'
+")
+        entry #(get-in c ["scopes" % "ruby-lsp"])]
+    (testing "from a lower layer, whether the boot table or the scope unsets it"
+      (is (= {"runner" "r" "service" "app" "command" "ruby-lsp" "paths" {"." "/srv"} "y" "d"}
+             (entry "a")))
+      (is (= {"runner" "host" "command" "ruby-lsp"} (entry "b"))))
+    (testing "and from :sources"
+      (is (= {"runner" [:boot "ruby-lsp"] "service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"]
+              "paths" [:boot "ruby-lsp"] "y" [:defaults "r"]}
+             (:sources (meta (entry "a")))))
+      (is (= {"command" [:boot "ruby-lsp"]} (:sources (meta (entry "b"))))))
+    (testing "unless a higher layer sets it again"
+      (is (= "s" (get (entry "c") "x")))
+      (is (not (contains? (:sources (meta (entry "c"))) "x"))))))
+
 (deftest unknown-server-types
   (is (= ["nosuch"] (config/unknown-server-types design ["ruby-lsp" "nosuch"])))
   (is (empty? (config/unknown-server-types design []))))
@@ -250,7 +282,15 @@ start = ['{read:file}', '--root={srv:scope}']
              "scope \"s\", server type \"a\": paths entry \"s\" must map to an absolute directory"}
            (scope-errors "{ runner = 'host', command = 'a', paths = { '/abs' = '/app', 's' = 'app' } }")))
     (is (= #{"scope \"s\", server type \"a\": paths don't cover the scope's directory"}
-           (scope-errors "{ runner = 'host', command = 'a', paths = { 'other' = '/app' } }"))))
+           (scope-errors "{ runner = 'host', command = 'a', paths = { 'other' = '/app' } }")))
+    (is (= #{"scope \"s\", server type \"a\": paths can't be empty; use paths = false to unset it"}
+           (scope-errors "{ runner = 'host', command = 'a', paths = {} }")
+           (errors "[servers.a]\nlanguages = ['x']\n[scopes.s.a]\nrunner = 'host'\ncommand = 'a'\n[scopes.s.a.paths]\n")))
+    (is (= #{"scope \"s\", server type \"a\": paths must be a table"}
+           (scope-errors "{ runner = 'host', command = 'a', paths = true }"))))
+  (testing "a value a template needs can't be unset"
+    (is (= #{"scope \"s\", server type \"a\": runner \"host\", start: no value for {cfg:command}"}
+           (scope-errors "{ runner = 'host', command = false }"))))
   (testing "values follow the placeholder rules"
     (is (= #{"scope \"s\", server type \"a\": runner \"wrap\", start: {cfg:command} is a list, which has to make up a whole element"}
            (scope-errors "{ runner = 'wrap', command = ['x', 'y'] }"
@@ -270,6 +310,16 @@ boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
 [scopes.'services/api'.ruby-lsp]
 [scopes.'tools/cli'.ruby-lsp]
 runner = 'host'
+")))))
+  (testing "nothing for a value the scope unsets"
+    (is (empty? (config/warnings (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
+
+[scopes.'tools/cli'.ruby-lsp]
+runner = 'host'
+service = false
 ")))))
   (testing "nothing when every value is used, counting runner, paths and values that replace a default"
     (is (empty? (config/warnings design))))
