@@ -100,8 +100,11 @@
           {:spec spec
            :backend-id (new-id)
            :fetched (atom #{})
-           :state (atom {:status :starting :queue []})
-           :requests (atom requests/empty-table)})))
+           ;; :stopped once the connection has closed, whatever the :status
+           :state (atom {:status :starting
+                         :queue []
+                         :requests requests/empty-table
+                         :stopped false})})))
 
 (defn status
   "One of :starting, :ready, :failed or :exited."
@@ -146,9 +149,9 @@
   ([backend method params on-response]
    (request! backend method params nil on-response))
   ([backend method params tag on-response]
-   (let [{:keys [last-id stopped]}
-         (swap! (:requests backend)
-                #(cond-> % (not (:stopped %)) (requests/add tag on-response)))]
+   (let [{:keys [stopped] {:keys [last-id]} :requests}
+         (swap! (:state backend)
+                #(cond-> % (not (:stopped %)) (update :requests requests/add tag on-response)))]
      (if stopped
        (on-response nil)
        (send! backend (lsp/request last-id method params)))
@@ -157,16 +160,17 @@
 (defn tagged-request
   "The ID of the open request tagged with `tag`, or nil if there isn't one."
   [backend tag]
-  (first (requests/tagged @(:requests backend) tag)))
+  (first (requests/tagged (:requests @(:state backend)) tag)))
 
 (defn- take-callback! [backend id]
-  (let [[old] (swap-vals! (:requests backend) requests/answered id)]
-    (requests/on-response old id)))
+  (let [[old] (swap-vals! (:state backend) update :requests requests/answered id)]
+    (requests/on-response (:requests old) id)))
 
 (defn- stopped! [backend]
-  (swap! (:state backend) #(cond-> % (= :ready (:status %)) (assoc :status :exited)))
-  (let [[old] (swap-vals! (:requests backend) assoc :stopped true :open {})]
-    (doseq [{:keys [on-response]} (vals (:open old))]
+  (let [[old] (swap-vals! (:state backend)
+                          #(cond-> (-> % (assoc :stopped true) (assoc-in [:requests :open] {}))
+                             (= :ready (:status %)) (assoc :status :exited)))]
+    (doseq [{:keys [on-response]} (vals (get-in old [:requests :open]))]
       (on-response nil))))
 
 (defn- receive [backend on-message msg]
