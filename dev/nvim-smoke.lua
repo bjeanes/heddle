@@ -235,12 +235,44 @@ check(
   table.concat(attached, ', ')
 )
 
-for _, c in ipairs(vim.lsp.get_clients()) do
-  c:stop()
+local function stop_all()
+  for _, c in ipairs(vim.lsp.get_clients()) do
+    c:stop()
+  end
+  vim.wait(20000, function()
+    return #vim.lsp.get_clients() == 0
+  end, 100)
 end
-vim.wait(20000, function()
-  return #vim.lsp.get_clients() == 0
+stop_all()
+
+print('\nserver types in cmd')
+local warnings = {}
+local notify = vim.notify
+vim.notify = function(msg, level, ...)
+  if level == vim.log.levels.WARN then
+    table.insert(warnings, msg)
+  end
+  return notify(msg, level, ...)
+end
+require('monorepo_lsp').setup({ cmd = { 'monorepo-lsp', 'serve', 'rubocop' } })
+local greeting = vim.fs.joinpath(example, 'services/api/lib/greeting.rb')
+vim.cmd('silent! bwipeout! ' .. vim.fn.fnameescape(greeting))
+vim.cmd.edit(greeting)
+local attached_here = {}
+vim.wait(30000, function()
+  attached_here = names(vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf() }))
+  return vim.list_contains(attached_here, 'monorepo_lsp')
 end, 100)
+vim.wait(2000)
+attached_here = names(vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf() }))
+check(
+  #attached_here == 1 and attached_here[1] == 'monorepo_lsp',
+  "only monorepo_lsp attached with `serve rubocop` in cmd",
+  table.concat(attached_here, ', ')
+)
+check(#warnings == 0, 'the module read which languages the proxy serves', short(table.concat(warnings, ' ')))
+vim.notify = notify
+stop_all()
 
 print(('\n%s'):format(failures == 0 and 'all checks passed' or (failures .. ' check(s) failed')))
 os.exit(failures == 0 and 0 or 1)

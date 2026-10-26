@@ -42,7 +42,10 @@ So, the proxy can be run either way. Running `monorepo-lsp` on its own, which
 is short for `monorepo-lsp serve`, serves every server type in the config.
 Naming server types, as in `monorepo-lsp serve ruby-lsp` or
 `monorepo-lsp serve ruby-lsp rubocop`, serves only those. Both are the same
-code. The names only filter which server types the proxy will start.
+code. The names only filter which server types the proxy will start. The proxy
+can't check them until the client sends the workspace root, which is where it
+finds the config. So, a name that isn't in the config only gets a warning after
+`initialize`, and the proxy serves the rest.
 
 The bare command is what editors and bridges run, so it has to mean `serve`.
 However, a server type can be named anything, including the name of another
@@ -55,13 +58,16 @@ The proxy finds its config by looking for `.monorepo-lsp.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
 in. The file name will likely change along with the project's name.
 
-`monorepo-lsp languages [DIR]` doesn't start the proxy. Instead, it prints
-the languages that the config at the root of DIR covers, as JSON such as
-`{"languages":["ruby"]}`. DIR defaults to the directory it was started in. Only
-server types that some scope starts count. If there's no config, or it's
-invalid, it prints the problems to stderr and exits non-zero. A client uses
-this to stop its own servers for those languages from starting alongside the
-proxy, since few clients can parse TOML themselves.
+`monorepo-lsp languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
+Instead, it prints the languages that the config at the root of DIR covers, as
+JSON such as `{"languages":["ruby"]}`. DIR defaults to the directory it was
+started in. Only server types that some scope starts count and, if any are
+named, only those. If there's no config, it's invalid, or it doesn't have a
+server type that was named, it prints the problems to stderr and exits
+non-zero. A client uses this to stop its own servers for those languages from
+starting alongside the proxy, since few clients can parse TOML themselves.
+Given the same server types as `serve`, it answers for exactly what that proxy
+serves.
 
 `monorepo-lsp check [DIR]` reads the same config and prints its errors and
 warnings, exiting non-zero if there are errors. That way, someone editing the

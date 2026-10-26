@@ -301,6 +301,17 @@ read = ['cat', '{read:file}']
       (open! t "api/a.rb" "ruby")
       (is (eventually #(seq (methods-received t ["ruby" "api"])))))))
 
+(deftest serving-server-types-that-arent-in-the-config
+  (let [t (start :server-types #{"lint" "nosuch" "other"})]
+    (initialize! t {})
+    (testing "warns once, after answering initialize"
+      (is (= (shown 2 (str "There's no server type \"nosuch\" or \"other\" in " (:repo t) "/.monorepo-lsp.toml."))
+             (from-proxy t)))
+      (is (nothing-more? t)))
+    (testing "and serves the rest"
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(seq (methods-received t ["lint" "."])))))))
+
 (deftest with-config-warnings-starting-backends-eagerly
   (let [log (lsp/notification "window/logMessage" {"type" 3 "message" "one"})
         respond (fn [[server-type] {:strs [id method]}]

@@ -11,7 +11,7 @@
 
 (def ^:private usage
   "usage: monorepo-lsp [serve] [--eager] [SERVER-TYPE...]
-       monorepo-lsp languages [DIR]
+       monorepo-lsp languages [DIR [SERVER-TYPE...]]
        monorepo-lsp check [DIR]
        monorepo-lsp help
 
@@ -24,7 +24,7 @@ serve.
 commands. Otherwise each backend starts when one of its files opens.
 
 languages prints, as JSON, the languages that the config at the root of DIR
-covers.
+covers, counting only the server types named, if any.
 
 check reads the config at the root of DIR and prints its errors and warnings.
 It exits non-zero if the config has errors.
@@ -62,6 +62,9 @@ DIR is the current directory unless given.")
       (seq options)
       {:error (str command " takes no options, but was given " (first options))}
 
+      (= "languages" command)
+      {:command :languages :dir (first operands) :server-types (vec (rest operands))}
+
       (next operands)
       {:error (str command " takes at most one directory")}
 
@@ -69,37 +72,44 @@ DIR is the current directory unless given.")
       {:command (keyword command) :dir (first operands)})))
 
 (defn- with-config
-  "Calls `f` with the config at the root of the repo at `dir`, for what a
-  command prints (:out) and its :exit status. :err has the config's problems
-  on failure, and its warnings on success."
+  "Calls `f` with the config at the root of the repo at `dir` and the config's
+  path, for what a command prints (:out and :err) and its :exit status, which
+  is 0 unless `f` says otherwise. :err has the config's problems on failure,
+  and otherwise its warnings unless `f` gives an :err of its own."
   [dir f]
   (try
-    (if-let [c (config/read-config dir)]
-      (let [warnings (config/warnings c)]
-        (cond-> (assoc (f c) :exit 0)
-          (seq warnings) (assoc :err (config/warnings-message (str (io/file dir config/file-name)) warnings))))
-      {:exit 1 :err (str "There's no " config/file-name " in " dir ".")})
+    (let [source (str (io/file dir config/file-name))]
+      (if-let [c (config/read-config dir)]
+        (let [warnings (config/warnings c)]
+          (merge {:exit 0}
+                 (when (seq warnings) {:err (config/warnings-message source warnings)})
+                 (f c source)))
+        {:exit 1 :err (str "There's no " config/file-name " in " dir ".")}))
     (catch Exception e
       {:exit 1 :err (ex-message e)})))
 
 (defn languages
-  "What `monorepo-lsp languages` prints for the repo at `dir`."
-  [dir]
-  (with-config dir (fn [c] {:out (json/write-str {"languages" (config/languages c)})})))
+  "What `monorepo-lsp languages` prints for the repo at `dir`, when serving
+  `server-types` (or every server type, if empty)."
+  [dir server-types]
+  (with-config dir (fn [c source]
+                     (if-let [unknown (seq (config/unknown-server-types c server-types))]
+                       {:exit 1 :err (config/unknown-server-types-message source unknown)}
+                       {:out (json/write-str {"languages" (config/languages c server-types)})}))))
 
 (defn check
   "What `monorepo-lsp check` prints for the repo at `dir`."
   [dir]
-  (with-config dir (fn [_] {:out (str "No errors in " (io/file dir config/file-name) ".")})))
+  (with-config dir (fn [_ source] {:out (str "No errors in " source ".")})))
 
 (defn outcome
   "What a command other than serve prints, as :out and :err, and its :exit
   status."
-  [{:keys [command error dir]}]
+  [{:keys [command error dir server-types]}]
   (let [dir (or dir (System/getProperty "user.dir"))]
     (case command
       :help {:exit 0 :out usage}
-      :languages (languages dir)
+      :languages (languages dir server-types)
       :check (check dir)
       {:exit 2 :err (str "monorepo-lsp: " error "\n" usage)})))
 

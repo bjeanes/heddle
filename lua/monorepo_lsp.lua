@@ -21,8 +21,23 @@ local function forward_unknown_commands(client)
   })
 end
 
+-- The server types that `cmd` names after `serve`, which are the only ones the
+-- proxy will serve.
+local function server_types()
+  local after_serve = false
+  local names = {}
+  for i = 2, #options.cmd do
+    local arg = options.cmd[i]
+    if after_serve and not vim.startswith(arg, '-') then
+      table.insert(names, arg)
+    end
+    after_serve = after_serve or arg == 'serve'
+  end
+  return names
+end
+
 local function read_languages(root)
-  local cmd = { options.cmd[1], 'languages', root }
+  local cmd = vim.list_extend({ options.cmd[1], 'languages', root }, server_types())
   local ok, result = pcall(function()
     return vim.system(cmd, { text = true, timeout = 5000 }):wait()
   end)

@@ -66,7 +66,7 @@ argument and prints which languages the config covers, as JSON such as
 
 ```
 monorepo-lsp [serve] [--eager] [SERVER-TYPE...]
-monorepo-lsp languages [DIR]
+monorepo-lsp languages [DIR [SERVER-TYPE...]]
 monorepo-lsp check [DIR]
 monorepo-lsp help
 ```
@@ -75,7 +75,10 @@ Editors and bridges run `monorepo-lsp` on its own, or with `--eager`. Either
 way, it's short for `monorepo-lsp serve`, which speaks LSP over stdin and
 stdout and serves every server type in the config. To serve only some of them,
 name them after `serve`, as in `monorepo-lsp serve ruby-lsp rubocop`. Without
-the `serve`, a name would be taken for a command.
+the `serve`, a name would be taken for a command. Given server types after its
+directory, `languages` only prints the languages of those. If one of them isn't
+in the config, `languages` fails, whereas `serve` warns once the editor
+connects and serves the rest.
 
 `monorepo-lsp help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
@@ -358,7 +361,8 @@ a repo with a `.monorepo-lsp.toml`. It takes these options:
 In a repo with a config, Neovim would otherwise also start your usual servers
 for the same files, on the host. To prevent that, the module runs
 `monorepo-lsp languages` (with the program from `cmd`) to ask which languages
-the config covers, once per repo.
+the proxy serves, once per repo. If `cmd` names server types after `serve`,
+only their languages count.
 Then, for a file whose filetype is one of those, it stops any other client
 from starting. Your other configs are left alone, as are the same servers
 everywhere else. If the proxy can't answer, the module warns once for that

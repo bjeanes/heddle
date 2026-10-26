@@ -18,3 +18,4 @@ record says so instead of guessing.
 | [0006](0006-start-backends-lazily-with-eager-as-a-flag.md) | Start backends lazily, with `--eager` as a flag | Accepted |
 | [0007](0007-declare-paths-and-fetch-the-rest.md) | Declare paths, and fetch everything else | Accepted |
 | [0008](0008-make-the-first-word-a-subcommand.md) | Make the first word a subcommand, defaulting to `serve` | Accepted |
+| [0009](0009-ship-a-neovim-module.md) | Ship a Neovim module | Accepted |

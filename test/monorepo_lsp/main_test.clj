@@ -54,8 +54,10 @@
     (is (str/starts-with? err "monorepo-lsp: unknown option -x\nusage: monorepo-lsp"))))
 
 (deftest languages-and-check-take-a-directory
-  (is (= {:command :languages :dir nil} (main/parse-args ["languages"])))
-  (is (= {:command :languages :dir "/repo"} (main/parse-args ["languages" "/repo"])))
+  (is (= {:command :languages :dir nil :server-types []} (main/parse-args ["languages"])))
+  (is (= {:command :languages :dir "/repo" :server-types []} (main/parse-args ["languages" "/repo"])))
+  (is (= {:command :languages :dir "/repo" :server-types ["ruby-lsp" "rubocop"]}
+         (main/parse-args ["languages" "/repo" "ruby-lsp" "rubocop"])))
   (is (= {:command :check :dir nil} (main/parse-args ["check"])))
   (is (= {:command :check :dir "/repo"} (main/parse-args ["check" "/repo"])))
   (is (= {:error "check takes at most one directory"} (main/parse-args ["check" "/repo" "/other"])))
@@ -64,18 +66,27 @@
 
 (deftest languages
   (is (= {:exit 0 :out "{\"languages\":[\"ruby\",\"typescript\",\"typescriptreact\"]}"}
-         (main/languages "test/monorepo_lsp/fixtures/design"))))
+         (main/languages "test/monorepo_lsp/fixtures/design" []))))
+
+(deftest languages-of-named-server-types
+  (is (= {:exit 0 :out "{\"languages\":[\"ruby\"]}"}
+         (main/languages "test/monorepo_lsp/fixtures/design" ["ruby-lsp" "rubocop"]))))
+
+(deftest languages-of-server-types-that-arent-in-the-config
+  (let [dir "test/monorepo_lsp/fixtures/design"]
+    (is (= {:exit 1 :err (str "There's no server type \"nosuch\" in " dir "/.monorepo-lsp.toml.")}
+           (main/languages dir ["ruby-lsp" "nosuch"])))))
 
 (deftest languages-without-a-config
   (let [dir (temp-dir)
-        {:keys [exit err]} (main/languages dir)]
+        {:keys [exit err]} (main/languages dir [])]
     (is (= 1 exit))
     (is (str/includes? err dir))))
 
 (deftest languages-with-an-invalid-config
   (let [dir (temp-dir)]
     (spit (io/file dir ".monorepo-lsp.toml") "[servers.s]\n")
-    (let [{:keys [exit err]} (main/languages dir)]
+    (let [{:keys [exit err]} (main/languages dir [])]
       (is (= 1 exit))
       (is (str/includes? err "server type \"s\" matches no files")))))
 
@@ -83,7 +94,7 @@
   (let [dir (temp-dir)]
     (spit (io/file dir ".monorepo-lsp.toml")
           "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\nrunner = 'host'\ncommand = 's'\nimage = 'i'\n")
-    (let [{:keys [exit out err]} (main/languages dir)]
+    (let [{:keys [exit out err]} (main/languages dir [])]
       (is (= 0 exit))
       (is (= "{\"languages\":[\"x\"]}" out))
       (is (str/includes? err "\"image\" isn't used by runner \"host\"")))))

@@ -166,11 +166,13 @@
 
 (defn- initialize! [proxy {:strs [id params]}]
   (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
-        eager? (and (:eager proxy) (not problem))]
-    (when-not problem
-      (doseq [name (:server-types proxy)
-              :when (not (contains? (get config "servers") name))]
-        (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
+        eager? (and (:eager proxy) (not problem))
+        unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
+        unknown-warning (when unknown
+                          (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))
+        warnings (cond-> warnings unknown-warning (conj unknown-warning))]
+    (when unknown-warning
+      (log/info unknown-warning))
     (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root
            :client-params params :held (when eager? []))
     (when eager?

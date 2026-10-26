@@ -204,10 +204,24 @@
          name)))
 
 (defn languages
-  "The languages, sorted, of every server type that some scope starts."
-  [config]
-  (let [started (set (mapcat keys (vals (get config "scopes"))))]
-    (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started))))))
+  "The languages, sorted, of every server type that some scope starts, or only
+  of those in `server-types` if it's non-empty."
+  ([config] (languages config nil))
+  ([config server-types]
+   (let [started (cond->> (set (mapcat keys (vals (get config "scopes"))))
+                   (seq server-types) (filter (set server-types)))]
+     (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started)))))))
+
+(defn unknown-server-types
+  "Those of the server types `names` that the config doesn't have."
+  [config names]
+  (remove (set (keys (get config "servers"))) names))
+
+(defn unknown-server-types-message
+  "The message for server types `names` that the config file at `source`
+  doesn't have."
+  [source names]
+  (str "There's no server type " (str/join " or " (map pr-str names)) " in " source "."))
 
 (defn by-priority
   "The server types in the order they're asked a request that wants one
