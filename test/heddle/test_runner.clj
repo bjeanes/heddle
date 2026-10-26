@@ -5,6 +5,7 @@
             [heddle.channel-test]
             [heddle.config-test]
             [heddle.diagnostics-test]
+            [heddle.documents-test]
             [heddle.fetched-test]
             [heddle.glob-test]
             [heddle.json-test]

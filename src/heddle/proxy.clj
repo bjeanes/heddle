@@ -11,6 +11,7 @@
             [heddle.channel :as channel]
             [heddle.config :as config]
             [heddle.diagnostics :as diagnostics]
+            [heddle.documents :as documents]
             [heddle.fetched :as fetched]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
@@ -492,28 +493,17 @@
   before anything sent to it later."
   [proxy b]
   (let [k (backend/slot b)]
-    (doseq [[uri {:keys [language version text]}] (get-in @(:state proxy) [:client :documents])
+    (doseq [[uri {:keys [language] :as doc}] (get-in @(:state proxy) [:client :documents])
             :when (some #{k} (handlers proxy uri language))]
-      (open-in! proxy b {"textDocument" {"uri" uri "languageId" language "version" version "text" text}}))))
+      (open-in! proxy b (documents/open-params uri doc)))))
 
 (defn- open! [proxy {:strs [textDocument] :as params}]
-  (let [{:strs [uri languageId version text]} textDocument]
-    (swap! (:state proxy) assoc-in [:client :documents uri] {:language languageId :version version :text text})
+  (let [{:strs [uri languageId]} textDocument]
+    (swap! (:state proxy) update-in [:client :documents] documents/opened params)
     (doseq [k (handlers proxy uri languageId)
             :let [b (backend-for! proxy k)]
             :when b]
       (open-in! proxy b params))))
-
-(defn- change
-  "`state` with the latest version and text of the document that `didChange`
-  is about. The proxy asks the client for the full text on every change."
-  [state {:strs [textDocument contentChanges]}]
-  (let [uri (get textDocument "uri")]
-    (cond-> state
-      (contains? (get-in state [:client :documents]) uri)
-      (update-in [:client :documents uri] assoc
-                 :version (get textDocument "version")
-                 :text (get (last contentChanges) "text")))))
 
 (defn- close [state uri]
   (-> state
@@ -525,7 +515,7 @@
     (doseq [b (opened-in proxy uri)]
       (notify-backend! b method params))
     (case method
-      "textDocument/didChange" (swap! (:state proxy) change params)
+      "textDocument/didChange" (swap! (:state proxy) update-in [:client :documents] documents/changed params)
       "textDocument/didClose" (swap! (:state proxy) close uri)
       nil)))
 
