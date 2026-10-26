@@ -114,11 +114,20 @@
 (defn- load-config
   "The repo and its config, from the first of `roots` with a config. Without a
   usable config, the proxy serves nothing, and :problem has the type and text
-  of a message for the user."
+  of a message for the user. Otherwise, :cache-root is where to cache fetched
+  files, and :warnings has the text of any messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
-      {:repo repo :config (config/read-config repo)}
+      (let [c (config/read-config repo)
+            unused (config/warnings c)
+            {:keys [root warning]} (fetched/cache-root c repo #(System/getenv %))]
+        {:repo repo
+         :config c
+         :cache-root root
+         :warnings (cond-> []
+                     (seq unused) (conj (config/warnings-message (str (io/file repo config/file-name)) unused))
+                     warning (conj warning))})
       (catch Exception e
         {:repo repo
          :config no-config
@@ -156,13 +165,14 @@
       (run! (:send proxy) (:held old)))))
 
 (defn- initialize! [proxy {:strs [id params]}]
-  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))
+  (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
         eager? (and (:eager proxy) (not problem))]
     (when-not problem
       (doseq [name (:server-types proxy)
               :when (not (contains? (get config "servers") name))]
         (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
-    (swap! (:state proxy) assoc :repo repo :config config :client-params params :held (when eager? []))
+    (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root
+           :client-params params :held (when eager? []))
     (when eager?
       (start-every-backend! proxy))
     (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
@@ -170,7 +180,9 @@
       (answer-initialize! proxy (lsp/response id result)))
     (register! proxy)
     (when-let [[type message] problem]
-      (show-message! proxy type message))))
+      (show-message! proxy type message))
+    (doseq [warning warnings]
+      (show-message! proxy :warning warning))))
 
 ;; Backends
 
@@ -284,8 +296,8 @@
 (declare from-backend! failed!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
-  (let [{:keys [config repo client-params]} @(:state proxy)
-        b (backend/backend config server-type scope repo)]
+  (let [{:keys [config repo cache-root client-params]} @(:state proxy)
+        b (backend/backend config server-type scope repo cache-root)]
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
@@ -438,7 +450,7 @@
     (stopped! proxy b)
 
     (contains? msg "id")
-    (request-client! proxy method (cond->> (translate/to-client b (request-params proxy b method params))
+    (request-client! proxy method (cond->> (to-client! b (request-params proxy b method params))
                                     (= "client/registerCapability" method) (limit-selectors b))
                      [(:backend-id b) id]
                      (fn [response]
@@ -448,13 +460,13 @@
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])
 
     (= "$/progress" method)
-    (send-client! proxy (lsp/notification method (translate/to-client b (progress-params proxy b params))))
+    (send-client! proxy (lsp/notification method (to-client! b (progress-params proxy b params))))
 
     (= "textDocument/publishDiagnostics" method)
-    (publish-diagnostics! proxy b (translate/to-client b params))
+    (publish-diagnostics! proxy b (to-client! b params))
 
     :else
-    (send-client! proxy (lsp/notification method (translate/to-client b params)))))
+    (send-client! proxy (lsp/notification method (to-client! b params)))))
 
 ;; Documents
 
@@ -659,15 +671,33 @@
 (defn- backend-by-id [proxy backend-id]
   (first (filter #(= backend-id (:backend-id %)) (vals (:backends @(:state proxy))))))
 
+(defn- item-maker
+  "The running backend that made the marked `item`, and the item as that
+  backend made it. Nil if the item isn't marked or the backend has stopped."
+  [proxy item]
+  (let [[backend-id item] (origin/unmark item)
+        b (some->> backend-id (backend-by-id proxy))]
+    (when (and b (backend/ready? b))
+      [b item])))
+
 (defn- resolve!
   "Sends a request to resolve an item to the backend that made it. The item
   comes back unchanged if that backend has stopped or doesn't resolve items."
   [proxy {:strs [id method params] :as msg}]
-  (let [[backend-id item] (origin/unmark params)
-        b (some->> backend-id (backend-by-id proxy))]
-    (if (and b (backend/ready? b) (capabilities/resolves? (backend/capabilities b) method))
+  (let [[b item] (item-maker proxy params)]
+    (if (and b (capabilities/resolves? (backend/capabilities b) method))
       (forward-request! proxy b (assoc msg "params" item))
       (send-client! proxy (lsp/response id params)))))
+
+(defn- follow-up!
+  "Sends a request about an item from an earlier answer, such as the incoming
+  calls of a call hierarchy item, to the backend that made the item. The
+  answer is null if that backend has stopped or doesn't offer the feature."
+  [proxy {:strs [id method params] :as msg}]
+  (let [[b item] (item-maker proxy (get params "item"))]
+    (if (and b (capabilities/offers? (backend/capabilities b) (capabilities/feature method)))
+      (forward-request! proxy b (assoc-in msg ["params" "item"] item))
+      (send-client! proxy (lsp/response id nil)))))
 
 (defn- command-backend
   "The running backend of `server-type` to run a command with `arguments`.
@@ -759,6 +789,7 @@
       (nil? (:config @(:state proxy))) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
       (capabilities/resolve-method? method) (resolve! proxy msg)
+      (capabilities/follow-up-method? method) (follow-up! proxy msg)
       (= "workspace/executeCommand" method) (execute-command! proxy msg)
       (= "workspace/symbol" method) (combine-request! proxy msg (running-backends proxy))
       (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))

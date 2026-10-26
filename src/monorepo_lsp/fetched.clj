@@ -29,11 +29,55 @@
       (str/replace encoded "." "%2E")
       encoded)))
 
+(defn- unusable
+  "Why `value`, read from an environment variable, can't be the cache root, or
+  nil if it can."
+  [value]
+  (cond (nil? value) "isn't set"
+        (= "" value) "is empty"
+        (not (str/starts-with? value "/")) (str "is a relative path, " (pr-str value))))
+
+(defn cache-root
+  "The directory that the config's `cache` table chooses for the cache, under
+  :root. `repo` is the directory holding the config, which a relative `path` is
+  resolved against, and `getenv` looks up an environment variable.
+
+  If `env` names a variable that is unset, empty or relative, or `xdg` finds
+  neither $XDG_CACHE_HOME nor $HOME usable, the cache goes in the system's temp
+  directory instead, and :warning says why."
+  [config repo getenv]
+  (let [{:strs [env path xdg]} (get config "cache")
+        tmpdir (System/getProperty "java.io.tmpdir")
+        fall-back (fn [why]
+                    {:root tmpdir
+                     :warning (str "The config's cache " why ". "
+                                   "Fetched files are cached in " tmpdir " instead.")})]
+    (cond
+      path {:root (if (str/starts-with? path "/") path (paths/client-path repo path))}
+
+      xdg
+      (let [cache-home (getenv "XDG_CACHE_HOME")
+            home (getenv "HOME")]
+        (cond
+          (not (unusable cache-home)) {:root cache-home}
+          (not (unusable home)) {:root (str (str/replace home #"/+$" "") "/.cache")}
+          :else (fall-back (str "follows XDG, but $XDG_CACHE_HOME " (unusable cache-home)
+                                " and $HOME " (unusable home)))))
+
+      env
+      (let [value (getenv env)]
+        (if-let [problem (unusable value)]
+          (fall-back (str "names $" env ", which " problem))
+          {:root value}))
+
+      :else {:root tmpdir})))
+
 (defn cache-dir
-  "The directory holding fetched files for `server-type` in `scope`, as a
-  client path. Every backend for them uses the same one, in any process."
-  [repo server-type scope]
-  (str (str/replace (System/getProperty "java.io.tmpdir") #"/+$" "")
+  "The directory under the cache's `root` holding fetched files for
+  `server-type` in `scope`, as a client path. Every backend for them uses the
+  same one, in any process."
+  [root repo server-type scope]
+  (str (str/replace root #"/+$" "")
        "/monorepo-lsp/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
 
 (defn- read-into

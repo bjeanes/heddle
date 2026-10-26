@@ -154,7 +154,8 @@ with the proxy, is defined in config as a set of command templates.
 - **`prepare`** runs before `start`, for example to bring up a stopped
   container. It's optional too.
 
-These are the runners proposed to ship with the proxy:
+These are the runners that ship with the proxy, from
+`resources/monorepo_lsp/runners.toml`:
 
 ```toml
 [runners.host]
@@ -472,8 +473,9 @@ VS Code and MCP bridges, give the proxy no hook like that. Instead, when a
 backend sends back a location in a fetched file, the proxy runs `read` for it
 _before_ forwarding the reply. The client can then open it like any other file.
 
-The cache directory is `<tmpdir>/monorepo-lsp/<repo>/<server type>/<scope>`,
-where `<tmpdir>` is the system's temp directory. Two backends can have
+The cache directory is `<root>/monorepo-lsp/<repo>/<server type>/<scope>`.
+`<root>` is the system's temp directory unless the config's `cache` table
+chooses another. Two backends can have
 different files at the same server path. So, each server type and scope gets a
 directory of its own. Each is percent-encoded into a single path segment, with
 the root scope `.` as `%2E`. Nesting the scopes instead would put
@@ -484,6 +486,30 @@ by a dash and the CRC-32 of its full path in hex.
 None of this depends on the backend ID. A restarted backend reuses the
 directory of the one it replaced, rather than leaving a new one behind each
 time. The backends of other proxies on the same repo use it too.
+
+However, the temp directory isn't always stable. `nix develop` points `TMPDIR`
+at a new directory for each shell. An editor started from one would then use a
+new cache each time and leave the old ones behind. So, `cache` can follow the
+XDG Base Directory spec, name an environment variable to read the root from,
+or give the root as a path. A relative path is resolved against the config's
+directory, which is the repo root. The layout under the root is the same
+whichever way it's chosen. When the root is inside the repo,
+`monorepo-lsp/<repo>` adds two levels of directories that aren't needed. That
+being said, several checkouts of the repo can share an absolute root. `<repo>`
+keeps their copies apart.
+
+With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
+path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set
+`XDG_CACHE_HOME`, a config that named it with `env` would fall back to the temp
+directory there. `xdg` behaves the same on every OS, which suits a config the
+whole team shares.
+
+If the variable that `env` names is unset, empty or a relative path, or `xdg`
+finds neither `XDG_CACHE_HOME` nor `HOME` usable, the proxy warns and falls
+back to the temp directory. Since the cache only saves fetching files again,
+refusing to serve over a missing variable would cost far more than it saves.
+`~` isn't expanded. A path that starts with it is an error, since it would
+otherwise make a directory named `~` in the repo.
 
 Copies persist across restarts. However, the container's libraries may have
 changed since an earlier backend fetched them. So, each backend fetches a file
@@ -528,6 +554,14 @@ until it restarts, answering every request with an empty result. Failing
 `initialize` instead would leave many clients retrying the proxy or giving up
 on it, with the reason only in a log.
 
+A server type's boot table might set a `service` for the `compose` runner. A
+scope that switches that server type to `host` then has a value that its
+runner's templates never use. Since that is often deliberate, it isn't an
+error. However, an unused value can also be a misspelt key, such as `arg` for
+`args`. So, after answering `initialize`, the proxy shows one warning that
+lists every unused value in every scope. It then serves as usual.
+`--languages` prints the same warnings to stderr and still succeeds.
+
 ## Clients
 
 We're prototyping with Neovim and VS Code, plus an MCP bridge for agents. Other
@@ -566,6 +600,13 @@ These may become worth doing once we've used the prototype.
   `["{cfg:compose}", "up", "--detach", "{cfg:service}"]` or
   `["docker", "start", "{cfg:container}"]`. Not everyone will want it, which is
   why the built-in runners leave it out for now.
+- **A `stop` template.** A runner whose `prepare` starts a container leaves it
+  running after the backend exits. A `stop` template could run when a backend
+  exits or the proxy shuts down. We'd need to decide whether it runs after a
+  crash as well as a clean exit, and how long to wait for it. It can't help if
+  the proxy itself is killed. Cleaning up after that would need a container
+  name or label that a restarted proxy can work out again, which a random
+  backend ID isn't.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the

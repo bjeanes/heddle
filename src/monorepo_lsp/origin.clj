@@ -60,15 +60,24 @@
 
 (defn mark-result
   "The result of the request `method` from the backend `backend-id`, with
-  every item in it that a client can resolve later marked."
+  every item in it that a client can resolve or follow up on later marked."
   [method backend-id result]
-  (let [mark-all (fn [items] (mapv #(mark backend-id %) items))]
+  (let [mark-all (fn [items] (mapv #(mark backend-id %) items))
+        mark-calls (fn [k calls] (mapv #(update % k (partial mark backend-id)) calls))]
     (case method
       "textDocument/completion"
       (some-> result merge/completion-list (update "items" mark-all))
 
-      ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint" "workspace/symbol")
+      ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint" "workspace/symbol"
+       "textDocument/prepareCallHierarchy" "textDocument/prepareTypeHierarchy"
+       "typeHierarchy/supertypes" "typeHierarchy/subtypes")
       (some-> result mark-all)
+
+      "callHierarchy/incomingCalls"
+      (some->> result (mark-calls "from"))
+
+      "callHierarchy/outgoingCalls"
+      (some->> result (mark-calls "to"))
 
       "textDocument/codeAction"
       (some->> result (mapv #(if (command? %) % (mark backend-id %))))

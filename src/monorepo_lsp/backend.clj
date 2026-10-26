@@ -80,9 +80,10 @@
 
 (defn backend
   "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path. The backend can be used as a context for
-  monorepo-lsp.translate, and with monorepo-lsp.fetched."
-  [config server-type scope repo]
+  root as a client path, and `cache-root` is where fetched files are cached.
+  The backend can be used as a context for monorepo-lsp.translate, and with
+  monorepo-lsp.fetched."
+  [config server-type scope repo cache-root]
   (let [id (new-id)]
     {:config config
      :server-type server-type
@@ -90,7 +91,7 @@
      :repo repo
      :backend-id id
      :paths (get (config/boot-config config server-type scope) "paths")
-     :cache (fetched/cache-dir repo server-type scope)
+     :cache (fetched/cache-dir cache-root repo server-type scope)
      :fetched (atom #{})
      :root (config/server-scope config server-type scope repo)
      :state (atom {:status :starting :queue []})
@@ -259,9 +260,11 @@
 
 (defn exit!
   "Tells the backend to exit, closes its input and waits up to `ms` for it to
-  stop. Returns its exit code, or nil if it hasn't stopped."
+  stop. Returns its exit code, or nil if it hasn't stopped. Since some backends
+  exit as soon as they've answered `shutdown`, failing to tell one to exit
+  isn't logged."
   [backend ms]
-  (when-let [{:keys [close wait]} (:conn @(:state backend))]
-    (notify! backend "exit" nil)
+  (when-let [{:keys [send close wait]} (:conn @(:state backend))]
+    (try (send (lsp/notification "exit" nil)) (catch Exception _))
     (try (close) (catch Exception _))
     (wait ms)))

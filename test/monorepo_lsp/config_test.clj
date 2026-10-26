@@ -1,6 +1,6 @@
 (ns monorepo-lsp.config-test
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [are deftest is testing]]
             [monorepo-lsp.config :as config]))
 
 (def design (config/read-config "test/monorepo_lsp/fixtures/design"))
@@ -103,7 +103,14 @@ boot = 1
 priority = 'high'
 
 [servers.b]
-"))))
+")))
+    (is (= #{"server type \"ruby-lsp\": unknown key \"langauges\""}
+           (errors "
+[servers.ruby-lsp]
+langauges = ['ruby']
+globs = ['**/Gemfile']
+"))
+        "a misspelt key, even when the server type still matches files"))
   (testing "scopes"
     (is (= #{"scope \"a/\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
              "scope \"../a\" must be a directory relative to the repo root, such as \"services/api\" or \".\""
@@ -137,6 +144,25 @@ start = ['{read:file}', '--root={srv:scope}']
   (testing "sections"
     (is (= #{"unknown section \"other\"" "servers must be a table"}
            (errors "servers = 1\n[other]\n"))))
+  (testing "the cache"
+    (is (nil? (errors "cache = { env = 'XDG_CACHE_HOME' }")))
+    (is (nil? (errors "cache = { path = '/var/cache' }")))
+    (is (nil? (errors "[cache]\npath = '.cache/lsp'\n")))
+    (is (nil? (errors "cache = { xdg = true }")))
+    (are [toml error] (= #{error} (errors toml))
+      "cache = '/var/cache'"                  "cache must be a table, such as { xdg = true }"
+      "[cache]"                               "cache needs exactly one of env, path or xdg"
+      "cache = { env = 'A', path = '/b' }"    "cache needs exactly one of env, path or xdg"
+      "cache = { xdg = true, env = 'A' }"     "cache needs exactly one of env, path or xdg"
+      "cache = { xdg = true, path = '/b' }"   "cache needs exactly one of env, path or xdg"
+      "cache = { env = 'A', dir = '/b' }"     "cache: unknown key \"dir\""
+      "cache = { env = '' }"                  "cache: env must be the name of an environment variable"
+      "cache = { xdg = false }"               "cache: xdg must be true"
+      "cache = { xdg = 'yes' }"               "cache: xdg must be true"
+      "cache = { path = 1 }"                  "cache: path must be a string"
+      "cache = { path = '~/.cache' }"         "cache: path can't start with ~, which isn't expanded; use xdg, env or an absolute path"
+      "cache = { path = '../cache' }"         "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"
+      "cache = { path = '/var/cache/' }"      "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"))
   (testing "the message lists every problem"
     (let [msg (try (config/parse "x = 1\ny = 2\n" "here.toml")
                    (catch clojure.lang.ExceptionInfo e (ex-message e)))]
@@ -156,6 +182,8 @@ start = ['{read:file}', '--root={srv:scope}']
            (scope-errors "{ command = 'a' }")))
     (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
            (scope-errors "{ runner = 'nope' }"))))
+  (testing "a value no template uses is allowed"
+    (is (nil? (scope-errors "{ runner = 'host', command = 'a', service = 'api' }"))))
   (testing "every {cfg:…} a template uses needs a value"
     (is (= #{"scope \"s\", server type \"a\": runner \"compose\", start: no value for {cfg:service}"
              "scope \"s\", server type \"a\": runner \"compose\", read: no value for {cfg:service}"}
@@ -173,6 +201,24 @@ start = ['{read:file}', '--root={srv:scope}']
     (is (= #{"scope \"s\", server type \"a\": runner \"host\", start: {read:file} is only available in read"
              "scope \"s\", server type \"a\": runner \"host\", start: the value of {cfg:command} can't use {cfg:other}"}
            (scope-errors "{ runner = 'host', command = ['{read:file}', '--x={cfg:other}'], other = 'o' }")))))
+
+(deftest warns-about-unused-values
+  (testing "a value the scope's runner never uses"
+    (is (= ["scope \"tools/cli\", server type \"ruby-lsp\": \"service\" isn't used by runner \"host\""]
+           (config/warnings (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
+
+[scopes.'services/api'.ruby-lsp]
+[scopes.'tools/cli'.ruby-lsp]
+runner = 'host'
+")))))
+  (testing "nothing when every value is used, counting runner, paths and values that replace a default"
+    (is (empty? (config/warnings design))))
+  (testing "as one message"
+    (is (= "unused values in here.toml:\n  a\n  b"
+           (config/warnings-message "here.toml" ["a" "b"])))))
 
 (def ^:private runtime {:repo "/r" :backend-id "monorepo-lsp-1"})
 

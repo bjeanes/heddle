@@ -4,6 +4,7 @@
             [monorepo-lsp.backend :as backend]
             [monorepo-lsp.config :as config]
             [monorepo-lsp.fake-backend :as fake :refer [eventually]]
+            [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -36,9 +37,10 @@ s = { runner = 'cat' }
     (is (not= id (backend/new-id)))))
 
 (deftest describing-a-backend
-  (let [b (backend/backend config "s" "." "/r")]
+  (let [b (backend/backend config "s" "." "/r" "/cache")]
     (is (= {"." "/src"} (:paths b)))
     (is (= "/src" (:root b)))
+    (is (re-matches #"/cache/monorepo-lsp/r-[0-9a-f]{8}/s/%2E" (:cache b)))
     (is (= :starting (backend/status b)))))
 
 (deftest starting
@@ -48,7 +50,7 @@ s = { runner = 'cat' }
                   (when (= "initialize" (get msg "method"))
                     @answer-initialize
                     [(lsp/response (get msg "id") {"capabilities" {"hoverProvider" true}})]))
-        b (backend/start! (backend/backend config "s" "." "/r")
+        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
                           (fake/connector received respond)
                           {"rootUri" "file:///src"}
                           (fn [_]))]
@@ -71,7 +73,7 @@ s = { runner = 'cat' }
   (let [received (atom {})
         respond (fn [_ msg]
                   [(lsp/error-response (get msg "id") -32603 "no Gemfile")])
-        b (backend/backend config "s" "." "/r")
+        b (backend/backend config "s" "." "/r" "/cache")
         ran (promise)]
     (backend/when-ready b #(deliver ran (backend/status b)))
     (backend/start! b (fake/connector received respond) {} (fn [_]))
@@ -86,7 +88,7 @@ s = { runner = 'cat' }
                     "initialize" [(lsp/response (get msg "id") {"capabilities" {}})]
                     "echo" [(lsp/response (get msg "id") (get msg "params"))]
                     nil))
-        b (backend/start! (backend/backend config "s" "." "/r")
+        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
                           (fake/connector (atom {}) respond)
                           {}
                           #(when (nil? %) (deliver stopped true)))]
@@ -111,11 +113,33 @@ s = { runner = 'cat' }
         (backend/request! b "late" nil #(deliver response %))
         (is (nil? (deref response 0 :timeout)))))))
 
+(deftest exiting-after-the-backend-has-stopped
+  (let [stopped (promise)
+        logged (atom [])
+        respond (fn [_ msg]
+                  (case (get msg "method")
+                    "initialize" [(lsp/response (get msg "id") {"capabilities" {}})]
+                    "shutdown" [(lsp/response (get msg "id") nil) fake/hang-up]
+                    nil))
+        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
+                          (fake/connector (atom {}) respond)
+                          {}
+                          #(when (nil? %) (deliver stopped true)))]
+    (is (eventually #(backend/ready? b)))
+    (is (= true (deref (backend/shutdown! b) 2000 :timeout)))
+    (is (= true (deref stopped 2000 :timeout)))
+    (let [previous-writer (log/set-writer! #(swap! logged conj %))]
+      (try
+        (is (= 0 (backend/exit! b 1000)))
+        (is (= [] @logged))
+        (finally
+          (log/set-writer! previous-writer))))))
+
 (deftest a-real-process
   (let [repo (temp-dir)
         lib (io/file repo "lib")
         messages (java.util.concurrent.LinkedBlockingQueue.)
-        b (backend/backend config "s" "lib" repo)]
+        b (backend/backend config "s" "lib" repo "/cache")]
     (.mkdirs lib)
     (let [conn (backend/connect-process b #(.put messages (or % :stopped)))]
       (testing "runs prepare then start in the scope's directory"

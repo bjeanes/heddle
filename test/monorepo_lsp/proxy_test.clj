@@ -284,6 +284,58 @@ read = ['cat', '{read:file}']
       (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
       (is (nothing-more? t)))))
 
+(def ^:private config-with-unused-value
+  (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))
+
+(defn- unused-value-warning [t]
+  (shown 2 (str "unused values in " (:repo t) "/.monorepo-lsp.toml:\n"
+                "  scope \"api\", server type \"ruby\": \"image\" isn't used by runner \"local\"")))
+
+(deftest with-config-warnings
+  (let [t (start :config config-with-unused-value)]
+    (initialize! t {})
+    (testing "shows them once, after answering initialize"
+      (is (= (unused-value-warning t) (from-proxy t)))
+      (is (nothing-more? t)))
+    (testing "and still serves"
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(seq (methods-received t ["ruby" "api"])))))))
+
+(deftest with-config-warnings-starting-backends-eagerly
+  (let [log (lsp/notification "window/logMessage" {"type" 3 "message" "one"})
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (cond-> [(lsp/response id {"capabilities" {}})]
+                      (= "ruby" server-type) (->> (cons log)))))
+        t (start :config config-with-unused-value :respond respond :eager true)]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "shows them after the answer and the backends' held messages"
+      (is (= 0 (get (from-proxy t) "id")))
+      (is (= log (from-proxy t)))
+      (is (= (unused-value-warning t) (from-proxy t)))
+      (is (nothing-more? t)))))
+
+(defn- cache-of [t k]
+  (get-in @(:state (:proxy t)) [:backends k :cache]))
+
+(deftest choosing-the-cache-root
+  (testing "a path relative to the config's directory"
+    (let [t (start :config (str "cache = { path = '.cache' }\n" config))]
+      (initialize! t {})
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(cache-of t ["ruby" "api"])))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/monorepo-lsp/")))))
+  (testing "an unset environment variable, which warns once after initialize and falls back"
+    (let [t (start :config (str "cache = { env = 'MONOREPO_LSP_TEST_UNSET' }\n" config))]
+      (initialize! t {})
+      (is (= (shown 2 (str "The config's cache names $MONOREPO_LSP_TEST_UNSET, which isn't set. "
+                           "Fetched files are cached in " (System/getProperty "java.io.tmpdir") " instead."))
+             (from-proxy t)))
+      (is (nothing-more? t))
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(cache-of t ["ruby" "api"])))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (System/getProperty "java.io.tmpdir"))))))
+
 (deftest starting-backends-eagerly-with-a-failed-backend
   (let [ruby-starts (atom 0)
         respond (fn [[server-type] {:strs [id method]}]
@@ -442,6 +494,54 @@ read = ['cat', '{read:file}']
           (client! t (lsp/request 5 "completionItem/resolve" item))
           (is (= (lsp/response 5 item) (from-proxy t))))))))
 
+(deftest following-hierarchies
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (when id
+                    [(lsp/response
+                      id
+                      (case [server-type method]
+                        ["ruby" "initialize"] {"capabilities" {"callHierarchyProvider" true
+                                                               "typeHierarchyProvider" true}}
+                        ["lint" "initialize"] {"capabilities" {}}
+                        (["ruby" "textDocument/prepareCallHierarchy"] ["ruby" "textDocument/prepareTypeHierarchy"])
+                        [{"name" "a" "uri" (get-in params ["textDocument" "uri"]) "data" {"n" 1}}]
+                        ["ruby" "callHierarchy/incomingCalls"]
+                        [{"from" (update (get params "item") "name" #(str "caller of " %)) "fromRanges" []}]
+                        ["ruby" "typeHierarchy/supertypes"]
+                        [(update (get params "item") "name" #(str "super of " %))]
+                        nil))]))
+        t (start :respond respond)
+        follow (fn [id method item]
+                 (client! t (lsp/request id method {"item" item}))
+                 (from-proxy t))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/prepareCallHierarchy" "api/a.rb"))
+    (let [[item] (get (from-proxy t) "result")
+          ruby (backend-id t ["ruby" "api"])]
+      (testing "marks prepared items with the backend that made them"
+        (is (= {"name" "a" "uri" (uri t "api/a.rb") "data" {"monorepo-lsp/backend" ruby "data" {"n" 1}}}
+               item)))
+      (testing "sends follow-ups to that backend, with the item as it made it"
+        (let [[call] (get (follow 2 "callHierarchy/incomingCalls" item) "result")]
+          (is (= {"name" "a" "uri" "file:///app/a.rb" "data" {"n" 1}}
+                 (get-in (received t ["ruby" "api"] "callHierarchy/incomingCalls") [0 "params" "item"])))
+          (is (= "caller of a" (get-in call ["from" "name"])))
+          (testing "and marks the items in their answers, so they can be followed further"
+            (is (= "caller of caller of a"
+                   (get-in (follow 3 "callHierarchy/incomingCalls" (get call "from")) ["result" 0 "from" "name"]))))))
+      (testing "follows type hierarchies the same way"
+        (client! t (request-about t 4 "textDocument/prepareTypeHierarchy" "api/a.rb"))
+        (let [[item] (get (from-proxy t) "result")
+              [super] (get (follow 5 "typeHierarchy/supertypes" item) "result")]
+          (is (= "super of super of a"
+                 (get-in (follow 6 "typeHierarchy/supertypes" super) ["result" 0 "name"])))))
+      (testing "answers with null for an item no running backend made"
+        (is (= (lsp/response 7 nil) (follow 7 "callHierarchy/outgoingCalls" (dissoc item "data"))))
+        (is (= (lsp/response 8 nil)
+               (follow 8 "callHierarchy/outgoingCalls"
+                       (assoc-in item ["data" "monorepo-lsp/backend"] "monorepo-lsp-gone"))))))))
+
 (deftest running-commands
   (let [respond (fn [[server-type] {:strs [id method params]}]
                   (case method
@@ -513,6 +613,29 @@ read = ['cat', '{read:file}']
     (testing "withdraws a backend's diagnostics once it stops"
       (stop-backend! t ["lint" "."])
       (is (= #{"ruby"} (messages (from-proxy t)))))))
+
+(deftest publishing-diagnostics-about-fetched-files
+  (let [gem (str (temp-dir) "/gems/rainbow.rb")
+        respond (fn [_ {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/notification "textDocument/publishDiagnostics"
+                                                              {"uri" (get-in params ["textDocument" "uri"])
+                                                               "diagnostics" [{"message" "m"
+                                                                               "relatedInformation" [{"location" {"uri" (str "file://" gem)}
+                                                                                                      "message" "defined here"}]}]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (io/make-parents gem)
+    (spit gem "module Rainbow; end\n")
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (let [published (from-proxy t)
+          cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+      (is (= (str "file://" cache gem)
+             (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
+      (is (= "module Rainbow; end\n" (slurp (str cache gem)))
+          "fetches the files that diagnostics refer to"))))
 
 (deftest pulling-diagnostics
   (let [respond (fn [[server-type] {:strs [id method]}]
