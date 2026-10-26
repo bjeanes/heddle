@@ -2,45 +2,33 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [heddle.backend :as backend]
-            [heddle.config :as config]
             [heddle.fake-backend :as fake :refer [eventually]]
             [heddle.log :as log]
             [heddle.lsp :as lsp])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 
-(def ^:private config
-  (config/parse "
-[servers.s]
-languages = ['x']
-
-[runners.cat]
-prepare = ['touch', 'prepared-{proxy:backend_id}']
-start = ['cat']
-
-[runners.hung]
-prepare = ['sleep', '30']
-start = ['cat']
-
-[runners.slow]
-prepare = ['sleep', '1']
-start = ['cat']
-
-[scopes.'.']
-s = { runner = 'host', command = 's', paths = { '.' = '/src' } }
-
-[scopes.lib]
-s = { runner = 'cat' }
-
-[scopes.hung]
-s = { runner = 'hung' }
-
-[scopes.slow]
-s = { runner = 'slow' }
-"))
-
 (defn- temp-dir []
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
+
+(defn- spec
+  "A spec for a server type s in the repo root, whose runner has `templates`
+  and runs them in `dir`."
+  ([] (spec "/r" {"start" ["s"]}))
+  ([dir templates]
+   {:slot ["s" "."]
+    :repo "/r"
+    :dir dir
+    :root "/src"
+    :paths {"." "/src"}
+    :cache "/cache"
+    :templates templates
+    :cfg {}}))
+
+(defn- prepares-with
+  "A spec for a backend in a new directory, which runs `prepare` then cat."
+  [prepare]
+  (spec (temp-dir) {"prepare" prepare "start" ["cat"]}))
 
 (defn- methods-received [received]
   (mapv #(get % "method") (get @received ["s" "."])))
@@ -50,11 +38,9 @@ s = { runner = 'slow' }
     (is (re-matches #"heddle-[0-9a-f]{8}" id))
     (is (not= id (backend/new-id)))))
 
-(deftest describing-a-backend
-  (let [b (backend/backend config "s" "." "/r" "/cache")]
-    (is (= {"." "/src"} (:paths b)))
-    (is (= "/src" (:root b)))
-    (is (re-matches #"/cache/heddle/r-[0-9a-f]{8}/s/%2E" (:cache b)))
+(deftest a-new-backend
+  (let [b (backend/backend (spec))]
+    (is (= (spec) (:spec b)))
     (is (= :starting (backend/status b)))))
 
 (deftest starting
@@ -64,12 +50,12 @@ s = { runner = 'slow' }
                   (when (= "initialize" (get msg "method"))
                     @answer-initialize
                     [(lsp/response (get msg "id") {"capabilities" {"hoverProvider" true}})]))
-        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
+        b (backend/start! (backend/backend (spec))
                           (fake/connector received respond)
                           {"rootUri" "file:///src"}
                           (fn [_]))]
-    (backend/when-ready b #(backend/notify! b "first" nil))
-    (backend/when-ready b #(backend/notify! b "second" nil))
+    (backend/when-settled b #(when % (backend/notify! b "first" nil)))
+    (backend/when-settled b #(when % (backend/notify! b "second" nil)))
     (testing "sends only initialize until it's answered"
       (is (eventually #(= ["initialize"] (methods-received received))))
       (is (= {"rootUri" "file:///src"} (get-in @received [["s" "."] 0 "params"])))
@@ -80,48 +66,44 @@ s = { runner = 'slow' }
       (is (backend/ready? b))
       (is (= {"hoverProvider" true} (backend/capabilities b))))
     (testing "sends straight away once it has started"
-      (backend/when-ready b #(backend/notify! b "third" nil))
+      (backend/when-settled b #(when % (backend/notify! b "third" nil)))
       (is (eventually #(= "third" (peek (methods-received received))))))))
 
 (deftest failing-to-start
   (let [received (atom {})
         respond (fn [_ msg]
                   [(lsp/error-response (get msg "id") -32603 "no Gemfile")])
-        b (backend/backend config "s" "." "/r" "/cache")
+        b (backend/backend (spec))
         ran (promise)]
-    (backend/when-ready b #(deliver ran (backend/status b)))
+    (backend/when-settled b #(deliver ran [% (backend/status b)]))
     (backend/start! b (fake/connector received respond) {} (fn [_]))
-    (is (= :failed (deref ran 2000 :timeout)) "queued functions still run")
+    (is (= [false :failed] (deref ran 2000 :timeout)) "queued functions still run")
     (is (= "initialize failed: no Gemfile" (:error @(:state b))))
     (is (= ["initialize"] (methods-received received)))))
 
 (deftest failing-to-answer-initialize-in-time
   (testing "kills it"
     (let [stopped (promise)
-          b (backend/backend config "s" "." "/r" "/cache" {:start-timeout-ms 100})
+          b (backend/backend (spec) {:start-timeout-ms 100})
           ran (promise)]
-      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
       (backend/start! b (fake/connector (atom {}) (constantly nil)) {} #(when (nil? %) (deliver stopped true)))
       (is (= :failed (deref ran 2000 :timeout)))
       (is (= "it didn't answer initialize within 100 ms" (backend/error b)))
       (is (= true (deref stopped 2000 :timeout)))))
   (testing "says how much of the time prepare took"
-    (let [repo (temp-dir)
-          b (backend/backend config "s" "slow" repo "/cache" {:start-timeout-ms 1200})
+    (let [b (backend/backend (prepares-with ["sleep" "1"]) {:start-timeout-ms 1200})
           ran (promise)]
-      (.mkdirs (io/file repo "slow"))
-      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
       (backend/start! b backend/connect-process {} (fn [_]))
       (is (= :failed (deref ran 5000 :timeout)))
       (is (re-matches #"it didn't answer initialize within 1200 ms, of which prepare took 1\d\d\d ms"
                       (backend/error b))))))
 
 (deftest failing-to-prepare-in-time
-  (let [repo (temp-dir)
-        b (backend/backend config "s" "hung" repo "/cache" {:start-timeout-ms 200})
+  (let [b (backend/backend (prepares-with ["sleep" "30"]) {:start-timeout-ms 200})
         ran (promise)]
-    (.mkdirs (io/file repo "hung"))
-    (backend/when-ready b #(deliver ran (backend/status b)))
+    (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
     (backend/start! b backend/connect-process {} (fn [_]))
     (is (= :failed (deref ran 5000 :timeout)) "prepare is killed rather than left to finish")
     (is (= "its prepare command [\"sleep\" \"30\"] didn't finish within 200 ms" (backend/error b)))))
@@ -133,7 +115,7 @@ s = { runner = 'slow' }
                     "initialize" [(lsp/response (get msg "id") {"capabilities" {}})]
                     "echo" [(lsp/response (get msg "id") (get msg "params"))]
                     nil))
-        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
+        b (backend/start! (backend/backend (spec))
                           (fake/connector (atom {}) respond)
                           {}
                           #(when (nil? %) (deliver stopped true)))]
@@ -166,7 +148,7 @@ s = { runner = 'slow' }
                     "initialize" [(lsp/response (get msg "id") {"capabilities" {}})]
                     "shutdown" [(lsp/response (get msg "id") nil) fake/hang-up]
                     nil))
-        b (backend/start! (backend/backend config "s" "." "/r" "/cache")
+        b (backend/start! (backend/backend (spec))
                           (fake/connector (atom {}) respond)
                           {}
                           #(when (nil? %) (deliver stopped true)))]
@@ -190,7 +172,7 @@ s = { runner = 'slow' }
                      :close (fn [])
                      :kill #(deliver killed true)
                      :wait (constantly nil)})
-          b (backend/start! (backend/backend config "s" "." "/r" "/cache") connect {} (fn [_]))]
+          b (backend/start! (backend/backend (spec)) connect {} (fn [_]))]
       (is (eventually #(backend/ready? b)))
       (let [previous-writer (log/set-writer! #(swap! logged conj %))]
         (try
@@ -200,26 +182,23 @@ s = { runner = 'slow' }
       (is (realized? killed))
       (is (= [(str "heddle: " (:backend-id b) " hasn't exited after 50 ms and is being killed")] @logged))))
   (testing "a real process is gone once it returns"
-    (let [b (backend/backend config "s" "." "/r" "/cache")
+    (let [b (backend/backend (spec))
           conn (backend/spawn ["sh" "-c" "trap '' TERM; sleep 30"] (temp-dir) (fn [_]))]
       (swap! (:state b) assoc :conn conn)
       (is (nil? (backend/exit! b 100)))
       (is (some? ((:wait conn) 0))))))
 
 (deftest a-real-process
-  (let [repo (temp-dir)
-        lib (io/file repo "lib")
-        messages (java.util.concurrent.LinkedBlockingQueue.)
-        b (backend/backend config "s" "lib" repo "/cache")]
-    (.mkdirs lib)
-    (let [conn (backend/connect-process b #(.put messages (or % :stopped)))]
-      (testing "runs prepare then start in the scope's directory"
-        (is (.exists (io/file lib (str "prepared-" (:backend-id b))))))
-      (testing "frames messages both ways"
-        ((:send conn) {"jsonrpc" "2.0" "method" "echo" "params" ["😀"]})
-        (is (= {"jsonrpc" "2.0" "method" "echo" "params" ["😀"]}
-               (.poll messages 2 java.util.concurrent.TimeUnit/SECONDS))))
-      (testing "stops once its input is closed"
-        ((:close conn))
-        (is (= :stopped (.poll messages 2 java.util.concurrent.TimeUnit/SECONDS)))
-        (is (= 0 ((:wait conn) 2000)))))))
+  (let [messages (java.util.concurrent.LinkedBlockingQueue.)
+        b (backend/backend (prepares-with ["touch" "prepared-{proxy:backend_id}"]))
+        conn (backend/connect-process b #(.put messages (or % :stopped)))]
+    (testing "runs prepare then start in the spec's directory"
+      (is (.exists (io/file (get-in b [:spec :dir]) (str "prepared-" (:backend-id b))))))
+    (testing "frames messages both ways"
+      ((:send conn) {"jsonrpc" "2.0" "method" "echo" "params" ["😀"]})
+      (is (= {"jsonrpc" "2.0" "method" "echo" "params" ["😀"]}
+             (.poll messages 2 java.util.concurrent.TimeUnit/SECONDS))))
+    (testing "stops once its input is closed"
+      ((:close conn))
+      (is (= :stopped (.poll messages 2 java.util.concurrent.TimeUnit/SECONDS)))
+      (is (= 0 ((:wait conn) 2000))))))

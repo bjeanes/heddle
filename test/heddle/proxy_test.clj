@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [heddle.backend :as backend]
             [heddle.fake-backend :as fake :refer [eventually]]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
@@ -28,6 +29,9 @@ ruby = { runner = 'local', command = 'ruby', paths = { 'api' = '/app' } }
 start = ['{cfg:command}']
 read = ['cat', '{read:file}']
 ")
+
+(def ^:private ruby-in-two-scopes
+  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
 
 (defn- temp-dir []
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
@@ -76,7 +80,7 @@ read = ['cat', '{read:file}']
   (str "file://" (:repo t) "/" path))
 
 (defn- backend-of
-  "The running backend `k`, a [server-type scope]."
+  "The live backend `k`, a [server-type scope]."
   [t k]
   (get-in @(:state (:proxy t)) [:registry :backends k :backend]))
 
@@ -390,7 +394,7 @@ read = ['cat', '{read:file}']
       (is (nothing-more? t)))))
 
 (defn- cache-of [t k]
-  (:cache (backend-of t k)))
+  (get-in (backend-of t k) [:spec :cache]))
 
 (deftest choosing-the-cache-root
   (testing "a path relative to the config's directory"
@@ -433,6 +437,15 @@ read = ['cat', '{read:file}']
 (defn- received [t k method]
   (filterv #(= method (get % "method")) (get @(:received t) k)))
 
+(defn- ready? [t k]
+  (some-> (backend-of t k) backend/ready?))
+
+(defn- wait-until-ready
+  "Waits until every live backend has started, since combined requests go
+  only to those that have."
+  [t]
+  (is (eventually #(every? (partial ready? t) (keys (get-in @(:state (:proxy t)) [:registry :backends]))))))
+
 (defn- request-about [t id method path]
   (lsp/request id method {"textDocument" {"uri" (uri t path)}
                           "position" {"line" 0 "character" 0}}))
@@ -458,7 +471,7 @@ read = ['cat', '{read:file}']
     (testing "go to the first backend that offers the feature, by name when priorities tie"
       (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
       (let [response (from-proxy t)
-            cache (:cache (backend-of t ["ruby" "api"]))]
+            cache (cache-of t ["ruby" "api"])]
         (testing "with the client's ID on the response, and paths translated both ways"
           (is (= "h" (get response "id")))
           (is (= (str "[Rainbow](file://" cache gem "#L1) for " (uri t "api/a.rb"))
@@ -542,6 +555,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (testing "from every backend for the file that offers the feature, in priority order"
       (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
       (let [{:strs [id result]} (from-proxy t)]
@@ -558,6 +572,61 @@ read = ['cat', '{read:file}']
       (client! t (request-about t 3 "textDocument/codeLens" "api/a.rb"))
       (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
 
+(defn- completing-once-started
+  "Fake backends that offer completion, answering with their server type. The
+  ruby backend answers initialize only once `started` is delivered."
+  [started]
+  (fn [[server-type] {:strs [id method]}]
+    (case method
+      "initialize" (do (when (= "ruby" server-type) @started)
+                       [(lsp/response id {"capabilities" {"completionProvider" {}}})])
+      "textDocument/completion" [(lsp/response id [{"label" server-type}])]
+      nil)))
+
+(defn- labels [completion-response]
+  (map #(get % "label") (get-in completion-response ["result" "items"])))
+
+(deftest combining-answers-in-order-with-changes
+  (let [started (promise)
+        t (start :respond (completing-once-started started))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(ready? t ["lint" "."])))
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (change! t "api/a.rb" 2 "x")
+    (is (eventually #(= ["textDocument/completion" "textDocument/didChange"]
+                        (take-last 2 (methods-received t ["lint" "."]))))
+        "reaches a ready backend before a change the client sends after it")
+    (deliver started true)))
+
+(deftest combining-answers-while-a-backend-starts
+  (let [started (promise)
+        t (start :respond (completing-once-started started))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(ready? t ["lint" "."])))
+    (testing "only from the backends that are ready, without waiting for the rest"
+      (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+      (is (= ["lint"] (labels (from-proxy t))))
+      (deliver started true)
+      (is (eventually #(ready? t ["ruby" "api"])))
+      (is (= [] (received t ["ruby" "api"] "textDocument/completion"))))
+    (testing "and from a backend that has started since, from the next request on"
+      (client! t (request-about t 2 "textDocument/completion" "api/a.rb"))
+      (is (= ["lint" "ruby"] (labels (from-proxy t)))))))
+
+(deftest combining-answers-while-every-backend-starts
+  (let [started (promise)
+        t (start :respond (completing-once-started started) :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (testing "waits for them to start"
+      (is (nothing-more? t)))
+    (testing "then answers"
+      (deliver started true)
+      (is (= ["ruby"] (labels (from-proxy t)))))))
+
 (defn- backend-id [t k]
   (:backend-id (backend-of t k)))
 
@@ -572,6 +641,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
     (let [items (into {} (for [item (get-in (from-proxy t) ["result" "items"])]
                            [(get item "label") item]))]
@@ -610,6 +680,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
     (let [lint (first (filter #(= "lint" (get % "label")) (get-in (from-proxy t) ["result" "items"])))]
       (client! t (lsp/request 2 "completionItem/resolve" lint))
@@ -659,7 +730,7 @@ read = ['cat', '{read:file}']
               [super] (get (follow 5 "typeHierarchy/supertypes" item) "result")]
           (is (= "super of super of a"
                  (get-in (follow 6 "typeHierarchy/supertypes" super) ["result" 0 "name"])))))
-      (testing "answers with null for an item no running backend made"
+      (testing "answers with null for an item no ready backend made"
         (is (= (lsp/response 7 nil) (follow 7 "callHierarchy/outgoingCalls" (dissoc item "data"))))
         (is (= (lsp/response 8 nil)
                (follow 8 "callHierarchy/outgoingCalls"
@@ -698,9 +769,7 @@ read = ['cat', '{read:file}']
                     "initialize" [(lsp/response id {"capabilities" {}})]
                     "workspace/executeCommand" [(lsp/response id scope)]
                     nil))
-        t (start :respond respond
-                 :server-types #{"ruby"}
-                 :config (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
         execute (fn [id & arguments]
                   (client! t (lsp/request id "workspace/executeCommand" {"command" "ruby:x" "arguments" (vec arguments)}))
                   (get (from-proxy t) "result"))]
@@ -713,6 +782,33 @@ read = ['cat', '{read:file}']
       (is (= "." (execute 2 {"uri" (uri t "b.rb")}))))
     (testing "or else to the first by scope"
       (is (= "." (execute 3))))))
+
+(deftest running-commands-that-one-scope-offers
+  (let [respond (fn [[_ scope] {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" (if (= "api" scope)
+                                                                      {"executeCommandProvider" {"commands" ["fix"]}}
+                                                                      {})})]
+                    "textDocument/didOpen" (when (= "." scope)
+                                             [(lsp/request 1 "client/registerCapability"
+                                                           {"registrations" [{"id" "commands" "method" "workspace/executeCommand"
+                                                                              "registerOptions" {"commands" ["foo"]}}]})])
+                    "workspace/executeCommand" [(lsp/response id scope)]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
+        execute (fn [id command & arguments]
+                  (client! t (lsp/request id "workspace/executeCommand" {"command" command "arguments" (vec arguments)}))
+                  (get (from-proxy t) "result"))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (open! t "b.rb" "ruby")
+    (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+    (is (eventually #(some #{(lsp/response 1 nil)} (get @(:received t) ["ruby" "."]))))
+    (testing "go to the backend that announced the command, whichever file the arguments name"
+      (is (= "api" (execute 1 "ruby:fix" {"uri" (uri t "b.rb")})))
+      (is (= "api" (execute 2 "ruby:fix"))))
+    (testing "or to the backend that registered it"
+      (is (= "." (execute 3 "ruby:foo" {"uri" (uri t "api/a.rb")}))))))
 
 (defn- stop-backend! [t k]
   ((get-in @(:state (backend-of t k)) [:conn :close])))
@@ -754,7 +850,7 @@ read = ['cat', '{read:file}']
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
     (let [published (from-proxy t)
-          cache (:cache (backend-of t ["ruby" "api"]))]
+          cache (cache-of t ["ruby" "api"])]
       (is (= (str "file://" cache gem)
              (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
       (is (= "module Rainbow; end\n" (slurp (str cache gem)))
@@ -770,6 +866,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (lsp/request 1 "textDocument/diagnostic" {"textDocument" {"uri" (uri t "api/a.rb")}}))
     (is (= (lsp/response 1 {"kind" "full" "items" [{"message" "lint"} {"message" "ruby"}]})
            (from-proxy t)))))
@@ -787,9 +884,10 @@ read = ['cat', '{read:file}']
     (testing "answers with nothing before any backend has started"
       (is (= (lsp/response 1 nil) (from-proxy t))))
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (lsp/request 2 "workspace/symbol" {"query" "x"}))
     (let [symbols (get (from-proxy t) "result")]
-      (testing "combines every running backend's symbols"
+      (testing "combines every live backend's symbols"
         (is (= ["lint" "ruby"] (map #(get % "name") symbols))))
       (testing "resolves a symbol with the backend that found it"
         (client! t (lsp/request 3 "workspaceSymbol/resolve" (second symbols)))
@@ -800,7 +898,7 @@ read = ['cat', '{read:file}']
         received-params (fn [k method] (mapv #(get % "params") (received t k method)))]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (testing "configuration changes go to every running backend"
+    (testing "configuration changes go to every live backend"
       (client! t (lsp/notification "workspace/didChangeConfiguration" {"settings" {}}))
       (is (eventually #(= [{"settings" {}}] (received-params ["ruby" "api"] "workspace/didChangeConfiguration"))))
       (is (eventually #(= [{"settings" {}}] (received-params ["lint" "."] "workspace/didChangeConfiguration")))))
@@ -947,6 +1045,138 @@ read = ['cat', '{read:file}']
               (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
         "are limited to the backend's files")))
 
+(defn- registered-methods
+  "The methods of the registrations in the client/registerCapability `msg`."
+  [msg]
+  (map #(get % "method") (get-in msg ["params" "registrations"])))
+
+(deftest withdrawing-registrations-when-a-backend-stops
+  (let [watch {"id" "watch" "method" "workspace/didChangeWatchedFiles"}
+        respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"hoverProvider" true}})]
+                    "textDocument/didOpen" [(lsp/request 1 "client/registerCapability" {"registrations" [watch]})]
+                    "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [watch]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
+        root-files {"language" "ruby" "pattern" {"baseUri" (str "file://" (:repo t)) "pattern" "**/*"}}
+        api-files {"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}
+        hover-selector (fn [msgs]
+                         (some #(when (= ["textDocument/hover"] (registered-methods %))
+                                  (get-in % ["params" "registrations" 0 "registerOptions" "documentSelector"]))
+                               msgs))
+        unregistered (fn [msg]
+                       (is (= "client/unregisterCapability" (get msg "method")))
+                       (get-in msg ["params" "unregisterations"]))]
+    (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (= #{["textDocument/hover"] ["workspace/didChangeWatchedFiles"]}
+           (set (map registered-methods [(from-proxy t) (from-proxy t)]))))
+    (open! t "b.rb" "ruby")
+    (let [msgs [(from-proxy t) (from-proxy t) (from-proxy t)]]
+      (is (= [[{"id" "textDocument/hover" "method" "textDocument/hover"}]]
+             (keep #(get-in % ["params" "unregisterations"]) msgs)))
+      (is (some #{root-files} (hover-selector msgs))))
+    (testing "a backend that stops has what it registered itself withdrawn"
+      (let [qualified-watch (update watch "id" #(str (backend-id t ["ruby" "."]) "/" %))]
+        (stop-backend! t ["ruby" "."])
+        (is (= [qualified-watch] (unregistered (from-proxy t))))))
+    (testing "and the proxy's registrations are registered again without it"
+      (is (= [{"id" "textDocument/hover" "method" "textDocument/hover"}] (unregistered (from-proxy t))))
+      (let [selector (hover-selector [(from-proxy t)])]
+        (is (some #{api-files} selector))
+        (is (not-any? #{root-files} selector))))
+    (is (= 2 (get-in (from-proxy t) ["params" "type"])) "before telling the user")
+    (testing "a backend that unregisters what it registered has nothing left to withdraw"
+      (change! t "api/a.rb" 2 "")
+      (is (= 1 (count (unregistered (from-proxy t)))))
+      (stop-backend! t ["ruby" "api"])
+      (testing "while the proxy's registration of a feature no backend offers any more is withdrawn"
+        (is (= [{"id" "textDocument/hover" "method" "textDocument/hover"}] (unregistered (from-proxy t)))))
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))))
+
+(defn- registers-commands
+  "Fake backends that register `commands` themselves once a file opens, and
+  unregister them once it changes."
+  [commands]
+  (let [registration {"id" "commands" "method" "workspace/executeCommand"}]
+    (fn [_ {:strs [id method]}]
+      (case method
+        "initialize" [(lsp/response id {"capabilities" {"executeCommandProvider" {"commands" ["fix"]}}})]
+        "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
+                                             {"registrations" [(assoc registration "registerOptions" {"commands" commands})]})]
+        "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [registration]})]
+        nil))))
+
+(defn- answered? [t k id]
+  (eventually #(some #{(lsp/response id nil)} (get @(:received t) k))))
+
+(deftest merging-commands-that-backends-register
+  (let [t (start :respond (registers-commands ["foo"]) :server-types #{"ruby"} :config ruby-in-two-scopes)
+        commands-registration (fn [commands]
+                                {"registrations" [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"
+                                                   "registerOptions" {"commands" commands}}]})
+        unregistered {"unregisterations" [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"}]}]
+    (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (= (commands-registration ["ruby:fix"]) (get (from-proxy t) "params")))
+    (testing "into the proxy's own registration, answering the backend"
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix" "ruby:foo"]) (get (from-proxy t) "params")))
+      (is (answered? t ["ruby" "api"] 1)))
+    (testing "leaving out those the backend unregisters"
+      (change! t "api/a.rb" 2 "")
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix"]) (get (from-proxy t) "params")))
+      (is (answered? t ["ruby" "api"] 2))
+      (open! t "api/b.rb" "ruby")
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix" "ruby:foo"]) (get (from-proxy t) "params"))))
+    (testing "so the client sees a command once, however many backends register it"
+      (open! t "b.rb" "ruby")
+      (is (answered? t ["ruby" "."] 1))
+      (is (nothing-more? t)))
+    (testing "and keeps it while any backend that registered it is running"
+      (stop-backend! t ["ruby" "."])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))
+    (testing "until the last one stops"
+      (stop-backend! t ["ruby" "api"])
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))))
+
+(deftest merging-commands-that-backends-register-after-announcing-commands
+  (let [t (start :respond (registers-commands ["fix" "foo"]) :eager true)]
+    (is (= {"commands" ["lint:fix" "ruby:fix"]}
+           (get (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}}) "executeCommandProvider")))
+    (open! t "Gemfile" "plaintext")
+    (is (= [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"
+             "registerOptions" {"commands" ["lint:foo"]}}]
+           (get-in (from-proxy t) ["params" "registrations"]))
+        "registers only the commands the answer to initialize didn't list")
+    (is (nothing-more? t))))
+
+(deftest passing-on-the-rest-of-a-request-that-registers-commands
+  (let [respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
+                                                         {"registrations" [{"id" "commands" "method" "workspace/executeCommand"
+                                                                            "registerOptions" {"commands" ["foo"]}}
+                                                                           {"id" "watch" "method" "workspace/didChangeWatchedFiles"}]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (let [merged (from-proxy t)
+          passed (from-proxy t)]
+      (is (= [["workspace/executeCommand"] ["workspace/didChangeWatchedFiles"]]
+             (map registered-methods [merged passed])))
+      (client! t (lsp/response (get passed "id") nil))
+      (is (answered? t ["ruby" "api"] 1) "with the client's answer to the backend"))))
+
 (deftest cancelling-a-request
   (let [respond (fn [_ {:strs [id method]}]
                   (when (= "initialize" method)
@@ -993,10 +1223,40 @@ read = ['cat', '{read:file}']
       (deliver answer true)
       (is (= (lsp/response 9 nil) (from-proxy t))))))
 
+(deftest shutting-down-a-backend-that-never-answers
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {}})]))
+        t (start :respond respond :server-types #{"ruby"})
+        ;; each reading of the clock is the whole shutdown timeout later
+        t (update t :proxy assoc :clock #(swap! (:now t) + 10000))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 9 "shutdown" nil))
+    (is (= (lsp/response 9 nil) (from-proxy t)) "answers once the proxy's clock passes the deadline")))
+
 (deftest exiting-without-shutting-down
   (let [t (start)]
     (client! t (lsp/notification "exit" nil))
     (is (= 1 (deref (:exit-code t) 2000 :timeout)))))
+
+(deftest exiting-when-stopping-a-backend-fails
+  (let [logged (atom [])
+        previous-writer (log/set-writer! #(swap! logged conj %))
+        t (start :server-types #{"ruby"})
+        connect (:connect (:proxy t))
+        t (update t :proxy assoc :connect
+                  (fn [b on-message]
+                    (assoc (connect b on-message) :wait (fn [_] (throw (ex-info "can't wait" {}))))))]
+    (try
+      (initialize! t {})
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+      (client! t (lsp/notification "exit" nil))
+      (is (= 1 (deref (:exit-code t) 2000 :timeout)))
+      (is (some #(str/includes? % "can't wait") @logged))
+      (finally
+        (log/set-writer! previous-writer)))))
 
 (defn- start-ruby!
   "Initializes the proxy `t` and opens a file that only ruby in api handles."

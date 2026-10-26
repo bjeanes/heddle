@@ -4,6 +4,8 @@
             [heddle.capabilities-test]
             [heddle.channel-test]
             [heddle.config-test]
+            [heddle.diagnostics-test]
+            [heddle.documents-test]
             [heddle.fetched-test]
             [heddle.glob-test]
             [heddle.json-test]
@@ -19,8 +21,11 @@
             [heddle.process-test]
             [heddle.proxy-test]
             [heddle.readme-test]
+            [heddle.registry-test]
             [heddle.requests-test]
+            [heddle.routing-test]
             [heddle.runner-test]
+            [heddle.spec-test]
             [heddle.starter-test]
             [heddle.translate-test]))
 

@@ -3,32 +3,13 @@
   DESIGN.md."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [heddle.config :as config]
+            [heddle.log :as log]
             [heddle.paths :as paths]
-            [heddle.process :as process])
+            [heddle.process :as process]
+            [heddle.spec :as spec]
+            [heddle.translate :as translate])
   (:import (java.io File)
-           (java.net URLEncoder)
-           (java.util UUID)
-           (java.util.zip CRC32)))
-
-(defn- repo-key
-  "The repo's directory name and a hash of its path, which tells apart repos
-  with the same name."
-  [repo]
-  (let [file (.getAbsoluteFile (io/file repo))
-        crc (CRC32.)]
-    (.update crc (.getBytes (str file) "UTF-8"))
-    (str (.getName file) "-" (format "%08x" (.getValue crc)))))
-
-(defn- segment
-  "`s` percent-encoded as one path segment. Since `.` and `..` can't name a
-  directory of their own, their dots are encoded too, which URLEncoder doesn't
-  do. The root scope `.` becomes `%2E`."
-  [s]
-  (let [encoded (URLEncoder/encode ^String s "UTF-8")]
-    (if (re-matches #"\.+" encoded)
-      (str/replace encoded "." "%2E")
-      encoded)))
+           (java.util UUID)))
 
 (defn- unusable
   "Why `value`, read from an environment variable, can't be the cache root, or
@@ -73,14 +54,6 @@
 
       :else {:root tmpdir})))
 
-(defn cache-dir
-  "The directory under the cache's `root` holding fetched files for
-  `server-type` in `scope`, as a client path. Every backend for them uses the
-  same one, in any process."
-  [root repo server-type scope]
-  (str (str/replace root #"/+$" "")
-       "/heddle/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
-
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only
   created or replaced if the command succeeds within `timeout-ms`. Returns nil,
@@ -109,25 +82,23 @@
         (.delete part)))))
 
 (defn- fetch-one!
-  "Copies `file` into the backend's cache and records it as fetched. Returns
+  "Copies `file` into the backend's cache and records it as refreshed. Returns
   nil, or why it couldn't."
-  [{:keys [config server-type scope repo cache fetched read-timeout-ms] :as backend} file]
-  (let [command (config/command config server-type scope "read"
-                                (assoc (select-keys backend [:repo :backend-id]) :file file))
+  [{:keys! [spec backend-id refreshed read-timeout-ms]} file]
+  (let [{:keys! [dir cache]} spec
+        command (spec/command spec "read" {:backend-id backend-id :file file})
         problem (if command
-                  (read-into command (paths/client-path repo scope) (io/file (str cache file))
-                             read-timeout-ms)
+                  (read-into command dir (io/file (str cache file)) read-timeout-ms)
                   "the runner has no read template")]
     (when-not problem
-      (swap! fetched conj file))
+      (swap! refreshed conj file))
     problem))
 
 (defn fetch!
   "Copies each of `files`, as server paths, into the backend's cache unless the
-  backend has copied it already. `backend` has the :config, :server-type and
-  :scope it was started for, the repo root as a client path under :repo, its
-  :backend-id, its :cache directory, the set of files it has :fetched in an
-  atom, and how long each `read` may take in :read-timeout-ms.
+  backend has copied it already. `backend` has its :spec (see heddle.spec), its
+  :backend-id, an atom of the set of files it has copied under :refreshed, and
+  how long each `read` may take in :read-timeout-ms.
 
   Since the cache outlives the backend, a copy left by an earlier one is
   replaced in case the file has changed. If it can't be replaced, it stays as
@@ -135,10 +106,20 @@
 
   The runner's `read` command runs in the scope's directory, as `start` does.
   Returns a map of each file that couldn't be copied to why."
-  [{:keys [fetched] :as backend} files]
+  [{:keys [refreshed] :as backend} files]
   (into {}
         (for [file files
-              :when (not (contains? @fetched file))
+              :when (not (contains? @refreshed file))
               :let [problem (fetch-one! backend file)]
               :when problem]
           [file problem])))
+
+(defn to-client!
+  "Translates the payload `v` from the backend `b` for the client, after
+  fetching any files it refers to that only the backend can see. If a file
+  can't be fetched, it is logged. The payload still refers to its copy in the
+  cache."
+  [{:keys! [spec backend-id] :as b} v]
+  (doseq [[file problem] (fetch! b (translate/fetched-files spec v))]
+    (log/info "couldn't fetch" file "from" backend-id "-" problem))
+  (translate/to-client spec v))

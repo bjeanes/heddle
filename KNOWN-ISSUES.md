@@ -28,6 +28,11 @@ them, under "Pinned for later".
   about folders added to the workspace.
 - **No formatters.** Formatters that aren't language servers, such as
   Prettier, can't be run through the proxy yet.
+- **A server may answer with nothing until it has indexed.** Some servers,
+  such as ruby-lsp, answer hover and definition with an empty result while
+  they index after starting. The proxy passes that answer on, since it can't
+  tell "not ready yet" from "nothing to say". Your editor shows the server's
+  indexing progress. Once that finishes, try again.
 - **Paths in some unusual forms aren't translated.** A `file://` URI whose path
   contains an unencoded `(` or `'` is cut short there. A bare path containing a
   space isn't translated at all.
@@ -38,6 +43,10 @@ them, under "Pinned for later".
   Until then, workspace symbol search and references don't cover it, and
   clients that only use what a server announces at startup won't use its
   features. `--eager` starts every server; there's no way to choose some.
+- **While a server starts, combined answers leave it out.** Completion, code
+  actions, references and the like come only from the servers that have
+  started, unless none has. A server whose `prepare` pulls an image can take a
+  couple of minutes. Ask again once it has started to include its results.
 - **A server that failed starts again only when you open one of its files**,
   and no sooner than 30 s after it failed.
 - **With `--eager`, a server that takes longer than 30 s can't add to what was
@@ -46,6 +55,10 @@ them, under "Pinned for later".
   legend.
 - **Containers started by a runner's `prepare` keep running.** There's no
   teardown step yet, so you'll need to stop them yourself.
+- **A server still running its `prepare` command when the proxy exits isn't
+  stopped.** The proxy tells servers to exit over their connection. This one
+  has none yet. Whatever `prepare` was starting keeps going. A `stop`
+  template, pinned in [DESIGN.md](DESIGN.md), would cover this too.
 - **The config is read once.** After editing it, restart the proxy (or your
   editor's client).
 

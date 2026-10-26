@@ -2,9 +2,9 @@
   "Translates whole LSP payloads between client and server paths, for one
   backend. See \"Paths\" under \"Routing messages\" in DESIGN.md.
 
-  A backend's context has the repo root as a client path under :repo, its boot
-  config's `paths` under :paths, and the directory holding its fetched files
-  under :cache."
+  The context for a backend is its spec (see heddle.spec), which has the repo
+  root as a client path under :repo, its `paths` under :paths, and the
+  directory holding its fetched files under :cache."
   (:require [clojure.string :as str]
             [heddle.paths :as paths])
   (:import (java.net URLDecoder)))
@@ -75,14 +75,14 @@
 
 (defn to-server
   "Translates every client path in the payload `v` for the backend `ctx`."
-  [{:keys [repo paths] :as ctx} v]
+  [{:keys! [repo paths & :cache] :as ctx} v]
   (walk #(rewrite % (partial uri-to-server ctx) (partial paths/to-server paths repo)) v))
 
 (defn to-client
   "Translates every server path in the payload `v` from the backend `ctx`.
   Fetched files in URIs become their copies in the cache, which
   `fetched-files` lists."
-  [{:keys [repo paths] :as ctx} v]
+  [{:keys! [repo paths & :cache] :as ctx} v]
   (walk #(rewrite % (partial uri-to-client ctx) (partial paths/to-client paths repo)) v))
 
 (defn fetched-files

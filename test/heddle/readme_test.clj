@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
-            [heddle.runner :as runner]))
+            [heddle.runner :as runner]
+            [heddle.spec :as spec]))
 
 (def ^:private readme (slurp "README.md"))
 
@@ -20,19 +21,20 @@
 (deftest built-in-runners-match-resource
   (is (= runner/builtin-toml (toml-after "resources/heddle/runners.toml"))))
 
-(def ^:private runtime {:repo "/r" :backend-id "heddle-1"})
+(defn- command [config scope template]
+  (spec/command (spec/spec config ["ruby-lsp" scope] "/r" "/cache") template {:backend-id "heddle-1"}))
 
 (deftest full-config-parses
   (let [c (config/parse (toml-after "example: full config"))]
     (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "services/api" "start" runtime)))))
+           (command c "services/api" "start")))))
 
 (deftest custom-runner-parses
   (let [c (config/parse (str (toml-after "example: full config") "\n"
                              (toml-after "example: custom runner")))]
     (is (= ["docker" "run" "--rm" "--detach" "--name" "heddle-1"
             "--volume" "/r:/src" "ruby:3.3" "sleep" "infinity"]
-           (config/command c "ruby-lsp" "tools/cli" "prepare" runtime)))
+           (command c "tools/cli" "prepare")))
     (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "heddle-1"
             "bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "tools/cli" "start" runtime)))))
+           (command c "tools/cli" "start")))))

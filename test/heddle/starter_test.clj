@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
+            [heddle.spec :as spec]
             [heddle.starter :as starter]))
 
 (defn- uncomment-examples [paragraph]
@@ -23,22 +24,23 @@
     (is (= {} (get c "scopes")))
     (is (= [] (config/warnings c)))))
 
-(def ^:private runtime {:repo "/r" :backend-id "heddle-1"})
+(defn- command [config scope template]
+  (spec/command (spec/spec config ["ts-ls" scope] "/r" "/cache") template {:backend-id "heddle-1"}))
 
 (deftest every-example-loads-once-uncommented
   (let [c (config/parse (uncomment))]
     (is (= [] (config/warnings c)))
     (is (= {"xdg" true} (get c "cache")))
     (is (= ["typescript-language-server" "--stdio"]
-           (config/command c "ts-ls" "." "start" runtime)))
+           (command c "." "start")))
     (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "web" "typescript-language-server" "--stdio"]
-           (config/command c "ts-ls" "apps/web" "start" runtime)))
+           (command c "apps/web" "start")))
     (is (= ["docker" "run" "--rm" "--detach" "--name" "heddle-1" "--volume" "/r:/src"
             "my-app-dev" "sleep" "infinity"]
-           (config/command c "ts-ls" "tools/cli" "prepare" runtime)))
+           (command c "tools/cli" "prepare")))
     (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "heddle-1"
             "typescript-language-server" "--stdio"]
-           (config/command c "ts-ls" "tools/cli" "start" runtime)))))
+           (command c "tools/cli" "start")))))
 
 (deftest each-scope-loads-with-only-the-server-type
   (doseq [[scope header] {"." "# [scopes.\".\"]"

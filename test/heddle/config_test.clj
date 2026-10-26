@@ -80,15 +80,6 @@ boot = { runner = 'host', command = 's' }
       (is (= "abcdef" (config/scope-for c "s" "abcdef/h")))
       (is (= "." (config/scope-for c "s" "z"))))))
 
-(deftest boot-configs
-  (is (= {"command" ["bundle" "exec" "ruby-lsp"]
-          "runner" "compose"
-          "service" "api"
-          "paths" {"services/api" "/app"}}
-         (config/boot-config design "ruby-lsp" "services/api")))
-  (is (= ["ruby-lsp"] (get (config/boot-config design "ruby-lsp" "services/legacy") "command"))
-      "a scope's value replaces the server type's"))
-
 (deftest read-config
   (is (map? design))
   (is (nil? (config/read-config "test/heddle")) "no config"))
@@ -226,47 +217,3 @@ runner = 'host'
   (testing "as one message"
     (is (= "unused values in here.toml:\n  a\n  b"
            (config/warnings-message "here.toml" ["a" "b"])))))
-
-(def ^:private runtime {:repo "/r" :backend-id "heddle-1"})
-
-(deftest commands
-  (testing "the example in DESIGN.md"
-    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]
-           (config/command design "ruby-lsp" "services/api" "start" runtime)))
-    (is (= ["docker" "compose" "exec" "-T" "api" "cat" "/usr/lib/ruby/x.rb"]
-           (config/command design "ruby-lsp" "services/api" "read" (assoc runtime :file "/usr/lib/ruby/x.rb"))))
-    (is (nil? (config/command design "ruby-lsp" "services/api" "prepare" runtime)))
-    (is (= ["ruby-lsp"] (config/command design "ruby-lsp" "services/legacy" "start" runtime)))
-    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/src" "lints" "rubocop" "--lsp"]
-           (config/command design "rubocop" "." "start" runtime)))
-    (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--volume" "/r:/src"
-            "--workdir" "/src/services/web" "web-tools" "typescript-language-server" "--stdio"]
-           (config/command design "typescript" "services/web" "start" runtime))))
-  (testing "a project's runner replaces a built-in of the same name"
-    (let [c (config/parse "
-[servers.s]
-languages = ['x']
-
-[runners.host]
-start = ['env', '{cfg:command}']
-
-[scopes.'.']
-s = { runner = 'host', command = 's' }
-")]
-      (is (= ["env" "s"] (config/command c "s" "." "start" runtime)))
-      (is (contains? (get c "runners") "compose") "the other built-ins remain")))
-  (testing "a runner's defaults fill in values the boot config leaves out"
-    (let [c (config/parse "
-[servers.s]
-languages = ['x']
-
-[scopes.a]
-s = { runner = 'docker-run', image = 'i', command = 's' }
-")]
-      (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--workdir" "/r/a" "i" "s"]
-             (config/command c "s" "a" "start" runtime))))))
-
-(deftest server-scopes
-  (is (= "/app" (config/server-scope design "ruby-lsp" "services/api" "/r")))
-  (is (= "/r/services/legacy" (config/server-scope design "ruby-lsp" "services/legacy" "/r")))
-  (is (= "/src" (config/server-scope design "rubocop" "." "/r"))))

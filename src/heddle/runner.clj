@@ -3,8 +3,7 @@
   DESIGN.md."
   (:require [clj-toml.core :as toml]
             [clojure.java.io :as io]
-            [clojure.string :as str]
-            [heddle.paths :as paths]))
+            [clojure.string :as str]))
 
 (defmacro ^:private inline-resource
   "`jolt build` doesn't bundle resources into the binary, so this reads the
@@ -28,7 +27,7 @@
 
 (def uncovered-scope "paths don't cover the scope's directory")
 
-(defn- string-list? [v]
+(defn string-list? [v]
   (and (vector? v) (every? string? v)))
 
 (defn- placeholder-error
@@ -140,16 +139,20 @@
             :else v))
     [(fill ctx element errors)]))
 
+(defn cfg
+  "The values for `{cfg:…}` placeholders: the runner's defaults with the boot
+  config's values over the top."
+  [runner boot]
+  (merge (get runner "defaults") (cfg-values boot)))
+
 (defn context
-  "What a runner's templates can draw on, for a boot config in the scope at the
-  repo-relative `scope`. `runtime` has the client path of the repo root under
-  :repo, and the :backend-id and :file (for `read`) where known."
-  [runner boot scope runtime]
-  (let [client-scope (paths/client-path (:repo runtime) scope)]
-    (assoc runtime
-           :cfg (merge (get runner "defaults") (cfg-values boot))
-           :client-scope client-scope
-           :server-scope (paths/to-server (get boot "paths") (:repo runtime) client-scope))))
+  "What a runner's templates can draw on. `cfg` is from `cfg`. `scope` has the
+  client paths of the :repo root and the scope's :dir, and under :root the
+  scope's directory as the server sees it, or nil if the boot config's `paths`
+  don't cover it. `runtime` has the :backend-id and the :file (for `read`)
+  where known."
+  [cfg {:keys [repo dir root]} runtime]
+  (assoc runtime :cfg cfg :repo repo :client-scope dir :server-scope root))
 
 (defn expand*
   "Expands the template named `template` in `ctx` from `context`. Returns

@@ -10,17 +10,22 @@
   backend sends, then with nil once it stops. `connect-process` is the real
   connector. Tests use fake backends in the same process instead."
   (:require [clojure.java.io :as io]
-            [heddle.config :as config]
-            [heddle.fetched :as fetched]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
-            [heddle.paths :as paths]
             [heddle.process :as process]
-            [heddle.requests :as requests])
+            [heddle.requests :as requests]
+            [heddle.spec :as spec])
   (:import (java.io BufferedInputStream InputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.util UUID)
            (java.util.concurrent TimeUnit)))
+
+(def default-timeouts
+  {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
+   :read-timeout-ms 10000}) ; for each `read` of a fetched file
+
+(def exit-code-wait-ms 1000) ; for a backend that has stopped to give its exit code
+(def ^:private slow-prepare-ms 1000) ; long enough to mention when initialize times out
 
 (defn new-id
   "A backend ID, which is the project's name and a random suffix. It only uses
@@ -78,38 +83,36 @@
   one, then its `start` command. Both run in the scope's directory. Since
   connecting is the first part of starting, `prepare` has the whole of the
   backend's :start-timeout-ms."
-  [{:keys [config server-type scope repo backend-id start-timeout-ms]} on-message]
-  (let [runtime {:repo repo :backend-id backend-id}
-        dir (paths/client-path repo scope)]
-    (when-let [command (config/command config server-type scope "prepare" runtime)]
+  [{:keys! [spec backend-id start-timeout-ms]} on-message]
+  (let [{:keys! [dir]} spec
+        runtime {:backend-id backend-id}]
+    (when-let [command (spec/command spec "prepare" runtime)]
       (prepare! command dir start-timeout-ms))
-    (spawn (config/command config server-type scope "start" runtime) dir on-message)))
-
-(def default-timeouts
-  {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
-   :read-timeout-ms 10000}) ; for each `read` of a fetched file
+    (spawn (spec/command spec "start" runtime) dir on-message)))
 
 (defn backend
-  "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path. `cache-root` is where fetched files are cached.
-  `timeouts` overrides any of `default-timeouts`. The backend can be used as a
-  context for heddle.translate, and with heddle.fetched."
-  ([config server-type scope repo cache-root]
-   (backend config server-type scope repo cache-root {}))
-  ([config server-type scope repo cache-root timeouts]
+  "A backend for the `spec` (see heddle.spec), not yet started. `timeouts`
+  overrides any of `default-timeouts`."
+  ([spec] (backend spec {}))
+  ([spec timeouts]
    (merge default-timeouts
           timeouts
-          {:config config
-           :server-type server-type
-           :scope scope
-           :repo repo
+          {:spec spec
            :backend-id (new-id)
-           :paths (get (config/boot-config config server-type scope) "paths")
-           :cache (fetched/cache-dir cache-root repo server-type scope)
-           :fetched (atom #{})
-           :root (config/server-scope config server-type scope repo)
-           :state (atom {:status :starting :queue []})
-           :requests (atom requests/empty-table)})))
+           :refreshed (atom #{})
+           ;; :stopped once the connection has closed, whatever the :status
+           :state (atom {:status :starting
+                         :queue []
+                         :requests requests/empty-table
+                         :stopped false})})))
+
+(defn slot
+  "The [server-type scope] that the backend was started for."
+  [backend]
+  (get-in backend [:spec :slot]))
+
+(defn server-type [backend]
+  (first (slot backend)))
 
 (defn status
   "One of :starting, :ready, :failed or :exited."
@@ -154,9 +157,9 @@
   ([backend method params on-response]
    (request! backend method params nil on-response))
   ([backend method params tag on-response]
-   (let [{:keys [last-id stopped]}
-         (swap! (:requests backend)
-                #(cond-> % (not (:stopped %)) (requests/add tag on-response)))]
+   (let [{:keys [stopped] {:keys [last-id]} :requests}
+         (swap! (:state backend)
+                #(cond-> % (not (:stopped %)) (update :requests requests/add tag on-response)))]
      (if stopped
        (on-response nil)
        (send! backend (lsp/request last-id method params)))
@@ -165,16 +168,17 @@
 (defn tagged-request
   "The ID of the open request tagged with `tag`, or nil if there isn't one."
   [backend tag]
-  (first (requests/tagged @(:requests backend) tag)))
+  (first (requests/tagged (:requests @(:state backend)) tag)))
 
 (defn- take-callback! [backend id]
-  (let [[old] (swap-vals! (:requests backend) requests/answered id)]
-    (requests/on-response old id)))
+  (let [[old] (swap-vals! (:state backend) update :requests requests/answered id)]
+    (requests/on-response (:requests old) id)))
 
 (defn- stopped! [backend]
-  (swap! (:state backend) #(cond-> % (= :ready (:status %)) (assoc :status :exited)))
-  (let [[old] (swap-vals! (:requests backend) assoc :stopped true :open {})]
-    (doseq [{:keys [on-response]} (vals (:open old))]
+  (let [[old] (swap-vals! (:state backend)
+                          #(cond-> (-> % (assoc :stopped true) (assoc-in [:requests :open] {}))
+                             (= :ready (:status %)) (assoc :status :exited)))]
+    (doseq [{:keys [on-response]} (vals (get-in old [:requests :open]))]
       (on-response nil))))
 
 (defn- receive [backend on-message msg]
@@ -198,15 +202,16 @@
 (defn- queueing? [{:keys [status draining]}]
   (or (= :starting status) draining))
 
-(defn when-ready
+(defn when-settled
   "Calls `f` once the backend has either started or failed to start, after
-  anything queued before it. Until a backend has answered `initialize`, nothing
-  else can be sent to it."
+  anything queued before it, with whether it's ready. Until a backend has
+  answered `initialize`, nothing else can be sent to it."
   [backend f]
-  (let [[old] (swap-vals! (:state backend)
-                          #(cond-> % (queueing? %) (update :queue conj f)))]
+  (let [run #(f (ready? backend))
+        [old] (swap-vals! (:state backend)
+                          #(cond-> % (queueing? %) (update :queue conj run)))]
     (when-not (queueing? old)
-      (f))))
+      (run))))
 
 (defn- settle!
   "Moves the backend to `status`, then runs everything queued, including
@@ -233,12 +238,12 @@
         (= ::timed-out response)
         (do ((:kill (:conn @(:state backend))))
             (throw (ex-info (str "it didn't answer initialize within " (process/duration start-timeout-ms)
-                                 (when (<= 1000 connect-ms)
+                                 (when (<= slow-prepare-ms connect-ms)
                                    (str ", of which prepare took " (process/duration connect-ms))))
                             {})))
 
         (nil? response)
-        (throw (ex-info (str "it exited" (some->> (exit-code backend 1000) (str " with "))
+        (throw (ex-info (str "it exited" (some->> (exit-code backend exit-code-wait-ms) (str " with "))
                              " before answering initialize")
                         {}))
 
@@ -272,10 +277,11 @@
   started."
   [backend]
   (let [done (promise)]
-    (when-ready backend
-      #(if (ready? backend)
-         (request! backend "shutdown" nil (fn [_] (deliver done true)))
-         (deliver done false)))
+    (when-settled backend
+      (fn [ready?]
+        (if ready?
+          (request! backend "shutdown" nil (fn [_] (deliver done true)))
+          (deliver done false))))
     done))
 
 (defn exit!

@@ -40,7 +40,7 @@
   closing its input."
   [received respond]
   (fn [backend on-message]
-    (let [k [(:server-type backend) (:scope backend)]
+    (let [k (get-in backend [:spec :slot])
           inbox (LinkedBlockingQueue.)
           exited (promise)]
       (future
@@ -67,6 +67,6 @@
   exception's message."
   [connect problems]
   (fn [backend on-message]
-    (if-let [problem (get problems [(:server-type backend) (:scope backend)])]
+    (if-let [problem (get problems (get-in backend [:spec :slot]))]
       (throw (ex-info problem {}))
       (connect backend on-message))))
