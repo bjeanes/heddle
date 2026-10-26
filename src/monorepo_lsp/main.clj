@@ -1,35 +1,36 @@
 (ns monorepo-lsp.main
-  (:require [monorepo-lsp.lsp :as lsp])
-  (:import (java.io BufferedInputStream InputStream OutputStream)))
+  (:require [clojure.string :as str]
+            [monorepo-lsp.backend :as backend]
+            [monorepo-lsp.log :as log]
+            [monorepo-lsp.lsp :as lsp]
+            [monorepo-lsp.proxy :as proxy])
+  (:import (java.io BufferedInputStream)))
 
-(defn- pump
-  "Copies messages from `in` to `out` until `in` ends, parsing and re-encoding
-  each one on the way."
-  [^InputStream in ^OutputStream out]
-  (loop []
-    (when-let [msg (lsp/read-message in)]
-      (lsp/write-message out msg)
-      (recur))))
+(def ^:private usage
+  "usage: monorepo-lsp [SERVER-TYPE...]
 
-(defn- passthrough
-  "Starts `command` and relays messages between it and this process's stdio.
-  Returns the command's exit code."
-  [command]
-  (let [pb (doto (ProcessBuilder. ^java.util.List (vec command))
-             (.redirectError java.lang.ProcessBuilder$Redirect/INHERIT))
-        proc (.start pb)
-        server-in (.getOutputStream proc)]
-    (future
-      (try
-        (pump (BufferedInputStream. System/in) server-in)
-        (finally (.close server-in))))
-    (pump (BufferedInputStream. (.getInputStream proc)) System/out)
-    (.waitFor proc)))
+Serves every server type in the config, or only those named.")
 
-(defn -main [& args]
-  (let [command (if (= "--" (first args)) (rest args) args)]
-    (if (empty? command)
-      (do (binding [*out* *err*]
-            (println "usage: monorepo-lsp [--] COMMAND [ARG...]"))
-          (System/exit 2))
-      (System/exit (passthrough command)))))
+(defn- handle! [proxy msg]
+  (try
+    (proxy/handle-client! proxy msg)
+    (catch Exception e
+      (log/info "couldn't handle" (get msg "method" "a response") "-" (ex-message e))
+      (when (and (contains? msg "id") (contains? msg "method"))
+        (lsp/write-message System/out (lsp/error-response (get msg "id") -32603 (ex-message e)))))))
+
+(defn -main [& server-types]
+  (when (some #(str/starts-with? % "-") server-types)
+    (binding [*out* *err*] (println usage))
+    (System/exit 2))
+  (let [proxy (proxy/create {:send #(lsp/write-message System/out %)
+                             :connect backend/connect-process
+                             :server-types (when (seq server-types) (set server-types))
+                             :cwd (System/getProperty "user.dir")
+                             :exit #(System/exit %)})
+        in (BufferedInputStream. System/in)]
+    (loop []
+      (if-let [msg (lsp/read-message in)]
+        (do (handle! proxy msg)
+            (recur))
+        (handle! proxy (lsp/notification "exit" nil))))))

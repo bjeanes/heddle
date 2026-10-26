@@ -14,3 +14,4 @@ record says so instead of guessing.
 | [0002](0002-build-a-standalone-proxy.md) | Build a standalone proxy | Accepted |
 | [0003](0003-separate-server-types-from-scopes.md) | Separate server types from scopes | Accepted |
 | [0004](0004-define-runners-as-command-templates.md) | Define runners as command templates | Accepted |
+| [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted |

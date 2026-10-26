@@ -39,7 +39,9 @@
        (when-not (or (contains? server "languages") (contains? server "globs"))
          [(str where " matches no files; give it languages or globs")])
        (when-not (map? (get server "boot" {}))
-         [(str where ": boot must be a table")])))))
+         [(str where ": boot must be a table")])
+       (when-not (integer? (get server "priority" 0))
+         [(str where ": priority must be an integer")])))))
 
 (defn- scope-errors [servers dir entries]
   (let [where (str "scope " (pr-str dir))]
@@ -147,6 +149,14 @@
              :when (or (some #{language-id} (get server "languages"))
                        (some #(glob/matches? % path) (get server "globs")))]
          name)))
+
+(defn by-priority
+  "The server types in the order they're asked a request that wants one
+  answer: highest `priority` first, then by name. A server type's priority is
+  0 unless it sets one."
+  [config server-types]
+  (sort-by (juxt #(- (get-in config ["servers" % "priority"] 0)) identity)
+           server-types))
 
 (defn- depth [dir]
   (if (= "." dir) 0 (count (str/split dir #"/"))))

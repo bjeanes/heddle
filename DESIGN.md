@@ -108,6 +108,9 @@ A server type's `boot` table holds defaults for starting it. Scopes override
 them one key at a time. That avoids repeating a command in every scope, without
 tying the command to the server type. Any scope can still replace it.
 
+A server type's optional `priority` decides which backend answers when several
+handle a file. "Requests about one file" below covers how.
+
 ### Scopes
 
 Each scope is keyed by a directory, relative to the repo root, with `.` as the
@@ -281,9 +284,21 @@ before it knows which backends it will need.
 
 The proxy answers `initialize` itself. It announces text document syncing for
 every file, which means the client tells it about every file that opens. Then,
-as each backend starts, the proxy registers that backend's features with the
-client (`client/registerCapability`[1]), limited to that backend's files with a
-document selector.
+as backends start, the proxy registers their features with the client
+(`client/registerCapability`[1]), limited to their files with a document
+selector.
+
+Each feature gets one registration, covering the files of every backend that
+offers it. Clients such as VS Code create a provider for each registration, and
+ask every provider whose selector matches a file. With a registration per
+backend, the client would send the proxy the same request once for each backend
+that handles the file. Since the proxy already routes or combines each request
+itself, the client would then show every answer several times. The registration
+merges the backends' options, such as taking every backend's trigger characters.
+When another backend starts and the registration has to cover more, the proxy
+unregisters it and registers it again. As far as I can tell, the spec doesn't
+say whether a client should replace a registration whose ID is registered a
+second time.
 
 Clients say, feature by feature, whether they accept registrations after
 startup. For a feature the client can't register later, the proxy announces it
@@ -324,10 +339,21 @@ other file of its can already be open. There is nothing to replay to it.
 These go to the backends handling that file. Usually that's one.
 
 When several backends handle the file, the proxy sends requests that want one
-answer (such as hover, definition, rename and formatting) to one of them. Which
-one is an open question below. Requests whose answers can be combined, such as
-completion and code actions, go to all of them. The proxy concatenates the
-results.
+answer (such as hover, definition, rename and formatting) to one of them. It
+picks the backend whose server type has the highest `priority`, among those
+that offer the feature. A server type's priority is an integer and defaults
+to 0. Ties go to the server type whose name sorts first. Config order would be
+the obvious way to choose instead. However, TOML doesn't guarantee the order of
+a table's keys, even though most parsers keep it.
+
+```toml
+[servers.ruby-lsp]
+languages = ["ruby"]
+priority = 10
+```
+
+Requests whose answers can be combined, such as completion and code actions,
+go to all of them. The proxy concatenates the results.
 
 The spec gives a code action no unique ID, only a title. Two servers may well
 offer actions with the same title. When a response combines code actions from
@@ -339,13 +365,21 @@ Some requests follow up on an item a backend returned earlier, such as
 `workspace/executeCommand`. They have to reach the backend that made the item.
 The proxy wraps each item's `data` field with the backend it came from and
 unwraps it on the way back. It prefixes command IDs with the server type, which
-also keeps two servers' commands from colliding.
+also keeps two servers' commands from colliding. A command doesn't say which
+scope it came from, though. When more than one backend of that server type is
+running, the proxy picks the one whose scope contains a file the command's
+arguments refer to, and otherwise the first by scope.
 
 ### Requests about no particular file
 
 Workspace symbol search, configuration changes and shutdown go to every running
 backend. The proxy merges the answers. Changes to watched files go to the
 backends whose scopes contain them.
+
+The proxy announces workspace symbol search at startup, whether or not the
+client could register it later. Since the search isn't about any one file,
+there's nothing for a registration's document selector to narrow. Until a
+backend has started, the proxy answers with no symbols.
 
 ### Requests from backends
 
@@ -359,7 +393,15 @@ does the same for cancellations and progress tokens.
 Each `textDocument/publishDiagnostics` replaces whatever the client had for that
 file. When two servers check the same file, forwarding both would leave only the
 second server's diagnostics. Instead, the proxy keeps each backend's latest set
-for each file and publishes their union.
+for each file and publishes their union. When a backend stops, the proxy
+publishes the union again without it.
+
+Clients can also pull a file's diagnostics with `textDocument/diagnostic`. The
+proxy asks every backend for the file that offers it and concatenates their
+items. A backend can give its report a result ID, which the client sends back
+next time so the backend need only report what changed. One backend's ID means
+nothing to another, so the proxy drops them. Every backend then reports in
+full each time.
 
 ### Paths
 
@@ -440,13 +482,6 @@ These may become worth doing once we've used the prototype.
 - **Incremental sync**, if full contents on every change turns out to be too
   slow.
 - **Smarter merging** of answers from several servers.
-
-## Open questions
-
-- When several backends handle a file, which one answers a request that wants
-  one answer? Config order is the obvious choice. However, TOML doesn't
-  guarantee the order of a table's keys, even though most parsers keep it. An
-  explicit `priority` on server types would avoid relying on that.
 
 [1]: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#client_registerCapability
 [2]: https://github.com/Shopify/ruby-lsp/discussions/3738
