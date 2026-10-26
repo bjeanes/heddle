@@ -11,25 +11,29 @@
   (let [[sent ch] (recording)
         a (lsp/notification "a" nil)
         b (lsp/request 1 "b" nil)
+        refusal (lsp/error-response 7 -32002 "not initialized")
         answer (lsp/response 0 {})
         c (lsp/notification "c" nil)]
-    (channel/hold! ch)
     (channel/send! ch a)
     (channel/send! ch b)
-    (testing "keeps them while held"
+    (testing "keeps requests and notifications until it opens"
       (is (channel/held? ch))
       (is (= [] @sent)))
+    (testing "but sends responses straight away"
+      (channel/send! ch refusal)
+      (is (= [refusal] @sent)))
     (testing "sends what it's opened with first, then what it kept, in order"
       (channel/open! ch answer)
-      (is (= [answer a b] @sent)))
+      (is (= [refusal answer a b] @sent)))
     (testing "then sends straight away"
       (channel/send! ch c)
       (is (not (channel/held? ch)))
-      (is (= [answer a b c] @sent)))))
+      (is (= [refusal answer a b c] @sent)))))
 
 (deftest requests-to-the-client
   (let [[sent ch] (recording)
         answers (atom [])]
+    (channel/open! ch)
     (channel/request! ch "m" {} :x #(swap! answers conj %))
     (channel/request! ch "m" {} :y #(swap! answers conj %))
     (testing "get IDs of the channel's own"
@@ -48,6 +52,7 @@
         second-msg (lsp/notification "second" nil)
         inside (promise)
         finish (promise)]
+    (channel/open! ch)
     (let [worker (future (channel/serially ch #(do (deliver inside true)
                                                     @finish
                                                     (channel/send! ch first-msg))))

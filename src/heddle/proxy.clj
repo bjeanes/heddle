@@ -149,7 +149,11 @@
       #(deliver started true))
     (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
 
-(defn- initialize! [proxy {:strs [id params]}]
+(defn- start-session!
+  "Starts serving the client that sent `initialize` with `params`. Returns the
+  :result to answer with, and the :messages to show the user afterwards, each
+  as [type message]."
+  [proxy params]
   (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
@@ -160,16 +164,33 @@
       (log/info unknown-warning))
     (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root :client-params params)
     (when eager?
-      (channel/hold! (:channel proxy))
       (start-every-backend! proxy))
     (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
       (swap! (:state proxy) assoc :announced (capabilities/announced-methods (get result "capabilities")))
-      (channel/open! (:channel proxy) (lsp/response id result)))
-    (register! proxy)
-    (when-let [[type reason until] problem]
-      (show-message! proxy type (str reason "\nheddle is serving nothing until " until " and it restarts.")))
-    (doseq [warning warnings]
-      (show-message! proxy :warning warning))))
+      {:result result
+       :messages (concat (when-let [[type reason until] problem]
+                           [[type (str reason "\nheddle is serving nothing until " until " and it restarts.")]])
+                         (for [warning warnings]
+                           [:warning warning]))})))
+
+(defn- initialize!
+  "Answers `initialize`, which opens the channel to the client. The channel
+  opens even if the proxy fails to start serving, with an error as the
+  answer, since what it holds would otherwise never be sent."
+  [proxy {:strs [id params]}]
+  (let [{:keys [result messages error]}
+        (try
+          (start-session! proxy params)
+          (catch Exception e
+            (log/info "couldn't initialize -" (ex-message e))
+            {:error (ex-message e)}))]
+    (channel/open! (:channel proxy) (if error
+                                      (lsp/error-response id -32603 error)
+                                      (lsp/response id result)))
+    (when-not error
+      (register! proxy)
+      (doseq [[type message] messages]
+        (show-message! proxy type message)))))
 
 ;; Backends
 
@@ -851,9 +872,15 @@
     (map? (get msg "params")) (update "params" dissoc "partialResultToken")))
 
 (defn handle-client!
-  "Handles one message from the client."
+  "Handles one message from the client. If handling a request fails, the
+  answer is an error saying why."
   [proxy msg]
-  (cond
-    (lsp/response? msg) (client-response! proxy msg)
-    (contains? msg "id") (client-request! proxy (without-partial-results msg))
-    :else (client-notification! proxy msg)))
+  (try
+    (cond
+      (lsp/response? msg) (client-response! proxy msg)
+      (contains? msg "id") (client-request! proxy (without-partial-results msg))
+      :else (client-notification! proxy msg))
+    (catch Exception e
+      (log/info "couldn't handle" (get msg "method" "a response") "-" (ex-message e))
+      (when (and (contains? msg "id") (contains? msg "method"))
+        (send-client! proxy (lsp/error-response (get msg "id") -32603 (ex-message e)))))))

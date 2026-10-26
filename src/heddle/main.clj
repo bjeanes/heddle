@@ -4,7 +4,6 @@
             [heddle.backend :as backend]
             [heddle.config :as config]
             [heddle.json :as json]
-            [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.proxy :as proxy]
             [heddle.starter :as starter])
@@ -179,14 +178,6 @@ DIR is the current directory unless given.")
                  "heddle serve speaks LSP over stdin and stdout, for an editor to run.\n"
                  "`heddle init` writes a starter config, and `heddle check` checks one.")})))
 
-(defn- handle! [proxy msg]
-  (try
-    (proxy/handle-client! proxy msg)
-    (catch Exception e
-      (log/info "couldn't handle" (get msg "method" "a response") "-" (ex-message e))
-      (when (and (contains? msg "id") (contains? msg "method"))
-        (lsp/write-message System/out (lsp/error-response (get msg "id") -32603 (ex-message e)))))))
-
 (defn- serve! [eager? server-types]
   (let [proxy (proxy/create {:send #(lsp/write-message System/out %)
                              :connect backend/connect-process
@@ -197,9 +188,9 @@ DIR is the current directory unless given.")
         in (BufferedInputStream. System/in)]
     (loop []
       (if-let [msg (lsp/read-message in)]
-        (do (handle! proxy msg)
+        (do (proxy/handle-client! proxy msg)
             (recur))
-        (handle! proxy (lsp/notification "exit" nil))))))
+        (proxy/handle-client! proxy (lsp/notification "exit" nil))))))
 
 (defn -main [& args]
   (let [{:keys [command eager? server-types] :as parsed} (parse-args args)]

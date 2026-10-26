@@ -1,23 +1,21 @@
 (ns heddle.channel
   "The proxy's channel to the client. Everything the proxy sends the client
-  goes through one, from the client's thread and every backend's, and the
-  channel decides the order the client gets it in. While the channel is held,
-  it keeps what it's sent until it opens."
+  goes through one, from the client's thread and every backend's. The channel
+  decides the order the client gets it in.
+
+  A channel starts held, and opens once the proxy answers `initialize`. The
+  spec doesn't let a server send the client requests or notifications before
+  then, so the channel keeps those until it opens. It sends responses
+  straight away, such as refusals of requests that come before `initialize`."
   (:require [heddle.lsp :as lsp]
             [heddle.requests :as requests]))
 
 (defn channel
-  "An open channel that sends each message to the client with `send`."
+  "A held channel that sends each message to the client with `send`."
   [send]
   {:send send
    :lock (Object.)
-   :state (atom {:held nil :requests requests/empty-table})})
-
-(defn hold!
-  "Keeps everything sent to the channel from now until it opens."
-  [{:keys [lock state]}]
-  (locking lock
-    (swap! state update :held #(or % []))))
+   :state (atom {:held [] :requests requests/empty-table})})
 
 (defn held? [{:keys [lock state]}]
   (locking lock
@@ -27,7 +25,7 @@
   "Sends `msg` to the client, or keeps it while the channel is held."
   [{:keys [send lock state]} msg]
   (locking lock
-    (if (:held @state)
+    (if (and (:held @state) (not (lsp/response? msg)))
       (swap! state update :held conj msg)
       (send msg))))
 

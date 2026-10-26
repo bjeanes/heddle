@@ -330,6 +330,18 @@ read = ['cat', '{read:file}']
       (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
       (is (nothing-more? t)))))
 
+(deftest failing-to-answer-initialize
+  (let [log (lsp/notification "window/logMessage" {"type" 3 "message" "one"})
+        respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [log (lsp/response id {"capabilities" {"executeCommandProvider" {"commands" 5}}})]))
+        t (start :respond respond :eager true :server-types #{"ruby"})]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "answers with an error, then sends what the backends sent meanwhile"
+      (is (= -32603 (get-in (from-proxy t) ["error" "code"])))
+      (is (= log (from-proxy t)))
+      (is (nothing-more? t)))))
+
 (def ^:private config-with-unused-value
   (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))
 
