@@ -280,11 +280,14 @@
 
 (defn exit!
   "Tells the backend to exit, closes its input and waits up to `ms` for it to
-  stop. Returns its exit code, or nil if it hasn't stopped. Since some backends
-  exit as soon as they've answered `shutdown`, failing to tell one to exit
-  isn't logged."
+  stop, then kills it if it hasn't. Returns its exit code, or nil if it had to
+  be killed. Since some backends exit as soon as they've answered `shutdown`,
+  failing to tell one to exit isn't logged."
   [backend ms]
-  (when-let [{:keys [send close wait]} (:conn @(:state backend))]
+  (when-let [{:keys [send close kill wait]} (:conn @(:state backend))]
     (try (send (lsp/notification "exit" nil)) (catch Exception _))
     (try (close) (catch Exception _))
-    (wait ms)))
+    (or (wait ms)
+        (do (log/info (:backend-id backend) "hasn't exited after" (process/duration ms) "and is being killed")
+            (try (kill) (catch Exception e (log/info "killing" (:backend-id backend) "failed:" (ex-message e))))
+            nil))))

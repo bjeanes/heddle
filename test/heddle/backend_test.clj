@@ -180,6 +180,32 @@ s = { runner = 'slow' }
         (finally
           (log/set-writer! previous-writer))))))
 
+(deftest exiting-a-backend-that-ignores-exit
+  (testing "kills it once it has had `ms` to exit"
+    (let [killed (promise)
+          logged (atom [])
+          connect (fn [_ on-message]
+                    {:send #(when (= "initialize" (get % "method"))
+                              (on-message (lsp/response (get % "id") {"capabilities" {}})))
+                     :close (fn [])
+                     :kill #(deliver killed true)
+                     :wait (constantly nil)})
+          b (backend/start! (backend/backend config "s" "." "/r" "/cache") connect {} (fn [_]))]
+      (is (eventually #(backend/ready? b)))
+      (let [previous-writer (log/set-writer! #(swap! logged conj %))]
+        (try
+          (is (nil? (backend/exit! b 50)))
+          (finally
+            (log/set-writer! previous-writer))))
+      (is (realized? killed))
+      (is (= [(str "heddle: " (:backend-id b) " hasn't exited after 50 ms and is being killed")] @logged))))
+  (testing "a real process is gone once it returns"
+    (let [b (backend/backend config "s" "." "/r" "/cache")
+          conn (backend/spawn ["sh" "-c" "trap '' TERM; sleep 30"] (temp-dir) (fn [_]))]
+      (swap! (:state b) assoc :conn conn)
+      (is (nil? (backend/exit! b 100)))
+      (is (some? ((:wait conn) 0))))))
+
 (deftest a-real-process
   (let [repo (temp-dir)
         lib (io/file repo "lib")

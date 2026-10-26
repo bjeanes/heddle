@@ -46,8 +46,6 @@ them, under "Pinned for later".
   legend.
 - **Containers started by a runner's `prepare` keep running.** There's no
   teardown step yet, so you'll need to stop them yourself.
-- **A server that ignores `exit` is left running** once the proxy has waited
-  2 s for it.
 - **The config is read once.** After editing it, restart the proxy (or your
   editor's client).
 
