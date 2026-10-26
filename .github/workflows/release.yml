@@ -1,0 +1,143 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+
+permissions: {}
+
+# A newer push to main supersedes the edge build in progress. Tagged releases
+# always run to the end.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$GITHUB_REF_NAME
+          else
+            version=$(git describe --tags --always --match 'v[0-9]*')
+          fi
+          echo "version=$version" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin-arm64
+          - os: ubuntu-24.04
+            platform: linux-amd64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-jolt
+      - run: jolt -M:test
+      - run: jolt build -m heddle.main -o out/heddle
+
+      - name: Check the binary starts
+        run: |
+          out/heddle --help > "$RUNNER_TEMP/usage.txt" 2>&1 || true
+          cat "$RUNNER_TEMP/usage.txt"
+          grep -q '^usage: heddle' "$RUNNER_TEMP/usage.txt"
+
+      - name: List the libraries it links
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            otool -L out/heddle
+          else
+            readelf -d out/heddle | grep NEEDED
+            readelf -V out/heddle | grep -o 'GLIBC_[0-9.]*' | sort -Vu
+          fi
+
+      - name: Package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          COPYFILE_DISABLE: 1
+        run: |
+          mkdir dist
+          tar -czf "dist/heddle-$VERSION-$PLATFORM.tar.gz" -C out heddle
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: heddle-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum -- *.tar.gz | tee SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          {
+            if [ "$GITHUB_REF_TYPE" = branch ]; then
+              echo "The latest build of \`main\`, from $GITHUB_SHA. It is replaced on every push to \`main\`."
+              echo
+            fi
+            echo "Each archive holds a single \`heddle\` binary. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
+            echo
+            echo "The macOS binary isn't signed or notarised. After downloading it, clear macOS's quarantine flag with \`xattr -d com.apple.quarantine heddle\`, or macOS will refuse to run it."
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish ${{ env.VERSION }}
+        if: github.ref_type == 'tag'
+        run: |
+          prerelease=
+          case "$VERSION" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$VERSION" dist/* --verify-tag $prerelease \
+            --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+
+      - name: Replace the edge prerelease
+        if: github.ref_type == 'branch'
+        run: |
+          if gh release view edge > /dev/null 2>&1; then
+            gh release delete edge --cleanup-tag --yes
+          fi
+          if gh api "repos/$GH_REPO/git/ref/tags/edge" > /dev/null 2>&1; then
+            gh api -X DELETE "repos/$GH_REPO/git/refs/tags/edge"
+          fi
+          gh release create edge dist/* --target "$GITHUB_SHA" --prerelease \
+            --title "edge ($VERSION)" --notes-file "$RUNNER_TEMP/notes.md"

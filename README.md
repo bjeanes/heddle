@@ -1,6 +1,6 @@
-# monorepo-lsp
+# heddle
 
-`monorepo-lsp` is a language server proxy for monorepos whose services each
+`heddle` is a language server proxy for monorepos whose services each
 run in their own container. To your editor, or to an agent's MCP bridge, it
 is one ordinary language server. Behind that, it reads a config checked into
 the repo and starts the right language servers for each part of the repo,
@@ -20,22 +20,33 @@ This is an early prototype. It has been tried with ruby-lsp and RuboCop
 running in Docker Compose on macOS, from Neovim 0.12 and from the session
 driver in `dev/`. Expect rough edges.
 
+## Installing it
+
+Each GitHub release has a binary for macOS arm64, x86_64 Linux and arm64
+Linux. The `edge` prerelease is rebuilt from every push to `main`. Its files
+are named for the commit as `git describe` gives it, such as
+`heddle-v0.1.0-12-gabc1234-linux-amd64.tar.gz`.
+
+The macOS binary isn't signed. After downloading it, clear macOS's quarantine
+flag with `xattr -d com.apple.quarantine heddle`. Otherwise, macOS will
+refuse to run it.
+
 ## Building it
 
-You need Nix with flakes. The dev shell provides Jolt, for aarch64 macOS and
-x86_64 Linux.
+To build it yourself, you need Nix with flakes. The dev shell provides Jolt,
+for aarch64 macOS and x86_64 Linux.
 
 ```sh
 nix develop
-jolt build -m monorepo-lsp.main -o out/monorepo-lsp
+jolt build -m heddle.main -o out/heddle
 ```
 
-That writes a single binary to `out/monorepo-lsp`. Put it on your `PATH`,
+That writes a single binary to `out/heddle`. Put it on your `PATH`,
 or point your editor at it directly.
 
 ## Configuring a repo
 
-The proxy looks for `.monorepo-lsp.toml` at the root of the workspace your
+The proxy looks for `.heddle.toml` at the root of the workspace your
 editor opens. A minimal one, for one Ruby service, looks like this:
 
 ```toml
@@ -56,31 +67,31 @@ ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/a
 Since the proxy doesn't start containers itself, bring them up first with
 `docker compose up --detach`.
 
-To check a config, run `monorepo-lsp check` from the repo root, or give it the
+To check a config, run `heddle check` from the repo root, or give it the
 root as an argument. It prints the config's errors and warnings, and exits
-non-zero if there are any errors. `monorepo-lsp languages` takes the same
+non-zero if there are any errors. `heddle languages` takes the same
 argument and prints which languages the config covers, as JSON such as
 `{"languages":["ruby"]}`.
 
 ## Running it
 
 ```
-monorepo-lsp [serve] [--eager] [SERVER-TYPE...]
-monorepo-lsp languages [DIR [SERVER-TYPE...]]
-monorepo-lsp check [DIR]
-monorepo-lsp help
+heddle [serve] [--eager] [SERVER-TYPE...]
+heddle languages [DIR [SERVER-TYPE...]]
+heddle check [DIR]
+heddle help
 ```
 
-Editors and bridges run `monorepo-lsp` on its own, or with `--eager`. Either
-way, it's short for `monorepo-lsp serve`, which speaks LSP over stdin and
+Editors and bridges run `heddle` on its own, or with `--eager`. Either
+way, it's short for `heddle serve`, which speaks LSP over stdin and
 stdout and serves every server type in the config. To serve only some of them,
-name them after `serve`, as in `monorepo-lsp serve ruby-lsp rubocop`. Without
+name them after `serve`, as in `heddle serve ruby-lsp rubocop`. Without
 the `serve`, a name would be taken for a command. Given server types after its
 directory, `languages` only prints the languages of those. If one of them isn't
 in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
 
-`monorepo-lsp help` prints the usage to stdout and exits 0. Any other command
+`heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
 exits 2.
 
@@ -91,7 +102,7 @@ files. That keeps an editor from starting every container's server when you
 only open one file. However, until then, the proxy can't tell the client
 about that server's features, and workspace symbol search doesn't cover it.
 
-`monorepo-lsp --eager` (or `monorepo-lsp serve --eager ruby-lsp`, naming
+`heddle --eager` (or `heddle serve --eager ruby-lsp`, naming
 server types as usual) starts every server in the config as soon as the client
 connects, and waits up to 30 s for them before finishing its handshake. The
 client then learns every feature and command up front. Use it for agents, and
@@ -185,11 +196,13 @@ scope's directory as its working directory.
   backend handles.
 - `prepare` is optional. If the runner has one, the proxy runs it to
   completion before each `start`, for example to start a container for the
-  server to run in. If it fails, the backend doesn't start.
+  server to run in. If it fails, the backend doesn't start. A backend has
+  120 s to start, which covers `prepare` as well as the server answering
+  `initialize`, so `prepare` can't take all of it.
 - `read` is optional. It prints a file from the server's side. The proxy runs
   it when a server refers to a file that `paths` doesn't cover, such as an
   installed gem, to copy the file out for you to open. Without it, you can't
-  open those files.
+  open those files. Each `read` has 10 s to finish.
 - `defaults` is optional. It gives values for the templates that a boot config
   can override.
 
@@ -251,7 +264,7 @@ The proxy adds these to your config's `runners`. If you define a runner with
 the same name, yours replaces the built-in one. Since there's no default
 runner, every boot config has to name one.
 
-<!-- resources/monorepo_lsp/runners.toml -->
+<!-- resources/heddle/runners.toml -->
 ```toml
 # The runners that ship with the proxy. A project's config can override any of
 # these by name, or add its own.
@@ -289,7 +302,7 @@ Every one of them needs a `command`.
 
 When a server points you at a file that `paths` doesn't cover, such as an
 installed gem, the proxy copies it out with the runner's `read` for you to
-open. It keeps those copies under `<root>/monorepo-lsp/<repo>/`, where `<root>`
+open. It keeps those copies under `<root>/heddle/<repo>/`, where `<root>`
 is the system's temp directory (`TMPDIR`) unless the `cache` table says
 otherwise. Each server refreshes a file the first time it needs it after
 starting. A stale copy therefore only lasts until then.
@@ -336,9 +349,9 @@ lazy.nvim, pointed at a checkout:
 
 ```lua
 {
-  dir = '/path/to/monorepo-lsp',
+  dir = '/path/to/heddle',
   config = function()
-    require('monorepo_lsp').setup()
+    require('heddle').setup()
   end,
 }
 ```
@@ -346,21 +359,21 @@ lazy.nvim, pointed at a checkout:
 Or add a checkout to your runtimepath yourself:
 
 ```lua
-vim.opt.runtimepath:append('/path/to/monorepo-lsp')
-require('monorepo_lsp').setup()
+vim.opt.runtimepath:append('/path/to/heddle')
+require('heddle').setup()
 ```
 
-`setup()` configures and enables a `monorepo_lsp` client, which only starts in
-a repo with a `.monorepo-lsp.toml`. It takes these options:
+`setup()` configures and enables a `heddle` client, which only starts in
+a repo with a `.heddle.toml`. It takes these options:
 
-- `cmd` runs the proxy, and defaults to `{ 'monorepo-lsp' }`. Its first item
+- `cmd` runs the proxy, and defaults to `{ 'heddle' }`. Its first item
   has to be the proxy itself, rather than a wrapper such as `nix run`, since
   the module runs it with `languages` too.
 - `keep` lists other clients, by name, that should start as usual.
 
 In a repo with a config, Neovim would otherwise also start your usual servers
 for the same files, on the host. To prevent that, the module runs
-`monorepo-lsp languages` (with the program from `cmd`) to ask which languages
+`heddle languages` (with the program from `cmd`) to ask which languages
 the proxy serves, once per repo. If `cmd` names server types after `serve`,
 only their languages count.
 Then, for a file whose filetype is one of those, it stops any other client
@@ -379,7 +392,7 @@ that Neovim doesn't run itself.
 With `--eager`, the proxy lists every command when it starts, so Neovim can
 run them without the module's help. You can then configure the client
 yourself and skip the module, or keep using the module with
-`cmd = { 'monorepo-lsp', '--eager' }`. Either works. The module still covers
+`cmd = { 'heddle', '--eager' }`. Either works. The module still covers
 the commands of any server that took longer than 30 s to start.
 
 If you'd rather not install the module, you can leave the host's servers out
@@ -390,8 +403,8 @@ vim.lsp.enable({ 'ruby_lsp', 'rubocop' }, false)
 ```
 
 However, that applies to the whole session, and only if Neovim started in that
-repo. You'll also need the `monorepo_lsp` config from
-[`lua/monorepo_lsp.lua`](lua/monorepo_lsp.lua) to run commands.
+repo. You'll also need the `heddle` config from
+[`lua/heddle.lua`](lua/heddle.lua) to run commands.
 
 The proxy logs to stderr, which Neovim writes to its LSP log
 (`:lua vim.cmd.edit(vim.lsp.log.get_filename())`).
@@ -401,7 +414,7 @@ containers and run the smoke script from the repo root:
 
 ```sh
 docker compose --project-directory examples/monorepo up --detach
-nvim --clean --headless -l dev/nvim-smoke.lua out/monorepo-lsp
+nvim --clean --headless -l dev/nvim-smoke.lua out/heddle
 ```
 
 If your `nvim` is wrapped by Nix with plugins, it loads them even under
@@ -414,7 +427,7 @@ tools over MCP. Give it the bare command, which serves every server type in
 the config, with `--eager`, and the repo root as the workspace:
 
 ```sh
-mcp-language-server --workspace /path/to/repo --lsp monorepo-lsp -- --eager
+mcp-language-server --workspace /path/to/repo --lsp heddle -- --eager
 ```
 
 Without `--eager`, workspace symbol search and references across services
@@ -432,8 +445,6 @@ likely to run into are:
 - If a backend stops, it starts again the next time you open one of its
   files. The proxy doesn't send it the files that were already open, which
   you'll need to reopen.
-- A backend that hangs while starting holds up every request for its files,
-  with no timeout.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
 - There's no VS Code extension or published release yet.

@@ -1,4 +1,4 @@
-# monorepo-lsp: design
+# heddle: design
 
 This describes how the proxy is meant to work. `KICKOFF.md` covers why it exists
 and what it's for. Nothing here is built yet. All of it is a proposal, open to
@@ -38,10 +38,10 @@ matters for agents in particular. Running one bridge per language would put a
 copy of the same tools into the agent's context for every language, with names
 that are easy to confuse.
 
-So, the proxy can be run either way. Running `monorepo-lsp` on its own, which
-is short for `monorepo-lsp serve`, serves every server type in the config.
-Naming server types, as in `monorepo-lsp serve ruby-lsp` or
-`monorepo-lsp serve ruby-lsp rubocop`, serves only those. Both are the same
+So, the proxy can be run either way. Running `heddle` on its own, which
+is short for `heddle serve`, serves every server type in the config.
+Naming server types, as in `heddle serve ruby-lsp` or
+`heddle serve ruby-lsp rubocop`, serves only those. Both are the same
 code. The names only filter which server types the proxy will start. The proxy
 can't check them until the client sends the workspace root, which is where it
 finds the config. So, a name that isn't in the config only gets a warning after
@@ -54,11 +54,11 @@ types can only be named after `serve`. An unknown command is an error. Since
 the word could be a misspelt command or a server type missing its `serve`, the
 error doesn't guess which. It only points out where server types go.
 
-The proxy finds its config by looking for `.monorepo-lsp.toml` in the workspace
+The proxy finds its config by looking for `.heddle.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
-in. The file name will likely change along with the project's name.
+in.
 
-`monorepo-lsp languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
+`heddle languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
 Instead, it prints the languages that the config at the root of DIR covers, as
 JSON such as `{"languages":["ruby"]}`. DIR defaults to the directory it was
 started in. Only server types that some scope starts count and, if any are
@@ -69,11 +69,11 @@ starting alongside the proxy, since few clients can parse TOML themselves.
 Given the same server types as `serve`, it answers for exactly what that proxy
 serves.
 
-`monorepo-lsp check [DIR]` reads the same config and prints its errors and
+`heddle check [DIR]` reads the same config and prints its errors and
 warnings, exiting non-zero if there are errors. That way, someone editing the
 config can see its problems without starting an editor.
 
-`monorepo-lsp help`, `--help` or `-h` prints the usage to stdout and exits 0.
+`heddle help`, `--help` or `-h` prints the usage to stdout and exits 0.
 A command line it can't parse is a usage error instead. It prints the error and
 the usage to stderr, and exits 2.
 
@@ -175,7 +175,7 @@ with the proxy, is defined in config as a set of command templates.
   container. It's optional too.
 
 These are the runners that ship with the proxy, from
-`resources/monorepo_lsp/runners.toml`:
+`resources/heddle/runners.toml`:
 
 ```toml
 [runners.host]
@@ -242,7 +242,7 @@ different. A backend has to start there, which means a scope whose `paths`
 don't cover its directory is already an error.
 
 The backend ID is the project's name followed by something unique to the
-backend, such as `monorepo-lsp-3f9a1c`. It only uses characters that are safe
+backend, such as `heddle-3f9a1c`. It only uses characters that are safe
 in a Docker container name. Any containers left behind after a crash can then
 be traced back to the proxy.
 
@@ -342,7 +342,7 @@ workspace symbols, or references in other services, until some file had been
 opened. Semantic tokens and on-type formatting can't be announced at all,
 since only a backend can supply their options.
 
-So, `monorepo-lsp --eager` starts every backend it serves, meaning every
+So, `heddle --eager` starts every backend it serves, meaning every
 server type in every scope, as soon as the client sends `initialize`. It waits
 for them to start before answering. The answer then announces every feature
 those backends offer, with their options combined the same way as a
@@ -493,7 +493,7 @@ VS Code and MCP bridges, give the proxy no hook like that. Instead, when a
 backend sends back a location in a fetched file, the proxy runs `read` for it
 _before_ forwarding the reply. The client can then open it like any other file.
 
-The cache directory is `<root>/monorepo-lsp/<repo>/<server type>/<scope>`.
+The cache directory is `<root>/heddle/<repo>/<server type>/<scope>`.
 `<root>` is the system's temp directory unless the config's `cache` table
 chooses another. Two backends can have
 different files at the same server path. So, each server type and scope gets a
@@ -514,7 +514,7 @@ XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
 directory, which is the repo root. The layout under the root is the same
 whichever way it's chosen. When the root is inside the repo,
-`monorepo-lsp/<repo>` adds two levels of directories that aren't needed. That
+`heddle/<repo>` adds two levels of directories that aren't needed. That
 being said, several checkouts of the repo can share an absolute root. `<repo>`
 keeps their copies apart.
 
@@ -545,6 +545,32 @@ nowhere.
 If a backend can't start, for example because its service won't come up or its
 command is missing, the proxy tells the user with `window/showMessage`. The
 message names the server type, the scope and the reason.
+
+A backend that hangs while starting counts as failing to start. Until a backend
+has started, every request about its files waits for it, so a `prepare` stuck
+on a prompt or a server that never answers `initialize` would otherwise hold
+those requests up forever without a word to the user. So, a backend has 120 s
+from when it begins starting to finish `prepare` and answer `initialize`.
+After that, the proxy kills whichever is running and reports the backend as
+failed, with the reason, such as "didn't answer initialize within 120 s, of
+which prepare took 95 s". To kill a process, the proxy asks it and every
+process it started to stop, then forces any still running after 2 s. That
+matters for wrappers such as `sh -c` and `docker compose`, which run the real
+work in a child. It doesn't stop work a command handed to a daemon, such as a
+pull that Docker carries on with.
+
+The limit is generous because `prepare` may build or pull an image the first
+time. I expect that to fit in 120 s in most cases, but haven't measured it.
+
+This is separate from `--eager`'s 30 s wait. A backend still starting when the
+proxy answers `initialize` keeps starting, and fails later if it runs out of
+time.
+
+A `read` gets 10 s. Fetching runs on the thread that handles the backend's
+messages, so a hung `read` would hold up everything else the backend sends,
+diagnostics included. Copying one file out of a running container usually
+takes well under a second. A `read` that runs out of time is killed and
+reported like any other failed fetch.
 
 When none of the backends that handle a file is running, because some have
 failed and the rest never started, the proxy answers every request about the
@@ -587,7 +613,7 @@ lists every unused value in every scope. It then serves as usual.
 We're prototyping with Neovim and VS Code, plus an MCP bridge for agents. Other
 clients aren't researched yet, but nothing in the design should rule them out.
 
-**Neovim** can run one bare `monorepo-lsp` client for every filetype, or one per
+**Neovim** can run one bare `heddle` client for every filetype, or one per
 server type with names. Once the proxy matches the harness, the harness can come
 out of my dotfiles.
 
@@ -602,7 +628,7 @@ instead. `vscode-rubocop` has a `rubocop.commandPath` setting, for example. I
 haven't checked whether pointing it at the proxy works.
 
 **Agents** can use an MCP bridge such as mcp-language-server[3], given
-`--lsp monorepo-lsp` and the repo root as `--workspace`. I believe its
+`--lsp heddle` and the repo root as `--workspace`. I believe its
 `definition` tool looks symbols up by name through workspace symbol search, but
 I haven't confirmed it. If so, the bridge leans heavily on the proxy merging
 that search across backends.
@@ -627,6 +653,10 @@ These may become worth doing once we've used the prototype.
   the proxy itself is killed. Cleaning up after that would need a container
   name or label that a restarted proxy can work out again, which a random
   backend ID isn't.
+- **Setting the time limits.** Starting and `read` have fixed limits (see
+  "Failures"). A runner whose `prepare` pulls images needs longer than `host`
+  does, so the limits may become per-runner settings once someone needs to
+  change them.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the

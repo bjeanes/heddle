@@ -9,6 +9,6 @@
 
  :aliases
  {:test {:extra-paths ["test"]
-         :main-opts ["-m" "monorepo-lsp.test-runner"]}
+         :main-opts ["-m" "heddle.test-runner"]}
   :drive {:extra-paths ["dev"]
-          :main-opts ["-m" "monorepo-lsp.dev.drive"]}}}
+          :main-opts ["-m" "heddle.dev.drive"]}}}
