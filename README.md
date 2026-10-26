@@ -163,11 +163,13 @@ directory, `languages` only prints the languages of those. If one of them isn't
 in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
 
-If there's no `.heddle.toml`, it's invalid, or no scope in it starts a server
-type, `serve` still answers the editor, shows it a message saying what's wrong,
-and serves nothing. Run by hand at a terminal, though, it prints the problem
-to stderr and exits 1 instead of waiting on stdin. It does the same there if
-none of the server types named after `serve` is in the config.
+If there's no `.heddle.toml`, `serve` fails the editor's `initialize` request
+with an error saying where it looked. If the config is invalid, or no scope in
+it starts a server type, `serve` still answers the editor, shows it a message
+saying what's wrong, and serves nothing. Run by hand at a terminal, though, it
+prints the problem to stderr and exits 1 instead of waiting on stdin. It does
+the same there if none of the server types named after `serve` is in the
+config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
 through a server type, a scope on the host, a scope in a Compose service, a

@@ -20,11 +20,12 @@
 (def ^:private no-config {"servers" {} "scopes" {} "runners" {}})
 
 (defn load-config
-  "The repo and its config, from the first of `roots` with a config. Without a
+  "The repo and its config, from the first of `roots` with a config. If none
+  has one, there's no :repo. The proxy then fails `initialize`. Without a
   config that starts some server type, the proxy serves nothing. :problem then
   has the type of a message for the user, what's wrong, and what would have to
-  change. Otherwise, :cache-root is where to cache fetched files, and :warnings
-  has the text of any messages warning about the config."
+  change. Otherwise, :cache-root is where to cache fetched files, and
+  :warnings has the text of any messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
@@ -44,6 +45,5 @@
         {:repo repo
          :config no-config
          :problem [:error (ex-message e) "the config is fixed"]}))
-    {:repo (first roots)
-     :config no-config
+    {:config no-config
      :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) ".") "there is one"]}))
