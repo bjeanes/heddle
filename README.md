@@ -175,8 +175,8 @@ config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
 through a server type, a scope on the host, a scope in a Compose service, a
-runner of your own, and the cache, all commented out. Its notes start with
-`## ` and its examples with `# `. Uncomment what you need, then run
+runner of your own, the cache, and tracing, all commented out. Its notes start
+with `## ` and its examples with `# `. Uncomment what you need, then run
 `heddle check`. If there's already a config there, `init` leaves it alone and
 exits 1.
 
@@ -206,6 +206,18 @@ jq -c 'select(.serverType == "ruby-lsp")' trace.jsonl
 
 If heddle can't write to FILE, it says so once on stderr and goes on serving
 without a trace.
+
+To trace a project without changing how its clients start heddle, name the
+file in the config's `trace` table instead:
+
+```toml
+[trace]
+path = "heddle-trace.jsonl"              # absolute, or relative to the config's directory
+```
+
+Since heddle only reads the config when the client sends `initialize`, the
+trace starts with that `initialize`. `--trace` and `HEDDLE_TRACE` override the
+config.
 
 ## Starting servers eagerly
 
@@ -242,6 +254,8 @@ because the proxy ships with runners for the host, Docker and Compose. Compose
 has no special treatment in the proxy. It's one of those built-in runners,
 written in the same TOML you'd use for your own. An optional fourth table,
 `cache`, says where to keep [copies of files from the servers](#the-cache).
+An optional fifth, `trace`, names a file to [trace messages](#tracing-messages)
+to.
 
 ### Server types and scopes
 
@@ -292,6 +306,9 @@ rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
 
 [cache]                                  # optional, defaults to the system's temp directory
 xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/in/the/repo"
+
+[trace]                                  # optional, defaults to no trace
+path = "heddle-trace.jsonl"              # or "/absolute/file"
 ```
 
 With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`

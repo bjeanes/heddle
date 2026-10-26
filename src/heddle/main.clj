@@ -29,6 +29,7 @@ commands. Otherwise each backend starts when one of its files opens.
 
 --trace FILE appends every message between the client, heddle and the
 backends to FILE, one JSON object per line. HEDDLE_TRACE=FILE does the same.
+Either one overrides the config's [trace] table.
 
 languages prints, as JSON, the languages that the config at the root of DIR
 covers, counting only the server types named, if any.
@@ -202,20 +203,37 @@ DIR is the current directory unless given.")
                  "heddle serve speaks LSP over stdin and stdout, for an editor to run.\n"
                  "`heddle init` writes a starter config, and `heddle check` checks one.")})))
 
+(defn- configured-trace-path
+  "The file that the config for the client's `initialize` names to trace to, or
+  nil if it names none."
+  [{:strs [params]} cwd]
+  (:trace-path (session/load-config (session/config-roots params cwd))))
+
+(defn serve-message!
+  "Traces the client's `msg` with the tracer in the atom `tracing`, if any, then
+  has `proxy` handle it. Until something switches tracing on, `initialize` puts
+  a tracer in `tracing` for the file that its config names. Since the proxy
+  starts no backend until it handles `initialize`, the trace then has every
+  message from `initialize` on."
+  [proxy tracing msg]
+  (when (and (nil? @tracing) (= "initialize" (get msg "method")))
+    (some->> (configured-trace-path msg (:cwd proxy)) trace/tracer (reset! tracing)))
+  (some-> @tracing (trace/from-client msg))
+  (proxy/handle-client! proxy msg))
+
 (defn- serve! [eager? server-types trace-path]
-  (let [trace (some-> trace-path trace/tracer)
-        proxy (proxy/create (cond-> {:send #(lsp/write-message System/out %)
-                                     :connect backend/connect-process
-                                     :server-types (when (seq server-types) (set server-types))
-                                     :eager eager?
-                                     :cwd (System/getProperty "user.dir")
-                                     :exit #(System/exit %)}
-                              trace (trace/traced trace)))
+  (let [tracing (atom (some-> trace-path trace/tracer))
+        proxy (proxy/create (trace/traced {:send #(lsp/write-message System/out %)
+                                           :connect backend/connect-process
+                                           :server-types (when (seq server-types) (set server-types))
+                                           :eager eager?
+                                           :cwd (System/getProperty "user.dir")
+                                           :exit #(System/exit %)}
+                                          (trace/switchable tracing)))
         in (BufferedInputStream. System/in)]
     (loop []
       (if-let [msg (lsp/read-message in)]
-        (do (some-> trace (trace/from-client msg))
-            (proxy/handle-client! proxy msg)
+        (do (serve-message! proxy tracing msg)
             (recur))
         (proxy/handle-client! proxy (lsp/notification "exit" nil))))))
 

@@ -89,14 +89,37 @@
         (not (or (paths/absolute-dir? path) (paths/relative-dir? path)))
         ["cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"]))))
 
+(defn- trace-errors [trace]
+  (if-not (map? trace)
+    ["trace must be a table, such as { path = \"trace.jsonl\" }"]
+    (let [unknown (remove #{"path"} (keys trace))
+          {:strs [path]} trace]
+      (cond
+        (seq unknown)
+        (for [k unknown] (str "trace: unknown key " (pr-str k)))
+
+        (nil? path)
+        ["trace needs a path"]
+
+        (not (string? path))
+        ["trace: path must be a string"]
+
+        (str/starts-with? path "~")
+        ["trace: path can't start with ~, which isn't expanded; use an absolute path"]
+
+        (or (#{"." "/"} path) (not (or (paths/absolute-dir? path) (paths/relative-dir? path))))
+        ["trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"]))))
+
 (defn- structure-errors [config]
   (let [{:strs [servers scopes runners]} config]
     (concat
      (for [k (keys config)
-           :when (not (#{"servers" "scopes" "runners" "cache"} k))]
+           :when (not (#{"servers" "scopes" "runners" "cache" "trace"} k))]
        (str "unknown section " (pr-str k)))
      (when (contains? config "cache")
        (cache-errors (get config "cache")))
+     (when (contains? config "trace")
+       (trace-errors (get config "trace")))
      (for [k ["servers" "scopes" "runners"]
            :when (not (map? (get config k)))]
        (str k " must be a table"))
@@ -154,6 +177,14 @@
   [source warnings]
   (str/join "\n" (cons (str "unused values in " source ":")
                        (map #(str "  " %) warnings))))
+
+(defn trace-path
+  "The file that the config's `trace` table names, or nil if it has none.
+  `repo` is the directory holding the config, which a relative `path` is
+  resolved against."
+  [config repo]
+  (when-let [path (get-in config ["trace" "path"])]
+    (if (str/starts-with? path "/") path (paths/client-path repo path))))
 
 (defn server-types
   "The server types that handle the file at the repo-relative `path`, which the

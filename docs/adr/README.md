@@ -25,3 +25,4 @@ record says so instead of guessing.
 | [0013](0013-fail-initialize-only-without-a-config.md) | Fail `initialize` only when there's no config | Accepted |
 | [0014](0014-ask-one-backend-or-combine-by-priority.md) | Ask one backend or combine them, by priority | Accepted |
 | [0015](0015-reach-claude-code-through-an-lsp-plugin.md) | Reach Claude Code through an LSP plugin | Accepted |
+| [0016](0016-trace-messages-as-json-lines.md) | Trace messages as JSON Lines, outside the proxy | Accepted |

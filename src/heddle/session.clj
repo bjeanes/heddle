@@ -24,8 +24,9 @@
   has one, there's no :repo. The proxy then fails `initialize`. Without a
   config that starts some server type, the proxy serves nothing. :problem then
   has the type of a message for the user, what's wrong, and what would have to
-  change. Otherwise, :cache-root is where to cache fetched files, and
-  :warnings has the text of any messages warning about the config."
+  change. Otherwise, :cache-root is where to cache fetched files, :trace-path
+  is the file to trace messages to, if any, and :warnings has the text of any
+  messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
@@ -36,6 +37,7 @@
         (cond-> {:repo repo
                  :config c
                  :cache-root root
+                 :trace-path (config/trace-path c repo)
                  :warnings (cond-> []
                              (seq unused) (conj (config/warnings-message source unused))
                              warning (conj warning))}

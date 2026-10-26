@@ -80,6 +80,11 @@ boot = { runner = 'host', command = 's' }
       (is (= "abcdef" (config/scope-for c "s" "abcdef/h")))
       (is (= "." (config/scope-for c "s" "z"))))))
 
+(deftest trace-path
+  (is (= "/r/tmp/trace.jsonl" (config/trace-path (config/parse "trace = { path = 'tmp/trace.jsonl' }") "/r")))
+  (is (= "/var/trace.jsonl" (config/trace-path (config/parse "trace = { path = '/var/trace.jsonl' }") "/r")))
+  (is (nil? (config/trace-path design "/r"))))
+
 (deftest read-config
   (is (map? design))
   (is (nil? (config/read-config "test/heddle")) "no config"))
@@ -161,6 +166,20 @@ start = ['{read:file}', '--root={srv:scope}']
       "cache = { path = '~/.cache' }"         "cache: path can't start with ~, which isn't expanded; use xdg, env or an absolute path"
       "cache = { path = '../cache' }"         "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"
       "cache = { path = '/var/cache/' }"      "cache: path must be absolute, or relative to the config's directory, with no empty, . or .. segments"))
+  (testing "tracing"
+    (is (nil? (errors "trace = { path = '/tmp/trace.jsonl' }")))
+    (is (nil? (errors "[trace]\npath = 'tmp/trace.jsonl'\n")))
+    (are [toml error] (= #{error} (errors toml))
+      "trace = 'trace.jsonl'"                 "trace must be a table, such as { path = \"trace.jsonl\" }"
+      "[trace]"                               "trace needs a path"
+      "trace = { path = 'a', file = 'b' }"    "trace: unknown key \"file\""
+      "trace = { path = 1 }"                  "trace: path must be a string"
+      "trace = { path = '~/trace.jsonl' }"    "trace: path can't start with ~, which isn't expanded; use an absolute path"
+      "trace = { path = '../trace.jsonl' }"   "trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"
+      "trace = { path = '' }"                 "trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"
+      "trace = { path = '.' }"                "trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"
+      "trace = { path = '/' }"                "trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"
+      "trace = { path = 'tmp/' }"             "trace: path must name a file, absolute or relative to the config's directory, with no empty, . or .. segments"))
   (testing "the message lists every problem"
     (let [msg (try (config/parse "x = 1\ny = 2\n" "here.toml")
                    (catch clojure.lang.ExceptionInfo e (ex-message e)))]

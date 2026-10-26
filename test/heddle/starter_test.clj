@@ -31,6 +31,7 @@
   (let [c (config/parse (uncomment))]
     (is (= [] (config/warnings c)))
     (is (= {"xdg" true} (get c "cache")))
+    (is (= {"path" "heddle-trace.jsonl"} (get c "trace")))
     (is (= ["typescript-language-server" "--stdio"]
            (command c "." "start")))
     (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "web" "typescript-language-server" "--stdio"]
