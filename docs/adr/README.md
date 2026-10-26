@@ -11,3 +11,4 @@ record says so instead of guessing.
 | Number | Title | Status |
 | ------ | ----- | ------ |
 | [0001](0001-write-heddle-in-jolt.md) | Write heddle in Jolt | Accepted |
+| [0002](0002-build-a-standalone-proxy.md) | Build a standalone proxy | Accepted |
