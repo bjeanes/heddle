@@ -701,19 +701,28 @@
                                (when-all-settled more (cond-> ready ready? (conj b)) f)))
      (f ready))))
 
-(defn- ask-all!
-  "Sends the request to each of `backends`, and calls `on-responses` with
-  their responses in the same order once they have all answered. A backend
-  that stops first answers nil."
-  [backends {:strs [id method params]} on-responses]
+(defn- ask-each!
+  "Sends the request to each of `backends` that offers its feature, once that
+  backend has settled, in order with what else is sent to it. Calls
+  `on-answers` with a [backend response] pair for each backend asked, in the
+  same order, once they have all answered. A backend that stops first answers
+  nil."
+  [backends {:strs [id method params]} on-answers]
   (let [n (count backends)
-        responses (atom {})]
+        feature (capabilities/feature method)
+        answers (atom {})
+        answer! (fn [i answer]
+                  (let [all (swap! answers assoc i answer)]
+                    (when (= n (count all))
+                      (on-answers (keep all (range n))))))]
+    (when (zero? n)
+      (on-answers []))
     (doseq [[i b] (map-indexed vector backends)]
-      (backend/request! b method (translate/to-server (:spec b) params) id
-                        (fn [response]
-                          (let [all (swap! responses assoc i response)]
-                            (when (= n (count all))
-                              (on-responses (mapv all (range n))))))))))
+      (backend/when-settled b
+        (fn [ready?]
+          (if (and ready? (capabilities/offers? (backend/capabilities b) feature))
+            (backend/request! b method (translate/to-server (:spec b) params) id #(answer! i [b %]))
+            (answer! i nil)))))))
 
 (defn- answered? [response]
   (and response (not (contains? response "error"))))
@@ -738,15 +747,11 @@
   "Sends a request to every one of `backends` that offers the request's
   feature, and answers with their combined results."
   [proxy {:strs [id method] :as msg} backends]
-  (when-all-settled backends
-    (fn [ready]
-      (let [feature (capabilities/feature method)
-            offering (filterv #(capabilities/offers? (backend/capabilities %) feature) ready)]
-        (if (empty? offering)
-          (answer-unanswered! proxy msg)
-          (ask-all! offering msg
-                    (fn [responses]
-                      (send-client! proxy (combined-response id method offering responses)))))))))
+  (ask-each! backends msg
+             (fn [answers]
+               (if (empty? answers)
+                 (answer-unanswered! proxy msg)
+                 (send-client! proxy (combined-response id method (map first answers) (map second answers)))))))
 
 (defn- backend-by-id [proxy backend-id]
   (first (filter #(= backend-id (:backend-id %)) (live-backends proxy))))

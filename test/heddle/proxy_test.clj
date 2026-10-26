@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [heddle.backend :as backend]
             [heddle.fake-backend :as fake :refer [eventually]]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
@@ -433,6 +434,9 @@ read = ['cat', '{read:file}']
 (defn- received [t k method]
   (filterv #(= method (get % "method")) (get @(:received t) k)))
 
+(defn- ready? [t k]
+  (some-> (backend-of t k) backend/ready?))
+
 (defn- request-about [t id method path]
   (lsp/request id method {"textDocument" {"uri" (uri t path)}
                           "position" {"line" 0 "character" 0}}))
@@ -557,6 +561,30 @@ read = ['cat', '{read:file}']
     (testing "or with the first error if they all failed"
       (client! t (request-about t 3 "textDocument/codeLens" "api/a.rb"))
       (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
+
+(defn- completing-once-started
+  "Fake backends that offer completion, answering with their server type. The
+  ruby backend answers initialize only once `started` is delivered."
+  [started]
+  (fn [[server-type] {:strs [id method]}]
+    (case method
+      "initialize" (do (when (= "ruby" server-type) @started)
+                       [(lsp/response id {"capabilities" {"completionProvider" {}}})])
+      "textDocument/completion" [(lsp/response id [{"label" server-type}])]
+      nil)))
+
+(deftest combining-answers-in-order-with-changes
+  (let [started (promise)
+        t (start :respond (completing-once-started started))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(ready? t ["lint" "."])))
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (change! t "api/a.rb" 2 "x")
+    (is (eventually #(= ["textDocument/completion" "textDocument/didChange"]
+                        (take-last 2 (methods-received t ["lint" "."]))))
+        "reaches a ready backend before a change the client sends after it")
+    (deliver started true)))
 
 (defn- backend-id [t k]
   (:backend-id (backend-of t k)))
