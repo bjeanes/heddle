@@ -431,8 +431,10 @@ When a server points you at a file that `paths` doesn't cover, such as an
 installed gem, the proxy copies it out with the runner's `read` for you to
 open. It keeps those copies under `<root>/heddle/<repo>/`, where `<root>`
 is the system's temp directory (`TMPDIR`) unless the `cache` table says
-otherwise. Each server refreshes a file the first time it needs it after
-starting. A stale copy therefore only lasts until then.
+otherwise. `<repo>` is the repo directory's name and a hash of its path, which
+keeps apart the caches of repos sharing a root. Each server refreshes a file
+the first time it needs it after starting. A stale copy therefore only lasts
+until then.
 
 `cache` takes one of three keys:
 
@@ -443,9 +445,10 @@ starting. A stale copy therefore only lasts until then.
 - `env` names an environment variable that holds the root. If the variable is
   unset, empty or a relative path, the proxy warns you and uses the temp
   directory.
-- `path` gives the root itself, either absolute or relative to the directory
-  holding the config. Since `~` isn't expanded, use `xdg` or `env` for a
-  directory in your home.
+- `path` gives the cache directory itself, either absolute or relative to the
+  directory holding the config. The copies go straight in it, without
+  `heddle/<repo>/`, since only this repo's config names it. As `~` isn't
+  expanded, use `xdg` or `env` for a directory in your home.
 
 Each choice has its trade-offs:
 
@@ -463,7 +466,8 @@ Each choice has its trade-offs:
   inherit it, or the proxy will warn and use the temp directory.
 - **An absolute path** is the same for everyone who uses the config. That's
   awkward in a config checked into the repo, since machines lay out their
-  directories differently.
+  directories differently. Several checkouts of the repo would also share the
+  one directory, each replacing the others' copies.
 - **A path in the repo** needs an entry in `.gitignore`. Since it's inside the
   repo, tools that search or watch the repo will see it too, unless they
   ignore it.

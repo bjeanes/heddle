@@ -45,14 +45,22 @@
 
 (def ^:private tmpdir (System/getProperty "java.io.tmpdir"))
 
+(defn- shop-in
+  "The directory for a repo named shop in the shared directory `dir`, given
+  the CRC-32 of the repo's path."
+  ([dir] (shop-in dir "d886e229"))
+  ([dir crc] (str (str/replace dir #"/+$" "") "/heddle/shop-" crc)))
+
 (deftest cache-roots
   (testing "default to the system's temp directory"
-    (is (= {:root tmpdir} (fetched/cache-root (config/parse "") "/code/shop" {}))))
+    (is (= {:root (shop-in tmpdir)} (fetched/cache-root (config/parse "") "/code/shop" {}))))
+  (testing "tell apart repos with the same name in a shared directory"
+    (is (= {:root (shop-in tmpdir "a1955834")} (fetched/cache-root (config/parse "") "/other/shop" {}))))
   (testing "can be read from an environment variable"
-    (is (= {:root "/home/me/.cache"}
+    (is (= {:root (shop-in "/home/me/.cache")}
            (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "/home/me/.cache"}))))
   (testing "fall back to the temp directory, with a warning, if the variable is unusable"
-    (is (= {:root tmpdir
+    (is (= {:root (shop-in tmpdir)
             :warning (str "The config's cache names $XDG_CACHE_HOME, which isn't set. "
                           "Fetched files are cached in " tmpdir " instead.")}
            (cache-root "{ env = 'XDG_CACHE_HOME' }" {})))
@@ -61,23 +69,23 @@
     (is (str/includes? (:warning (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "cache"}))
                        "which is a relative path, \"cache\"")))
   (testing "can follow the XDG spec, preferring $XDG_CACHE_HOME"
-    (is (= {:root "/home/me/.xdg"}
+    (is (= {:root (shop-in "/home/me/.xdg")}
            (cache-root "{ xdg = true }" {"XDG_CACHE_HOME" "/home/me/.xdg" "HOME" "/home/me"}))))
   (testing "can follow the XDG spec, using $HOME/.cache if $XDG_CACHE_HOME is unusable"
-    (is (= {:root "/home/me/.cache"} (cache-root "{ xdg = true }" {"HOME" "/home/me"})))
-    (is (= {:root "/home/me/.cache"}
+    (is (= {:root (shop-in "/home/me/.cache")} (cache-root "{ xdg = true }" {"HOME" "/home/me"})))
+    (is (= {:root (shop-in "/home/me/.cache")}
            (cache-root "{ xdg = true }" {"XDG_CACHE_HOME" "cache" "HOME" "/home/me"})))
-    (is (= {:root "/home/me/.cache"} (cache-root "{ xdg = true }" {"HOME" "/home/me/"}))))
+    (is (= {:root (shop-in "/home/me/.cache")} (cache-root "{ xdg = true }" {"HOME" "/home/me/"}))))
   (testing "fall back to the temp directory, with a warning, if XDG finds no usable directory"
-    (is (= {:root tmpdir
+    (is (= {:root (shop-in tmpdir)
             :warning (str "The config's cache follows XDG, but $XDG_CACHE_HOME isn't set "
                           "and $HOME is empty. Fetched files are cached in " tmpdir " instead.")}
            (cache-root "{ xdg = true }" {"HOME" ""})))
     (is (str/includes? (:warning (cache-root "{ xdg = true }" {"HOME" "me"}))
                        "and $HOME is a relative path, \"me\"")))
-  (testing "can be an absolute path"
+  (testing "can be an absolute path, used as given"
     (is (= {:root "/var/cache"} (cache-root "{ path = '/var/cache' }" {}))))
-  (testing "can be a path relative to the config's directory"
+  (testing "can be a path relative to the config's directory, used as given"
     (is (= {:root "/code/shop/.cache"} (cache-root "{ path = '.cache' }" {})))
     (is (= {:root "/code/shop"} (cache-root "{ path = '.' }" {})))))
 

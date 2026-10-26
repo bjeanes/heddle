@@ -579,7 +579,8 @@ _before_ forwarding the reply. The client can then open it like any other file.
 
 The cache directory is `<root>/heddle/<repo>/<server type>/<scope>`.
 `<root>` is the system's temp directory unless the config's `cache` table
-chooses another. Two backends can have
+chooses another. A `path` in that table replaces `<root>/heddle/<repo>`
+instead (see below). Two backends can have
 different files at the same server path. So, each server type and scope gets a
 directory of its own. Each is percent-encoded into a single path segment, with
 the root scope `.` as `%2E`. Nesting the scopes instead would put
@@ -596,11 +597,19 @@ at a new directory for each shell. An editor started from one would then use a
 new cache each time and leave the old ones behind. So, `cache` can follow the
 XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
-directory, which is the repo root. The layout under the root is the same
-whichever way it's chosen. When the root is inside the repo,
-`heddle/<repo>` adds two levels of directories that aren't needed. That
-being said, several checkouts of the repo can share an absolute root. `<repo>`
-keeps their copies apart.
+directory, which is the repo root.
+
+The temp directory, `~/.cache` and a directory named by an environment
+variable may each hold the caches of several repos. An environment variable
+counts as shared because it's set outside the repo, often once for every
+shell. It then names the same directory whichever repo the editor opens.
+`heddle/<repo>` keeps those repos' copies apart. However, only this repo's
+config names a `path`. Since nothing else shares it, the proxy uses it as
+given. `heddle/<repo>` would only add two levels of directories there.
+
+Several checkouts of the repo can still share an absolute `path`. If their
+servers see different versions of a file, one checkout's copy can replace
+another's until a backend fetches it again.
 
 With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
 path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set

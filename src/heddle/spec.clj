@@ -15,27 +15,16 @@
 
   Since a backend's own values, such as its ID, are only known once it runs,
   `command` takes them separately."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [heddle.paths :as paths]
             [heddle.runner :as runner])
-  (:import (java.net URLEncoder)
-           (java.util.zip CRC32)))
+  (:import (java.net URLEncoder)))
 
 (defn- boot
   "The server type's `boot` table with the scope's values over the top."
   [{:strs! [servers scopes]} [server-type scope]]
   (merge (get-in servers [server-type "boot"])
          (get-in scopes [scope server-type])))
-
-(defn- repo-key
-  "The repo's directory name and a hash of its path, which tells apart repos
-  with the same name."
-  [repo]
-  (let [file (.getAbsoluteFile (io/file repo))
-        crc (CRC32.)]
-    (.update crc (.getBytes (str file) "UTF-8"))
-    (str (.getName file) "-" (format "%08x" (.getValue crc)))))
 
 (defn- segment
   "`s` percent-encoded as one path segment. Since `.` and `..` can't name a
@@ -48,12 +37,11 @@
       encoded)))
 
 (defn cache-dir
-  "The directory under the cache's `root` holding fetched files for the
+  "The directory under the repo's cache `root` holding fetched files for the
   `slot`, as a client path. Every backend for the slot uses the same one, in
   any process."
-  [root repo [server-type scope]]
-  (str (str/replace root #"/+$" "")
-       "/heddle/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
+  [root [server-type scope]]
+  (str (str/replace root #"/+$" "") "/" (segment server-type) "/" (segment scope)))
 
 (defn spec
   "The spec for the `slot` in a valid config. `repo` is the repo root as a
@@ -70,7 +58,7 @@
      :dir dir
      :root (paths/to-server paths repo dir)
      :paths paths
-     :cache (cache-dir cache-root repo slot)
+     :cache (cache-dir cache-root slot)
      :templates (select-keys runner runner/templates)
      :cfg (runner/cfg runner boot)}))
 
