@@ -106,6 +106,14 @@
                          :requests requests/empty-table
                          :stopped false})})))
 
+(defn slot
+  "The [server-type scope] that the backend was started for."
+  [backend]
+  (get-in backend [:spec :slot]))
+
+(defn server-type [backend]
+  (first (slot backend)))
+
 (defn status
   "One of :starting, :ready, :failed or :exited."
   [backend]

@@ -62,18 +62,10 @@
                                 :diagnostics {}
                                 :progress {}}})))
 
-(defn- slot
-  "The [server-type scope] that the backend `b` was started for."
-  [b]
-  (get-in b [:spec :slot]))
-
-(defn- server-type-of [b]
-  (first (slot b)))
-
 (defn- entry
   "The registry's entry for the backend `b`, while it's live."
   [state b]
-  (let [e (get-in state [:registry :backends (slot b)])]
+  (let [e (get-in state [:registry :backends (backend/slot b)])]
     (when (identical? b (:backend e))
       e)))
 
@@ -247,7 +239,7 @@
   "The server capabilities of the backend `b`, with its commands qualified
   with its server type."
   [b]
-  (origin/qualify-command-ids (server-type-of b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
+  (origin/qualify-command-ids (backend/server-type b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
 
 (defn- ready-backends
   "The server capabilities and document selector of each live backend that
@@ -309,7 +301,7 @@
            "trace" (get client-params "trace")})))
 
 (defn- describe [b]
-  (let [[server-type scope] (slot b)]
+  (let [[server-type scope] (backend/slot b)]
     (str server-type " in " (if (= "." scope) "the repo root" scope))))
 
 (defn- elapsed?
@@ -323,7 +315,7 @@
   server type and scope in the last `report-interval-ms`, as a backend that
   keeps failing would otherwise flood them."
   [proxy b type message]
-  (let [k (slot b)
+  (let [k (backend/slot b)
         now (now-ms proxy)
         due? #(elapsed? (get-in % [:registry :reported k]) now report-interval-ms)
         [old] (swap-vals! (:state proxy) #(cond-> % (due? %) (assoc-in [:registry :reported k] now)))]
@@ -395,7 +387,7 @@
   why and when under :failures, withdraws its diagnostics and tells the user.
   `what-happened` follows the backend's description in the message."
   [proxy b type what-happened]
-  (let [k (slot b)
+  (let [k (backend/slot b)
         now (now-ms proxy)
         message (str (describe b) " " what-happened ". Opening one of its files will start it again, once "
                      (quot retry-interval-ms 1000) " s have passed.")
@@ -428,7 +420,7 @@
   (mapv #(update % "id" (partial qualify b)) registrations))
 
 (defn- qualify-registered-commands [b registrations]
-  (mapv #(origin/qualify-command-ids (server-type-of b) % ["registerOptions" "commands"]) registrations))
+  (mapv #(origin/qualify-command-ids (backend/server-type b) % ["registerOptions" "commands"]) registrations))
 
 (defn- progress-token!
   "The token to give the client for one that the backend `b` created. The
@@ -558,7 +550,7 @@
   one for the file already or has stopped."
   [proxy b params]
   (let [uri (get-in params ["textDocument" "uri"])
-        k (slot b)
+        k (backend/slot b)
         [old] (swap-vals! (:state proxy)
                           #(cond-> % (entry % b) (update-in [:registry :backends k :opened] conj uri)))]
     (when (and (entry old b) (not (opened? old b uri)))
@@ -569,7 +561,7 @@
   that it handles, as the client last changed it. The backend gets these
   before anything sent to it later."
   [proxy b]
-  (let [k (slot b)]
+  (let [k (backend/slot b)]
     (doseq [[uri {:keys [language version text]}] (get-in @(:state proxy) [:client :documents])
             :when (some #{k} (handlers proxy uri language))]
       (open-in! proxy b {"textDocument" {"uri" uri "languageId" language "version" version "text" text}}))))
@@ -618,7 +610,7 @@
   [proxy {:strs [changes]}]
   (let [repo (get-in @(:state proxy) [:session :repo])
         within? (fn [b change]
-                  (let [[_ scope] (slot b)]
+                  (let [[_ scope] (backend/slot b)]
                     (some->> (paths/uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
     (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
@@ -632,7 +624,7 @@
   client."
   [b method result]
   (let [result (cond->> (fetched/to-client! b (normalise/result method result))
-                 (get-in methods/table [method :commands?]) (origin/qualify-commands (server-type-of b)))]
+                 (get-in methods/table [method :commands?]) (origin/qualify-commands (backend/server-type b)))]
     (origin/mark-result method (:backend-id b) result)))
 
 (defn- forward-request! [proxy b {:strs [id method params]}]
@@ -641,7 +633,7 @@
                       (send-client! proxy
                                     (cond
                                       (nil? response)
-                                      (lsp/error-response id lsp/internal-error (str (server-type-of b) " stopped before answering"))
+                                      (lsp/error-response id lsp/internal-error (str (backend/server-type b) " stopped before answering"))
 
                                       (contains? response "error")
                                       (assoc (fetched/to-client! b response) "id" id)
@@ -733,7 +725,7 @@
   [id method backends responses]
   (let [answers (for [[b response] (map vector backends responses)
                       :when (answered? response)]
-                  [(server-type-of b) (result-for-client b method (get response "result"))])]
+                  [(backend/server-type b) (result-for-client b method (get response "result"))])]
     (doseq [[b response] (map vector backends responses)
             :when (not (answered? response))]
       (log/info (:backend-id b) "didn't answer" method "-"
@@ -795,8 +787,8 @@
   file the arguments refer to, or else the first by scope."
   [proxy server-type arguments]
   (let [repo (get-in @(:state proxy) [:session :repo])
-        scope (comp second slot)
-        live (sort-by scope (filter #(= server-type (server-type-of %)) (live-backends proxy)))
+        scope (comp second backend/slot)
+        live (sort-by scope (filter #(= server-type (backend/server-type %)) (live-backends proxy)))
         files (keep #(repo-relative repo (paths/uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
         containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) live)]
