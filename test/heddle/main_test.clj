@@ -26,6 +26,16 @@
   (is (= {:command :serve :eager? false :server-types ["serve" "check"]}
          (main/parse-args ["serve" "serve" "check"]))))
 
+(deftest serve-takes-a-file-to-trace-to
+  (is (= {:command :serve :eager? true :server-types ["ruby-lsp"] :trace "/tmp/trace.jsonl"}
+         (main/parse-args ["serve" "--trace" "/tmp/trace.jsonl" "--eager" "ruby-lsp"])
+         (main/parse-args ["--eager" "serve" "ruby-lsp" "--trace" "/tmp/trace.jsonl"])))
+  (is (= {:error "--trace needs a file"} (main/parse-args ["serve" "--trace"])))
+  (is (= {:error "--trace needs a file"} (main/parse-args ["--trace" "--eager"])))
+  (is (= {:error "--trace can only be given once"} (main/parse-args ["--trace" "a" "--trace" "b"])))
+  (is (= {:error "check takes no options, but was given --trace"}
+         (main/parse-args ["check" "--trace" "/tmp/trace.jsonl"]))))
+
 (deftest serve-rejects-unknown-options
   (is (= {:error "unknown option --languages"} (main/parse-args ["--languages"])))
   (is (= {:error "unknown option -x"} (main/parse-args ["serve" "-x"]))))

@@ -27,6 +27,7 @@
             [heddle.runner-test]
             [heddle.spec-test]
             [heddle.starter-test]
+            [heddle.trace-test]
             [heddle.translate-test]))
 
 (defn -main [& _]

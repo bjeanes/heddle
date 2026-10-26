@@ -24,3 +24,4 @@ record says so instead of guessing.
 | [0012](0012-route-follow-ups-and-commands-to-their-backend.md) | Route follow-ups and commands to their backend | Accepted |
 | [0013](0013-fail-initialize-only-without-a-config.md) | Fail `initialize` only when there's no config | Accepted |
 | [0014](0014-ask-one-backend-or-combine-by-priority.md) | Ask one backend or combine them, by priority | Accepted |
+| [0015](0015-reach-claude-code-through-an-lsp-plugin.md) | Reach Claude Code through an LSP plugin | Accepted |

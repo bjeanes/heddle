@@ -1,0 +1,5 @@
+{
+  "name": "heddle",
+  "description": "Code intelligence through heddle, which starts the language servers each project's .heddle.toml defines",
+  "homepage": "https://github.com/bjeanes/heddle"
+}

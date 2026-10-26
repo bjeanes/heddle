@@ -149,7 +149,7 @@ argument and prints which languages the config covers, as JSON such as
 ## Running it
 
 ```
-heddle [serve] [--eager] [SERVER-TYPE...]
+heddle [serve] [--eager] [--trace FILE] [SERVER-TYPE...]
 heddle languages [DIR [SERVER-TYPE...]]
 heddle check [DIR]
 heddle init [DIR]
@@ -183,6 +183,29 @@ exits 1.
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
 exits 2.
+
+### Tracing messages
+
+When a client doesn't behave as you expect, it helps to see exactly what it
+sends. `heddle serve --trace FILE` appends every LSP message to FILE. That
+covers what the client sends heddle, what heddle sends the client, and what
+heddle sends each server or receives from it. Messages to and from a server
+have paths as the server sees them. Setting `HEDDLE_TRACE=FILE` in heddle's
+environment does the same, for clients whose config makes arguments awkward.
+
+Each line of FILE is a JSON object with the `time` in milliseconds since the
+epoch, the `message`, and who it came `from` or went `to`. That's either
+`client` or a backend's ID, such as `heddle-1a2b3c4d`. A backend's lines also
+give its `serverType` and `scope`. For example, to list what the client sent,
+or everything exchanged with `ruby-lsp`:
+
+```sh
+jq -c 'select(.from == "client") | [.time, .message.method, .message.id]' trace.jsonl
+jq -c 'select(.serverType == "ruby-lsp")' trace.jsonl
+```
+
+If heddle can't write to FILE, it says so once on stderr and goes on serving
+without a trace.
 
 ## Starting servers eagerly
 
@@ -535,11 +558,85 @@ The flake doesn't build the `heddle` binary yet. You'll still need to install
 it separately, such as with `install-heddle` or a release binary (see
 [Installing it](#installing-it)).
 
+## Claude Code
+
+Claude Code talks to language servers through plugins. The repo is a
+marketplace with one plugin in it, which runs `heddle serve --eager`. Add the
+marketplace from GitHub, or give the path to a checkout in place of
+`bjeanes/heddle`. Then install the plugin from it:
+
+```
+/plugin marketplace add bjeanes/heddle
+/plugin install heddle@heddle
+```
+
+Claude Code copies the plugin into its own cache when you install it. If you
+change the plugin, run `/plugin marketplace update heddle` and install it
+again. You can also load it straight from a checkout with
+`claude --plugin-dir /path/to/heddle/claude-code`, unless your organisation's
+managed settings forbid it.
+
+The plugin gives Claude its `LSP` tool, for definitions, references, hover,
+symbols and the like. Claude also sees the servers' diagnostics after each
+edit.
+
+### Enabling it only where you need it
+
+The plugin claims about 40 file extensions. Claude Code gives each extension
+to the first plugin that registers it. Since heddle fails `initialize` in a
+repo without a `.heddle.toml`, a plugin enabled everywhere takes those files
+from your other language servers and then serves nothing. Instead, turn it off
+in your user settings. Then turn it on in `.claude/settings.local.json` in each
+repo that has a config. Turn off any plugin that covers the same files there
+too, such as the official ruby-lsp plugin:
+
+```json
+{
+  "enabledPlugins": {
+    "heddle@heddle": true,
+    "ruby-lsp@claude-plugins-official": false
+  }
+}
+```
+
+If you leave the other plugin on, `/plugin` shows an error such as `LSP server
+"heddle" is not used for .rb files`.
+
+Because of `--eager`, workspace symbol search covers every service from the
+start. However, heddle waits up to 30 s for the servers before it answers
+`initialize`. Until then, Claude Code reports that the server is starting.
+
+### Letting Claude open cached files
+
+Claude Code drops go-to-definition results that point into a git-ignored
+directory. I
+confirmed from a [trace](#tracing-messages) that heddle had returned the
+location. Hover still showed it as a link. Since a cache in the repo has to be
+ignored, Claude can only follow a server into an installed gem when
+[the cache](#the-cache) is outside the repo. `xdg = true` keeps it in
+`~/.cache/heddle`:
+
+```toml
+[cache]
+xdg = true
+```
+
+Claude also needs permission to read it. Add the directory to
+`permissions.additionalDirectories` in the same settings file. If the session
+runs in Claude Code's sandbox, or your organisation limits reads outside the
+working directory, check that those settings let Claude read it too. I haven't
+confirmed which keys that takes.
+
 ## Agents, through an MCP bridge
 
-Bridges such as [mcp-language-server][1] give an agent a language server's
-tools over MCP. Give it the bare command, which serves every server type in
-the config, with `--eager`, and the repo root as the workspace:
+For Claude Code, use [the plugin](#claude-code) instead. Adding heddle itself
+as an MCP server, as in `claude mcp add heddle -- heddle serve`, doesn't work.
+MCP is a different protocol from the LSP that heddle speaks. When I tried it,
+Claude Code gave up waiting after 30 s.
+
+For other agents, bridges such as [mcp-language-server][1] give an agent a
+language server's tools over MCP. Give it the bare command, which serves every
+server type in the config, with `--eager`, and the repo root as the workspace:
 
 ```sh
 mcp-language-server --workspace /path/to/repo --lsp heddle -- --eager
