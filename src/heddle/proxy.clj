@@ -8,6 +8,7 @@
             [clojure.string :as str]
             [heddle.backend :as backend]
             [heddle.capabilities :as capabilities]
+            [heddle.channel :as channel]
             [heddle.config :as config]
             [heddle.fetched :as fetched]
             [heddle.log :as log]
@@ -17,7 +18,6 @@
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
-            [heddle.requests :as requests]
             [heddle.translate :as translate])
   (:import (java.net URI)))
 
@@ -38,25 +38,20 @@
     `exit`;
   - :clock, optionally, a function that returns the time in milliseconds."
   [opts]
-  (assoc opts :state (atom {:backends {}
-                            :documents {}
-                            :opened {}
-                            :to-client requests/empty-table
-                            :progress {}
-                            :registered {}
-                            :reported {}})))
+  (assoc opts
+         :channel (channel/channel (:send opts))
+         :state (atom {:backends {}
+                       :documents {}
+                       :opened {}
+                       :progress {}
+                       :registered {}
+                       :reported {}})))
 
 (defn- now-ms [proxy]
   ((or (:clock proxy) #(System/currentTimeMillis))))
 
-(defn- send-client!
-  "Sends `msg` to the client, or holds it under :held while the proxy is yet
-  to answer `initialize`."
-  [proxy msg]
-  (locking (:state proxy)
-    (if (:held @(:state proxy))
-      (swap! (:state proxy) update :held conj msg)
-      ((:send proxy) msg))))
+(defn- send-client! [proxy msg]
+  (channel/send! (:channel proxy) msg))
 
 (defn- uri->path [uri]
   (try
@@ -74,19 +69,16 @@
   `on-response` with the client's response. `origin` is the backend and ID of
   the request this one forwards, if any."
   [proxy method params origin on-response]
-  (let [state (swap! (:state proxy) update :to-client requests/add origin on-response)]
-    (send-client! proxy (lsp/request (get-in state [:to-client :last-id]) method params))))
+  (channel/request! (:channel proxy) method params origin on-response))
 
 (defn- client-response! [proxy {:strs [id] :as msg}]
-  (let [[old] (swap-vals! (:state proxy) update :to-client requests/answered id)]
-    (if-let [on-response (requests/on-response (:to-client old) id)]
-      (on-response msg)
-      (log/info "the client answered an unknown request" (pr-str id)))))
+  (when-not (channel/answered! (:channel proxy) msg)
+    (log/info "the client answered an unknown request" (pr-str id))))
 
 (defn- cancel-client-request!
   "Passes on a backend's cancellation of a request it sent the client."
   [proxy origin]
-  (doseq [id (requests/tagged (:to-client @(:state proxy)) origin)]
+  (doseq [id (channel/tagged-requests (:channel proxy) origin)]
     (send-client! proxy (lsp/notification "$/cancelRequest" {"id" id}))))
 
 (def ^:private message-type {:error 1 :warning 2})
@@ -157,15 +149,6 @@
       #(deliver started true))
     (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
 
-(defn- answer-initialize!
-  "Sends the client the answer to `initialize`, then everything held back
-  while the proxy was yet to send it."
-  [proxy response]
-  (locking (:state proxy)
-    (let [[old] (swap-vals! (:state proxy) dissoc :held)]
-      ((:send proxy) response)
-      (run! (:send proxy) (:held old)))))
-
 (defn- initialize! [proxy {:strs [id params]}]
   (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
         eager? (and (:eager proxy) (not problem))
@@ -175,13 +158,13 @@
         warnings (cond-> warnings unknown-warning (conj unknown-warning))]
     (when unknown-warning
       (log/info unknown-warning))
-    (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root
-           :client-params params :held (when eager? []))
+    (swap! (:state proxy) assoc :repo repo :config config :cache-root cache-root :client-params params)
     (when eager?
+      (channel/hold! (:channel proxy))
       (start-every-backend! proxy))
     (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
       (swap! (:state proxy) assoc :announced (capabilities/announced-methods (get result "capabilities")))
-      (answer-initialize! proxy (lsp/response id result)))
+      (channel/open! (:channel proxy) (lsp/response id result)))
     (register! proxy)
     (when-let [[type reason until] problem]
       (show-message! proxy type (str reason "\nheddle is serving nothing until " until " and it restarts.")))
@@ -240,20 +223,21 @@
   proxy unregisters it and registers it again. Features announced in the
   answer to `initialize` aren't registered, and nothing is until it's sent."
   [proxy]
-  (locking (:state proxy)
-    (let [{:keys [client-params registered announced held]} @(:state proxy)
-          wanted (when-not held
-                   (remove #(contains? announced (get % "method"))
-                           (capabilities/registrations (get client-params "capabilities")
-                                                       (ready-backends proxy))))
-          changed (remove #(= % (get registered (get % "method"))) wanted)
-          replaced (filter #(contains? registered (get % "method")) changed)]
-      (swap! (:state proxy) update :registered into (map (juxt #(get % "method") identity)) changed)
-      (when (seq replaced)
-        (ask-client! proxy "client/unregisterCapability"
-                     {"unregisterations" (mapv #(select-keys % ["id" "method"]) replaced)}))
-      (when (seq changed)
-        (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)})))))
+  (channel/serially (:channel proxy)
+    (fn []
+      (let [{:keys [client-params registered announced]} @(:state proxy)
+            wanted (when-not (channel/held? (:channel proxy))
+                     (remove #(contains? announced (get % "method"))
+                             (capabilities/registrations (get client-params "capabilities")
+                                                         (ready-backends proxy))))
+            changed (remove #(= % (get registered (get % "method"))) wanted)
+            replaced (filter #(contains? registered (get % "method")) changed)]
+        (swap! (:state proxy) update :registered into (map (juxt #(get % "method") identity)) changed)
+        (when (seq replaced)
+          (ask-client! proxy "client/unregisterCapability"
+                       {"unregisterations" (mapv #(select-keys % ["id" "method"]) replaced)}))
+        (when (seq changed)
+          (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)}))))))
 
 (defn- init-params [b client-params]
   (let [root-uri (path->uri (:root b))]
@@ -346,12 +330,13 @@
   the client had for the file, so forwarding a backend's own would hide the
   others'."
   [proxy b {:strs [uri diagnostics version]}]
-  (locking (:state proxy)
-    (let [state (swap! (:state proxy) update :diagnostics set-diagnostics uri (:backend-id b) diagnostics)]
-      (send-client! proxy (lsp/notification "textDocument/publishDiagnostics"
-                                            (cond-> {"uri" uri
-                                                     "diagnostics" (vec (apply concat (vals (get-in state [:diagnostics uri]))))}
-                                              version (assoc "version" version)))))))
+  (channel/serially (:channel proxy)
+    (fn []
+      (let [state (swap! (:state proxy) update :diagnostics set-diagnostics uri (:backend-id b) diagnostics)]
+        (send-client! proxy (lsp/notification "textDocument/publishDiagnostics"
+                                              (cond-> {"uri" uri
+                                                       "diagnostics" (vec (apply concat (vals (get-in state [:diagnostics uri]))))}
+                                                version (assoc "version" version))))))))
 
 (defn- clear-diagnostics!
   "Withdraws the diagnostics of the backend `b`, which has stopped."

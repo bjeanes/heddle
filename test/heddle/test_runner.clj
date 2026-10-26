@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [heddle.backend-test]
             [heddle.capabilities-test]
+            [heddle.channel-test]
             [heddle.config-test]
             [heddle.fetched-test]
             [heddle.glob-test]
