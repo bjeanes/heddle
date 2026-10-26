@@ -310,15 +310,16 @@ handle the file.
 The proxy lays a scope's values over the server type's `boot` table, one key
 at a time. That lets you give the command once, on the server type, and only
 say where it runs in each scope. Two keys in the result belong to the proxy.
-`runner` names the runner to use. `paths` maps directories in the repo to the
+`runner` names the runner to use. Without one, the proxy runs `command`
+directly, on your machine. `paths` maps directories in the repo to the
 absolute directories the server sees, such as where a container mounts them.
 Every other key, `command` included, is a value for the runner's templates.
 
 Setting a key to `false` unsets it, since TOML has no null. Say the server
 type's `boot` runs it in Compose with `paths = { "." = "/srv" }`. A scope that
-runs it on the host instead needs `paths = false` as well. Otherwise, the proxy
-would still translate its paths to `/srv`. In the same way, a `false` in `boot`
-unsets a value from the runner's `defaults`.
+runs it on your machine instead, with `runner = false`, needs `paths = false`
+as well. Otherwise, the proxy would still translate its paths to `/srv`. In the
+same way, a `false` in `boot` unsets a value from the runner's `defaults`.
 
 <!-- example: full config -->
 ```toml
@@ -328,7 +329,7 @@ globs = ["**/Gemfile", "**/*.rake"]      # optional if languages is given
 priority = 10                            # optional, defaults to 0
 
 [servers.ruby-lsp.boot]                  # optional, defaults to empty
-runner = "compose"                       # required, here or in each scope
+runner = "compose"                       # optional, here or in each scope
 command = ["bundle", "exec", "ruby-lsp"] # a value for the runner
 
 [servers.rubocop]
@@ -340,7 +341,7 @@ service = "api"                          # a value for the runner, which compose
 paths = { "services/api" = "/app" }      # optional, defaults to each path as itself
 
 [scopes."services/legacy".ruby-lsp]
-runner = "host"                          # replaces the server type's runner
+runner = false                           # unsets the server type's runner, to run on your machine
 command = ["ruby-lsp"]                   # replaces the server type's command
 
 [scopes."."]                             # the repo root, as a catch-all
@@ -432,8 +433,7 @@ remove it.
 ### The built-in runners
 
 The proxy adds these to your config's `runners`. If you define a runner with
-the same name, yours replaces the built-in one. Since there's no default
-runner, every boot config has to name one.
+the same name, yours replaces the built-in one.
 
 <!-- resources/heddle/runners.toml -->
 ```toml
@@ -460,7 +460,7 @@ read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 
 Every one of them needs a `command`.
 
-- `host` runs it on your machine.
+- `host` runs it on your machine, as a boot config with no runner does.
 - `compose` runs it in a running Compose `service`. To pass Compose flags such
   as `--file`, set `compose`, which defaults to `["docker", "compose"]`.
 - `docker-exec` runs it in a running `container`.

@@ -266,11 +266,15 @@ start = ['{read:file}', '--root={srv:scope}']
   (errors (apply str "[servers.a]\nlanguages = ['x']\n[scopes.s]\na = " boot "\n" more)))
 
 (deftest checks-scopes-against-runners
-  (testing "the runner has to exist"
-    (is (= #{"scope \"s\", server type \"a\": names no runner"}
-           (scope-errors "{ command = 'a' }")))
+  (testing "the runner has to exist, if there is one"
+    (is (nil? (scope-errors "{ command = 'a' }")))
     (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
-           (scope-errors "{ runner = 'nope' }"))))
+           (scope-errors "{ runner = 'nope' }")))
+    (is (= #{"scope \"s\", server type \"a\": runner must be a string"}
+           (scope-errors "{ runner = 1 }"))))
+  (testing "without a runner, the command has to be given"
+    (is (= #{"scope \"s\", server type \"a\": when run directly: no value for {cfg:command}"}
+           (scope-errors "{ service = 'api' }"))))
   (testing "a value no template uses is allowed"
     (is (nil? (scope-errors "{ runner = 'host', command = 'a', service = 'api' }"))))
   (testing "every {cfg:…} a template uses needs a value"
@@ -310,6 +314,16 @@ boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
 [scopes.'services/api'.ruby-lsp]
 [scopes.'tools/cli'.ruby-lsp]
 runner = 'host'
+")))))
+  (testing "a value that only the runner a scope cancels would use"
+    (is (= ["scope \"tools/cli\", server type \"ruby-lsp\": \"service\" isn't used when run directly"]
+           (config/warnings (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
+
+[scopes.'tools/cli'.ruby-lsp]
+runner = false
 ")))))
   (testing "nothing for a value the scope unsets"
     (is (empty? (config/warnings (config/parse "

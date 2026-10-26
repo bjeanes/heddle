@@ -32,17 +32,17 @@
 ## 2. Where to run it ----------------------------------------------------------
 ##
 ## A server runs only where a scope starts it. A scope is a directory, relative
-## to this file (\".\" means the whole repo). For each server it starts, it names
-## a runner, which is how heddle starts the server there. If two scopes cover a
-## file, the deeper one wins.
+## to this file (\".\" means the whole repo). For each server it starts, it can
+## name a runner, which is how heddle starts the server there. Without one,
+## heddle runs the server's command directly, on your machine. If two scopes
+## cover a file, the deeper one wins.
 ##
 ## heddle lays a scope's keys for a server over that server's `boot`, key by
 ## key. That lets you give the command once, above, and only say where it runs
 ## here.
 
 ## On your machine, for the whole repo. Start here if you're unsure.
-# [scopes.\".\"]
-# ts-ls = { runner = \"host\" }
+# [scopes.\".\".ts-ls]
 
 ## In a Compose service that's already running. `paths` says where the
 ## container sees your files. Here, the `web` service mounts apps/web at /app.
@@ -55,11 +55,11 @@
 
 ## 3. Your own runners (optional) ----------------------------------------------
 ##
-## heddle has runners built in for your machine (`host`), a running Compose
-## service (`compose`), a running container (`docker-exec`), and a new
-## container for each server (`docker-run`). For anything else, such as
-## `nix develop` or `ssh`, write a runner of your own. README's \"Runners\" and
-## \"The built-in runners\" cover them in full.
+## heddle has runners built in for a running Compose service (`compose`), a
+## running container (`docker-exec`), and a new container for each server
+## (`docker-run`). For anything else, such as `nix develop` or `ssh`, write a
+## runner of your own. README's \"Runners\" and \"The built-in runners\" cover
+## them in full.
 ##
 ## A runner is a few commands, each a list of arguments that heddle runs
 ## without a shell. `start` runs the server, which then speaks LSP over its

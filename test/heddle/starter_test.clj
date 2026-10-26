@@ -44,7 +44,7 @@
            (command c "tools/cli" "start")))))
 
 (deftest each-scope-loads-with-only-the-server-type
-  (doseq [[scope header] {"." "# [scopes.\".\"]"
+  (doseq [[scope header] {"." "# [scopes.\".\".ts-ls]"
                           "apps/web" "# [scopes.\"apps/web\""
                           "tools/cli" "# [runners.docker-detached]"}]
     (let [c (config/parse (uncomment "# [servers.ts-ls]" header))]

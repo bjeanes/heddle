@@ -21,7 +21,7 @@ ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billin
 
 # This service's Ruby is too old for ruby-lsp. A newer Ruby on the host runs it.
 [scopes."services/legacy"]
-ruby-lsp = { runner = "host", command = ["ruby-lsp"] }
+ruby-lsp = { command = ["ruby-lsp"] }
 
 [scopes."services/web"]
 typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src" }, args = ["--volume", "{client:repo}:/src"] }

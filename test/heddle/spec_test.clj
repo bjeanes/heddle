@@ -70,6 +70,23 @@
     (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--volume" "/r:/src"
             "--workdir" "/src/services/web" "web-tools" "typescript-language-server" "--stdio"]
            (command design ["typescript" "services/web"] "start"))))
+  (testing "the command alone, with no runner"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { runner = 'compose', service = 'app', command = 's' }
+[servers.t]
+languages = ['x']
+boot = { command = 't' }
+
+[scopes.'.']
+s = { runner = false }
+t = { paths = { '.' = '/src' } }
+")]
+      (is (= ["s"] (command c ["s" "."] "start")) "when the scope cancels the server type's runner")
+      (is (= ["t"] (command c ["t" "."] "start")) "when nothing names one")
+      (is (= "/src" (:root (spec-for c ["t" "."]))) "with paths as given")
+      (is (nil? (command c ["t" "."] "read")))))
   (testing "a project's runner replaces a built-in of the same name"
     (let [c (config/parse "
 [servers.s]
@@ -80,8 +97,11 @@ start = ['env', '{cfg:command}']
 
 [scopes.'.']
 s = { runner = 'host', command = 's' }
+[scopes.a]
+s = { command = 's' }
 ")]
       (is (= ["env" "s"] (command c ["s" "."] "start")))
+      (is (= ["s"] (command c ["s" "a"] "start")) "and a scope with no runner doesn't use it")
       (is (contains? (get c "runners") "compose") "the other built-ins remain")))
   (testing "a runner's defaults fill in values the boot config leaves out"
     (let [c (config/parse "

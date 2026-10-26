@@ -96,8 +96,9 @@ apart:
    Its command can differ between them too.
 
 The config has a section for each. **Server types** answer the first question
-and **scopes** answer the second. A scope names a **runner** for each server
-type it starts, which decides where and how the server process runs.
+and **scopes** answer the second. A scope can name a **runner** for each server
+type it starts, which decides where and how the server process runs. Without
+one, the proxy runs the server's `command` directly, on the host.
 
 ```toml
 [servers.ruby-lsp]
@@ -121,7 +122,7 @@ ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billin
 
 # This service's Ruby is too old for ruby-lsp. A newer Ruby on the host runs it.
 [scopes."services/legacy"]
-ruby-lsp = { runner = "host", command = ["ruby-lsp"] }
+ruby-lsp = { command = ["ruby-lsp"] }
 
 [scopes."services/web"]
 typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src" }, args = ["--volume", "{client:repo}:/src"] }
@@ -241,7 +242,7 @@ comes from.
 only exist in `read`, and the proxy reports using one anywhere else as an error
 when it loads the config. Anything else the proxy provides goes under `proxy:`.
 
-A boot config names its `runner` and gives it `paths`. Every other key in it,
+A boot config can name its `runner` and give it `paths`. Every other key in it,
 including `command`, is a value for `{cfg:…}`. When the proxy loads the config,
 it checks each scope against its runner's templates. If a template uses a
 `{cfg:…}` value that neither the boot config nor the runner's `defaults` has,
@@ -272,7 +273,7 @@ one of them turns out to be needed.
 `paths` maps client paths to server paths, by directory. Its keys are relative
 to the repo root and its values are absolute. There can be several entries. The
 longest match wins in either direction. If a boot config has no `paths`, every
-path maps to itself. That is right for the `host` runner. It's also right for
+path maps to itself. That is right for a server on the host. It's also right for
 containers that mount the repo at the same path as on the host. If someone
 forgets `paths` for a container that mounts it elsewhere, the server will fail
 early on paths that don't exist.
@@ -749,9 +750,9 @@ the JVM, `System/console` also needs stdout to be a terminal, and I haven't
 confirmed that Jolt's detects one at all.
 
 A server type's boot table might set a `service` for the `compose` runner. A
-scope that switches that server type to `host` then has a value that its
-runner's templates never use. Since that is often deliberate, it isn't an
-error. However, an unused value can also be a misspelt key, such as `arg` for
+scope that runs that server type on the host instead then has a value that
+nothing uses. Since that is often deliberate, it isn't an error. However, an
+unused value can also be a misspelt key, such as `arg` for
 `args`. So, after answering `initialize`, the proxy shows one warning that
 lists every unused value in every scope. It then serves as usual.
 `languages` and `check` print the same warnings to stderr and still succeed.

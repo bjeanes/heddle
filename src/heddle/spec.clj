@@ -29,11 +29,21 @@
   {\/ "=2F"
    \= "=3D"})
 
+(def ^:private no-runner
+  "What starts a boot config that names no `runner`: its `command`, run
+  directly."
+  {"start" ["{cfg:command}"]})
+
 (defn- boot
   "The `slot`'s whole boot config, which `heddle.config/expand` has layered
   from the scope, the server type's `boot` table and the runner's defaults."
   [config [server-type scope]]
   (get-in config ["scopes" scope server-type]))
+
+(defn- runner-of
+  "The runner that the boot config names, or `no-runner` if it names none."
+  [config {:strs [runner]}]
+  (if (some? runner) (get-in config ["runners" runner]) no-runner))
 
 (defn- segment
   "`s` as one path segment, with each `/` and `=` as `=` and its hex code.
@@ -59,7 +69,7 @@
   [config [server-type scope :as slot] repo cache-root]
   (let [{:strs [paths] :as boot} (boot config slot)
         {:strs [languages globs]} (get-in config ["servers" server-type])
-        runner (get-in config ["runners" (get boot "runner")])
+        runner (runner-of config boot)
         dir (paths/client-path repo scope)]
     {:slot slot
      :languages (vec languages)
@@ -119,9 +129,8 @@
   (let [{:strs [runner] :as boot} (boot config slot)
         path-errors (paths-errors boot)]
     (cond
-      (nil? runner) ["names no runner"]
-      (not (string? runner)) ["runner must be a string"]
-      (not (contains? (get config "runners") runner)) [(str "unknown runner " (pr-str runner))]
+      (and (some? runner) (not (string? runner))) ["runner must be a string"]
+      (and (some? runner) (not (contains? (get config "runners") runner))) [(str "unknown runner " (pr-str runner))]
       (seq path-errors) path-errors
       :else
       (let [{:keys! [root templates cfg] :as s} (spec config slot (:repo stand-ins) (:cache-root stand-ins))
@@ -131,7 +140,7 @@
           (for [t runner/templates
                 :when (contains? templates t)
                 e (second (runner/expand* templates t ctx))]
-            (str "runner " (pr-str runner) ", " t ": " e)))))))
+            (str (if runner (str "runner " (pr-str runner) ", " t) "when run directly") ": " e)))))))
 
 (defn warnings
   "Values that the `slot`'s boot config sets but its runner never uses. Values
@@ -141,5 +150,5 @@
         defaulted (for [[k [origin]] (:sources (meta boot))
                         :when (= :defaults origin)]
                     k)]
-    (for [k (runner/unused-values (get-in config ["runners" runner]) (apply dissoc boot defaulted))]
-      (str (pr-str k) " isn't used by runner " (pr-str runner)))))
+    (for [k (runner/unused-values (runner-of config boot) (apply dissoc boot defaulted))]
+      (str (pr-str k) " isn't used " (if runner (str "by runner " (pr-str runner)) "when run directly")))))
