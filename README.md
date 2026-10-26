@@ -630,11 +630,10 @@ start. However, heddle waits up to 30 s for the servers before it answers
 ### Letting Claude open cached files
 
 Claude Code drops go-to-definition results that point into a git-ignored
-directory. I
-confirmed from a [trace](#tracing-messages) that heddle had returned the
-location. Hover still showed it as a link. Since a cache in the repo has to be
-ignored, Claude can only follow a server into an installed gem when
-[the cache](#the-cache) is outside the repo. `xdg = true` keeps it in
+directory. I confirmed from a [trace](#tracing-messages) that heddle had
+returned the location. Hover still showed it as a link. Since a cache in the
+repo has to be ignored, Claude can only follow a server into an installed gem
+when [the cache](#the-cache) is outside the repo. `xdg = true` keeps it in
 `~/.cache/heddle`:
 
 ```toml
@@ -642,11 +641,23 @@ ignored, Claude can only follow a server into an installed gem when
 xdg = true
 ```
 
-Claude also needs permission to read it. Add the directory to
-`permissions.additionalDirectories` in the same settings file. If the session
-runs in Claude Code's sandbox, or your organisation limits reads outside the
-working directory, check that those settings let Claude read it too. I haven't
-confirmed which keys that takes.
+Claude also needs permission to read it. I tested this in a session running in
+Claude Code's sandbox, with `blockReadsOutsideWorkingDirectories` turned on:
+
+| Settings                                                | Read tool | Bash reads | Bash writes |
+| ------------------------------------------------------- | --------- | ---------- | ----------- |
+| none                                                    | no        | no         | no          |
+| `sandbox.filesystem.allowRead`                          | no        | yes        | no          |
+| `allowRead` and a `Read(~/.cache/heddle/**)` allow rule | no        | yes        | no          |
+| `allowRead` and `permissions.additionalDirectories`     | yes       | yes        | yes         |
+
+Under `blockReadsOutsideWorkingDirectories`, an allow rule doesn't get the Read
+tool past the block. Only a working directory does. Adding the cache to
+`permissions.additionalDirectories` in the same settings file, or with
+`/add-dir`, makes it one. However, Claude can then write there too. If that
+matters to you, either turn the setting off or grant only `allowRead`. With
+`allowRead` alone, Claude can still follow a definition into a gem. It has to
+open the source through Bash instead of the Read tool.
 
 ## Agents, through an MCP bridge
 
