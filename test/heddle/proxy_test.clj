@@ -150,11 +150,11 @@ read = ['cat', '{read:file}']
       (is (= 1 (deref (:exit-code t) 2000 nil)))
       (is (nil? (.poll (:out t))))
       (is (= {} @(:received t)))))
-  (testing "warns that no scope starts a server type, and serves nothing"
-    (let [t (start :config "[servers.ruby]\nlanguages = ['ruby']\n")]
+  (testing "warns that there's no server type, and serves nothing"
+    (let [t (start :config "[scopes.'.']\n")]
       (initialize! t {})
-      (is (= (shown 2 (str "No scope in " (:repo t) "/.heddle.toml starts a server type.\n"
-                           "heddle is serving nothing until a scope starts one and it restarts."))
+      (is (= (shown 2 (str "There's no server type in " (:repo t) "/.heddle.toml.\n"
+                           "heddle is serving nothing until the config has one and it restarts."))
              (from-proxy t)))
       (is (serves-nothing? t))))
   (testing "shows the config's errors, and serves nothing"
@@ -196,6 +196,13 @@ read = ['cat', '{read:file}']
     (open! t "api/a.rb" "ruby")
     (is (eventually #(= 3 (count (methods-received t ["lint" "."])))))
     (is (= [["lint" "."]] (keys @(:received t))))))
+
+(deftest serving-a-server-type-that-no-scope-names
+  (let [t (start :server-types #{"ts"} :eager true
+                 :config (str config "\n[servers.ts]\nlanguages = ['typescript']\nboot = { command = 'ts' }\n"))]
+    (initialize! t {})
+    (is (eventually #(= ["initialize" "initialized"] (methods-received t ["ts" "."]))))
+    (is (= [["ts" "."]] (keys @(:received t))))))
 
 (deftest open-files
   (let [t (start)]

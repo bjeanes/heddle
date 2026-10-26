@@ -130,7 +130,9 @@ DIR is the current directory unless given.")
 (defn check
   "What `heddle check` prints for the repo at `dir`."
   [dir]
-  (with-config dir (fn [_ source] {:out (str "No errors in " source ".")})))
+  (with-config dir (fn [c source]
+                     {:out (str/join "\n" (remove nil? [(str "No errors in " source ".")
+                                                        (config/where-each-runs-message c)]))})))
 
 (defn init
   "What `heddle init` prints after writing a starter config to the root of the

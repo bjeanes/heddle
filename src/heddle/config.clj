@@ -131,13 +131,20 @@
              e (runner/runner-errors runner)]
          (str "runner " (pr-str name) ": " e))))))
 
-(defn- about-slot [[server-type scope] message]
-  (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " message))
+(defn implicit?
+  "Whether the `slot` is there only because no scope names its server type."
+  [config [server-type scope]]
+  (boolean (:implicit (meta (get-in config ["scopes" scope server-type])))))
+
+(defn- about-slot [config [server-type scope :as slot] message]
+  (if (implicit? config slot)
+    (str "server type " (pr-str server-type) ", which no scope names: " message)
+    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " message)))
 
 (defn- scope-runner-errors [config]
   (for [slot (spec/slots config)
         e (spec/errors config slot)]
-    (about-slot slot e)))
+    (about-slot config slot e)))
 
 (defn- checked [config source find-errors]
   (let [errors (find-errors config)]
@@ -153,7 +160,10 @@
   :sources, each entry's metadata says where any value the scope didn't set
   came from, as [:boot server-type] or [:defaults runner]. The `boot` tables
   and runners' `defaults` are then left out, since the scopes hold every value
-  of theirs that applies."
+  of theirs that applies.
+
+  A server type that no scope names runs across the repo, as though the `.`
+  scope named it with an empty entry. Its entry's metadata has :implicit true."
   [{:strs! [servers scopes runners] :as config}]
   (let [expand-entry (fn [server-type own]
                        (let [boot (get-in servers [server-type "boot"])
@@ -164,12 +174,18 @@
                              sources (merge (zipmap (keys defaults) (repeat [:defaults runner]))
                                             (zipmap (keys boot) (repeat [:boot server-type])))]
                          (with-meta (apply dissoc layered unset)
-                           {:sources (apply dissoc sources (concat (keys own) unset))})))]
+                           {:sources (apply dissoc sources (concat (keys own) unset))})))
+        named (set (mapcat keys (vals scopes)))
+        add-implicit (fn [scopes server-type]
+                       (assoc-in scopes ["." server-type]
+                                 (vary-meta (expand-entry server-type {}) assoc :implicit true)))]
     (assoc config
            "servers" (update-vals servers #(dissoc % "boot"))
            "runners" (update-vals runners #(dissoc % "defaults"))
-           "scopes" (update-vals scopes #(into {} (for [[server-type own] %]
-                                                    [server-type (expand-entry server-type own)]))))))
+           "scopes" (reduce add-implicit
+                            (update-vals scopes #(into {} (for [[server-type own] %]
+                                                            [server-type (expand-entry server-type own)])))
+                            (remove named (keys servers))))))
 
 (defn parse
   "Parses and checks config from a TOML string, with the built-in runners added
@@ -198,7 +214,7 @@
   [config]
   (for [slot (spec/slots config)
         w (spec/warnings config slot)]
-    (about-slot slot w)))
+    (about-slot config slot w)))
 
 (defn warnings-message
   "The `warnings` for the config file at `source`, as one message."
@@ -224,12 +240,25 @@
          name)))
 
 (defn languages
-  "The languages, sorted, of every server type that some scope starts, or only
-  of those in `server-types` if it's non-empty."
+  "The languages, sorted, of every server type, or only of those in
+  `server-types` if it's non-empty."
   ([config] (languages config nil))
   ([config server-types]
    (let [started (map first (spec/slots config server-types))]
      (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started)))))))
+
+(defn where-each-runs-message
+  "The scopes that each server type runs in, as one message, or nil if the
+  config has no server types."
+  [config]
+  (when-let [by-server-type (not-empty (group-by first (spec/slots config)))]
+    (str/join "\n" (cons "Each server type runs in these scopes:"
+                         (for [[server-type slots] (sort-by key by-server-type)]
+                           (str "  " server-type ": "
+                                (str/join ", " (for [[_ scope :as slot] (sort-by second slots)]
+                                                 (if (implicit? config slot)
+                                                   (str scope " (the whole repo, since no scope names it)")
+                                                   scope)))))))))
 
 (defn unknown-server-types
   "Those of the server types `names` that the config doesn't have."

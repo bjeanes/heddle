@@ -50,7 +50,20 @@
            (set (spec/slots design [])))))
   (testing "of only the server types served"
     (is (= #{["ruby-lsp" "services/api"] ["ruby-lsp" "services/billing"] ["ruby-lsp" "services/legacy"]}
-           (set (spec/slots design #{"ruby-lsp" "nosuch"}))))))
+           (set (spec/slots design #{"ruby-lsp" "nosuch"})))))
+  (testing "including those of a server type that no scope names"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { command = 's' }
+[servers.t]
+languages = ['x']
+boot = { command = 't' }
+
+[scopes.a.s]
+")]
+      (is (= #{["s" "a"] ["t" "."]} (set (spec/slots c))))
+      (is (= [["t" "."]] (spec/slots c #{"t"}))))))
 
 (deftest specs-by-slot
   (let [specs (spec/specs design "/r" "/cache" #{"rubocop"})]

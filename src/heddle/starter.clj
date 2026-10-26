@@ -13,7 +13,8 @@
 ##
 ## To get going:
 ##   1. Uncomment a server, or write your own.
-##   2. Uncomment ONE \"where to run it\" example, and adjust it.
+##   2. If it should run somewhere other than your machine, uncomment a
+##      \"where to run it\" example, and adjust it.
 ##   3. Run `heddle check`, then point your editor at `heddle`.
 ##
 ## README's \"The config in full\" describes every key.
@@ -23,15 +24,16 @@
 ## Name each language server, say which files it handles and how to start it.
 ## Your editor sends a language ID with each file it opens. To match files by
 ## path as well, or instead, give `globs` from the repo root, such as
-## \"**/*.ts\". `boot` says how to start the server, wherever it runs.
+## \"**/*.ts\". `boot` says how to start the server, wherever it runs. With
+## nothing else, heddle runs that command on your machine, for the whole repo.
 
 # [servers.ts-ls]                              # named as you like
 # languages = [\"typescript\", \"typescriptreact\", \"javascript\", \"javascriptreact\"]
 # boot = { command = [\"typescript-language-server\", \"--stdio\"] }
 
-## 2. Where to run it ----------------------------------------------------------
+## 2. Where to run it (optional) -----------------------------------------------
 ##
-## A server runs only where a scope starts it. A scope is a directory, relative
+## A scope says how to run a server for the files under one directory, relative
 ## to this file (\".\" means the whole repo). For each server it starts, it can
 ## name a runner, which is how heddle starts the server there. Without one,
 ## heddle runs the server's command directly, on your machine. If two scopes
@@ -41,9 +43,6 @@
 ## key. That lets you give the command once, above, and only say where it runs
 ## here.
 
-## On your machine, for the whole repo. Start here if you're unsure.
-# [scopes.\".\".ts-ls]
-
 ## In a Compose service that's already running. `paths` says where the
 ## container sees your files. Here, the `web` service mounts apps/web at /app.
 ## heddle uses `paths` to translate file paths between your editor and the
@@ -52,6 +51,11 @@
 # runner = \"compose\"
 # service = \"web\"
 # paths = { \"apps/web\" = \"/app\" }
+
+## Once a scope names a server, it runs only where scopes name it, rather than
+## across the whole repo. To keep it on your machine for the rest of the repo,
+## name it at \".\" as well. `heddle check` lists where each server runs.
+# [scopes.\".\".ts-ls]
 
 ## 3. Your own runners (optional) ----------------------------------------------
 ##

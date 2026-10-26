@@ -22,7 +22,7 @@
 (defn load-config
   "The repo and its config, from the first of `roots` with a config. If none
   has one, there's no :repo. The proxy then fails `initialize`. Without a
-  config that starts some server type, the proxy serves nothing. :problem then
+  config that has some server type, the proxy serves nothing. :problem then
   has the type of a message for the user, what's wrong, and what would have to
   change. Otherwise, :cache-root is where to cache fetched files, :trace-path
   is the file to trace messages to, if any, and :warnings has the text of any
@@ -41,8 +41,8 @@
                  :warnings (cond-> []
                              (seq unused) (conj (config/warnings-message source unused))
                              warning (conj warning))}
-          (every? empty? (vals (get c "scopes")))
-          (assoc :problem [:warning (str "No scope in " source " starts a server type.") "a scope starts one"])))
+          (empty? (get c "servers"))
+          (assoc :problem [:warning (str "There's no server type in " source ".") "the config has one"])))
       (catch Exception e
         {:repo repo
          :config no-config

@@ -156,11 +156,24 @@ to install somewhere else, as in `install-heddle ~/.local/bin`.
 ## Configuring a repo
 
 The proxy looks for `.heddle.toml` at the root of the workspace your
-editor opens. A minimal one, for one Ruby service, looks like this:
+editor opens. The smallest one names a server type, which files it handles,
+and how to start it:
 
 ```toml
 # Server types say which servers handle which files, and how to start them
 # by default.
+[servers.ruby-lsp]
+languages = ["ruby"]
+boot = { command = ["bundle", "exec", "ruby-lsp"] }
+```
+
+With nothing else, the proxy runs that command on your machine, for the whole
+repo. To run it differently for the files under a directory, such as in a
+container, give it a scope. Once a scope names a server type, the server type
+runs only where scopes name it. For one Ruby service in Compose, that looks
+like this:
+
+```toml
 [servers.ruby-lsp]
 languages = ["ruby"]
 boot = { command = ["bundle", "exec", "ruby-lsp"] }
@@ -178,9 +191,17 @@ Since the proxy doesn't start containers itself, bring them up first with
 
 To check a config, run `heddle check` from the repo root, or give it the
 root as an argument. It prints the config's errors and warnings, and exits
-non-zero if there are any errors. `heddle languages` takes the same
-argument and prints which languages the config covers, as JSON such as
-`{"languages":["ruby"]}`.
+non-zero if there are any errors. Otherwise, it lists the scopes each server
+type runs in:
+
+```
+No errors in /home/you/shop/.heddle.toml.
+Each server type runs in these scopes:
+  ruby-lsp: services/api
+```
+
+`heddle languages` takes the same argument and prints which languages the
+config covers, as JSON such as `{"languages":["ruby"]}`.
 
 For more, see the examples:
 
@@ -211,15 +232,14 @@ in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
 
 If there's no `.heddle.toml`, `serve` fails the editor's `initialize` request
-with an error saying where it looked. If the config is invalid, or no scope in
-it starts a server type, `serve` still answers the editor, shows it a message
-saying what's wrong, and serves nothing. Run by hand at a terminal, though, it
-prints the problem to stderr and exits 1 instead of waiting on stdin. It does
-the same there if none of the server types named after `serve` is in the
-config.
+with an error saying where it looked. If the config is invalid, or has no
+server types, `serve` still answers the editor, shows it a message saying
+what's wrong, and serves nothing. Run by hand at a terminal, though, it prints
+the problem to stderr and exits 1 instead of waiting on stdin. It does the same
+there if none of the server types named after `serve` is in the config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
-through a server type, a scope on the host, a scope in a Compose service, a
+through a server type, a scope in a Compose service, a scope on the host, a
 runner of your own, the cache, and tracing, all commented out. Its notes start
 with `## ` and its examples with `# `. Uncomment what you need, then run
 `heddle check`. If there's already a config there, `init` leaves it alone and
@@ -306,6 +326,11 @@ It lists the server types it starts and how to start each one. For each server
 type that matches a file, the proxy uses the longest scope that contains the
 file and lists that server type. If there isn't one, that server type doesn't
 handle the file.
+
+A server type that no scope lists runs across the whole repo, as though the
+`.` scope listed it with no values of its own. Once any scope lists it, it
+runs only where scopes list it. `heddle check` prints the scopes each server
+type runs in, marking one that runs across the repo for that reason.
 
 The proxy lays a scope's values over the server type's `boot` table, one key
 at a time. That lets you give the command once, on the server type, and only

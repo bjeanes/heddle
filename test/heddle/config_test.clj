@@ -1,7 +1,8 @@
 (ns heddle.config-test
   (:require [clojure.string :as str]
             [clojure.test :refer [are deftest is testing]]
-            [heddle.config :as config]))
+            [heddle.config :as config]
+            [heddle.spec :as spec]))
 
 (def design (config/read-config "test/heddle/fixtures/design"))
 
@@ -24,20 +25,21 @@
   (is (= ["ruby" "typescript" "typescriptreact"] (config/languages design [])))
   (is (= ["typescript" "typescriptreact"] (config/languages design ["typescript"])) "of the named server types")
   (is (= [] (config/languages design ["unknown"])))
-  (is (= ["x"] (config/languages (config/parse "
-[servers.started]
+  (is (= ["x" "y"] (config/languages (config/parse "
+[servers.named]
 languages = ['x']
-boot = { runner = 'host', command = 's' }
-[servers.unstarted]
+boot = { command = 's' }
+[servers.unnamed]
 languages = ['y']
+boot = { command = 's' }
 [servers.by-glob]
 globs = ['*.z']
-boot = { runner = 'host', command = 's' }
+boot = { command = 's' }
 
-[scopes.'.'.started]
+[scopes.'.'.named]
 [scopes.'.'.by-glob]
 ")))
-      "only server types that a scope starts, and only their languages"))
+      "of server types whether or not a scope names them, and only their languages"))
 
 (deftest expands-scopes
   (let [c (config/parse "
@@ -111,6 +113,48 @@ x = 's'
       (is (= "s" (get (entry "c") "x")))
       (is (not (contains? (:sources (meta (entry "c"))) "x"))))))
 
+(deftest runs-a-server-type-no-scope-names-across-the-repo
+  (let [c (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'app', command = 'ruby-lsp' }
+[servers.rubocop]
+languages = ['ruby']
+boot = { command = 'rubocop' }
+[servers.ts-ls]
+languages = ['typescript']
+boot = { command = 'ts-ls' }
+
+[scopes.'apps/web'.ts-ls]
+[scopes.'.'.rubocop]
+command = 'rubocop --lsp'
+")
+        entry #(get-in c ["scopes" %1 %2])]
+    (testing "with its boot table, over its runner's defaults, as the whole boot config"
+      (is (= {"runner" "compose" "service" "app" "command" "ruby-lsp" "compose" ["docker" "compose"]}
+             (entry "." "ruby-lsp"))))
+    (testing "saying it's implicit, and where its values came from"
+      (is (= {:implicit true
+              :sources {"runner" [:boot "ruby-lsp"] "service" [:boot "ruby-lsp"]
+                        "command" [:boot "ruby-lsp"] "compose" [:defaults "compose"]}}
+             (meta (entry "." "ruby-lsp"))))
+      (is (config/implicit? c ["ruby-lsp" "."])))
+    (testing "only where no scope names the server type"
+      (is (= #{"ruby-lsp" "rubocop"} (set (keys (get-in c ["scopes" "."])))))
+      (is (= {"ts-ls" {"command" "ts-ls"}} (get-in c ["scopes" "apps/web"])))
+      (is (nil? (config/scope-for c "ts-ls" "lib/a.ts")))
+      (is (not (config/implicit? c ["rubocop" "."])) "even a scope at the repo root"))
+    (testing "with problems reported against the server type"
+      (is (= #{"server type \"b\", which no scope names: when run directly: no value for {cfg:command}"}
+             (errors "[servers.a]\nlanguages = ['x']\nboot = { command = 'a' }\n[servers.b]\nlanguages = ['x']\n")))
+      (is (= ["server type \"a\", which no scope names: \"image\" isn't used when run directly"]
+             (config/warnings (config/parse "[servers.a]\nlanguages = ['x']\nboot = { command = 'a', image = 'i' }\n")))))
+    (testing "and never in the configs that ship as examples"
+      (doseq [dir ["test/heddle/fixtures/design" "examples/monorepo" "examples/ruby-compose"]
+              :let [c (config/read-config dir)]
+              slot (spec/slots c)]
+        (is (not (config/implicit? c slot)) (str dir " " slot))))))
+
 (deftest unknown-server-types
   (is (= ["nosuch"] (config/unknown-server-types design ["ruby-lsp" "nosuch"])))
   (is (empty? (config/unknown-server-types design []))))
@@ -119,14 +163,18 @@ x = 's'
   (let [c (config/parse "
 [servers.a]
 languages = ['x']
+boot = { command = 'a' }
 [servers.b]
 languages = ['x']
+boot = { command = 'b' }
 priority = -1
 [servers.c]
 languages = ['x']
+boot = { command = 'c' }
 priority = 2
 [servers.d]
 languages = ['x']
+boot = { command = 'd' }
 ")]
     (is (= ["c" "a" "d" "b"] (config/by-priority c ["a" "b" "c" "d"]))
         "highest first, then by name, with 0 as the default")))

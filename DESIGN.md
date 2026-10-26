@@ -61,17 +61,19 @@ in.
 `heddle languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
 Instead, it prints the languages that the config at the root of DIR covers, as
 JSON such as `{"languages":["ruby"]}`. DIR defaults to the directory it was
-started in. Only server types that some scope starts count and, if any are
-named, only those. If there's no config, it's invalid, or it doesn't have a
-server type that was named, it prints the problems to stderr and exits
-non-zero. A client uses this to stop its own servers for those languages from
-starting alongside the proxy, since few clients can parse TOML themselves.
+started in. If any server types are named, only those count. If there's no
+config, it's invalid, or it doesn't have a server type that was named, it
+prints the problems to stderr and exits non-zero. A client uses this to stop
+its own servers for those languages from starting alongside the proxy, since
+few clients can parse TOML themselves.
 Given the same server types as `serve`, it answers for exactly what that proxy
 serves.
 
 `heddle check [DIR]` reads the same config and prints its errors and
 warnings, exiting non-zero if there are errors. That way, someone editing the
-config can see its problems without starting an editor.
+config can see its problems without starting an editor. If there are no
+errors, it also lists the scopes that each server type runs in, marking a
+server type that runs across the repo only because no scope names it.
 
 `heddle init [DIR]` writes a starter config to the root of DIR, and refuses
 to replace one that's already there. Everything in it is commented out, so it
@@ -172,6 +174,17 @@ Taking `services/api/app/models/user.rb` from the example above, its language is
   `bundle exec ruby-lsp` in the `api` Compose service, rooted at `/app`.
 - For `rubocop`, only `.` starts it. It runs `rubocop --lsp` in the `lints`
   service, rooted at `/src`.
+
+A server type that no scope names runs across the whole repo, as though the
+`.` scope named it with no values of its own. Its `boot` table is then its
+whole boot config. That makes the smallest config a single server type, whose
+`boot` table gives the command to run on the host. As soon as any scope names
+a server type, it runs only where scopes name it. Otherwise, giving a server
+type a scope for one service's container would leave it running from its
+`boot` table across the rest of the repo, where its command may not even
+exist. Since adding a scope then changes where a server type runs elsewhere,
+`heddle check` lists the scopes each one runs in. None of the server types in
+the example above runs this way, since each of them has a scope.
 
 ## Runners
 
@@ -710,11 +723,11 @@ A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
 and scope, and logs the rest.
 
-If the config is invalid, or has no scope that starts a server type, the
-proxy still answers `initialize`, then shows a message saying so, with the
-config's errors. It also logs the message to stderr, as it does every message
-it shows. It then serves nothing until it restarts, answering every request
-with an empty result. Failing `initialize` instead would leave many clients
+If the config is invalid, or has no server types, the proxy still answers
+`initialize`, then shows a message saying so, with the config's errors. It
+also logs the message to stderr, as it does every message it shows. It then
+serves nothing until it restarts, answering every request with an empty
+result. Failing `initialize` instead would leave many clients
 retrying the proxy or giving up on it, with the reason only in a log. Since
 someone wrote that config to use heddle, the message tells them what to fix.
 

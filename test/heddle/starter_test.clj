@@ -43,6 +43,12 @@
             "typescript-language-server" "--stdio"]
            (command c "tools/cli" "start")))))
 
+(deftest the-server-type-alone-runs-across-the-repo
+  (let [c (config/parse (uncomment "# [servers.ts-ls]"))]
+    (is (= [] (config/warnings c)))
+    (is (config/implicit? c ["ts-ls" "."]))
+    (is (= ["typescript-language-server" "--stdio"] (command c "." "start")))))
+
 (deftest each-scope-loads-with-only-the-server-type
   (doseq [[scope header] {"." "# [scopes.\".\".ts-ls]"
                           "apps/web" "# [scopes.\"apps/web\""

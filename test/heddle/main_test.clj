@@ -111,6 +111,26 @@
 
 (deftest check-a-valid-config
   (let [dir "test/heddle/fixtures/design"]
+    (is (= {:exit 0 :out (str "No errors in " dir "/.heddle.toml.\n"
+                              "Each server type runs in these scopes:\n"
+                              "  rubocop: .\n"
+                              "  ruby-lsp: services/api, services/billing, services/legacy\n"
+                              "  typescript: services/web")}
+           (main/check dir)))))
+
+(deftest check-a-config-with-a-server-type-no-scope-names
+  (let [dir (temp-dir)]
+    (spit (io/file dir ".heddle.toml")
+          "[servers.s]\nlanguages = ['x']\nboot = { command = 's' }\n[servers.t]\nlanguages = ['y']\nboot = { command = 't' }\n[scopes.a.s]\n")
+    (is (= {:exit 0 :out (str "No errors in " dir "/.heddle.toml.\n"
+                              "Each server type runs in these scopes:\n"
+                              "  s: a\n"
+                              "  t: . (the whole repo, since no scope names it)")}
+           (main/check dir)))))
+
+(deftest check-a-config-with-no-server-types
+  (let [dir (temp-dir)]
+    (main/init dir)
     (is (= {:exit 0 :out (str "No errors in " dir "/.heddle.toml.")}
            (main/check dir)))))
 
@@ -179,7 +199,7 @@
     (main/init dir)
     (let [{:keys [exit err]} (nothing-to-serve true dir)]
       (is (= 1 exit))
-      (is (str/starts-with? err (str "heddle: No scope in " dir "/.heddle.toml starts a server type.\n"))))))
+      (is (str/starts-with? err (str "heddle: There's no server type in " dir "/.heddle.toml.\n"))))))
 
 (deftest serve-at-a-terminal-stops-with-an-invalid-config
   (let [dir (temp-dir)]
