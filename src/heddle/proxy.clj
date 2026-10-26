@@ -21,6 +21,12 @@
             [heddle.spec :as spec]
             [heddle.translate :as translate]))
 
+(def ^:private eager-timeout-ms 30000) ; with :eager, for every backend to start before answering `initialize`
+(def ^:private retry-interval-ms 30000) ; before a failed backend can start again
+(def ^:private report-interval-ms 60000) ; between messages about one slot's failures
+(def ^:private shutdown-timeout-ms 10000) ; for every backend to answer `shutdown`
+(def ^:private exit-timeout-ms 2000) ; for a backend to exit before it's killed
+
 (defn create
   "A proxy for one client. `opts` has:
 
@@ -146,8 +152,6 @@
 
 (declare start-backend! ready-backends register! when-all-settled)
 
-(def ^:private eager-timeout-ms 30000)
-
 (defn- start-every-backend!
   "Starts a backend for every slot the proxy has a spec for, by scope then
   server type, and waits until they have all started or failed, or the
@@ -199,7 +203,7 @@
             (log/info "couldn't initialize -" (ex-message e))
             {:error (ex-message e)}))]
     (channel/open! (:channel proxy) (if error
-                                      (lsp/error-response id -32603 error)
+                                      (lsp/error-response id lsp/internal-error error)
                                       (lsp/response id result)))
     (when-not error
       (register! proxy)
@@ -303,8 +307,6 @@
   [since now ms]
   (or (nil? since) (<= ms (- now since))))
 
-(def ^:private report-interval-ms 60000)
-
 (defn- report!
   "Shows the user a message about the backend `b`, unless one was shown for its
   server type and scope in the last `report-interval-ms`, as a backend that
@@ -332,10 +334,8 @@
                               (if ready?
                                 (register! proxy)
                                 (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
-                                    (future (backend/exit! b 2000))))))
+                                    (future (backend/exit! b exit-timeout-ms))))))
     b))
-
-(def ^:private retry-interval-ms 30000)
 
 (defn- backend-for!
   "The backend for `k`, a [server-type scope], started if it isn't running.
@@ -404,7 +404,7 @@
   [proxy b]
   (log/info (:backend-id b) "stopped")
   (when (= :exited (backend/status b))
-    (failed! proxy b :warning (str "stopped" (some->> (backend/exit-code b 1000) (str " with exit code "))))))
+    (failed! proxy b :warning (str "stopped" (some->> (backend/exit-code b backend/exit-code-wait-ms) (str " with exit code "))))))
 
 (defn- qualify
   "An ID that the backend `b` chose for the client, made unique among all
@@ -629,15 +629,13 @@
                       (send-client! proxy
                                     (cond
                                       (nil? response)
-                                      (lsp/error-response id -32603 (str (server-type-of b) " stopped before answering"))
+                                      (lsp/error-response id lsp/internal-error (str (server-type-of b) " stopped before answering"))
 
                                       (contains? response "error")
                                       (assoc (fetched/to-client! b response) "id" id)
 
                                       :else
                                       (lsp/response id (result-for-client b method (get response "result"))))))))
-
-(def ^:private request-failed -32803)
 
 (defn- failures
   "Why each of the backends `ks`, as [server-type scope], failed, for those
@@ -649,7 +647,7 @@
   "An error answering the request `id`, which an agent sees in its tool's
   result, with why the backends that would have answered it failed."
   [id reasons]
-  (lsp/error-response id request-failed (str/join "\n" reasons)))
+  (lsp/error-response id lsp/request-failed (str/join "\n" reasons)))
 
 (defn- answer-unanswered!
   "Answers a request that no running backend can, with an empty result. If no
@@ -722,7 +720,7 @@
     (cond
       (seq answers) (lsp/response id (merge/combine method answers))
       (some some? responses) (assoc (first (filter some? responses)) "id" id)
-      :else (lsp/error-response id -32603 "every backend stopped before answering"))))
+      :else (lsp/error-response id lsp/internal-error "every backend stopped before answering"))))
 
 (defn- combine-request!
   "Sends a request to every one of `backends` that offers the request's
@@ -791,7 +789,7 @@
         reasons (failures registry (sort (filter #(= server-type (first %)) (keys (:failures registry)))))]
     (if (seq reasons)
       (failed-response id reasons)
-      (lsp/error-response id -32603 (str "no " server-type " backend is running")))))
+      (lsp/error-response id lsp/internal-error (str "no " server-type " backend is running")))))
 
 (defn- execute-command!
   "Sends `workspace/executeCommand` to a backend of the server type that the
@@ -804,7 +802,7 @@
         not-running #(send-client! proxy (not-running-response proxy id server-type))]
     (cond
       (nil? server-type)
-      (send-client! proxy (lsp/error-response id -32602 (str "unknown command " (pr-str (get params "command")))))
+      (send-client! proxy (lsp/error-response id lsp/invalid-params (str "unknown command " (pr-str (get params "command")))))
 
       (nil? b)
       (not-running)
@@ -829,8 +827,6 @@
   (when-let [{:keys [backend token]} (get-in @(:state proxy) [:client :progress token])]
     (backend/notify! backend "window/workDoneProgress/cancel" {"token" token})))
 
-(def ^:private shutdown-timeout-ms 10000)
-
 (defn- shutdown!
   "Answers `shutdown` once every backend has, or once they've had
   `shutdown-timeout-ms` in all. The client's thread doesn't wait, since a
@@ -849,7 +845,7 @@
 
 (defn- exit! [proxy]
   (let [[old] (swap-vals! (:state proxy) assoc :phase :exiting)]
-    (run! deref (mapv #(future (backend/exit! % 2000)) (running-backends proxy)))
+    (run! deref (mapv #(future (backend/exit! % exit-timeout-ms)) (running-backends proxy)))
     ((:exit proxy) (if (= :shutting-down (:phase old)) 0 1))))
 
 ;; The client's messages
@@ -861,7 +857,7 @@
   (let [uri (get-in params ["textDocument" "uri"])]
     (cond
       (= "initialize" method) (initialize! proxy msg)
-      (uninitialized? proxy) (send-client! proxy (lsp/error-response id -32002 "not initialized"))
+      (uninitialized? proxy) (send-client! proxy (lsp/error-response id lsp/server-not-initialized "not initialized"))
       (= "shutdown" method) (shutdown! proxy id)
       (capabilities/resolve-method? method) (resolve! proxy msg)
       (capabilities/follow-up-method? method) (follow-up! proxy msg)
@@ -906,4 +902,4 @@
     (catch Exception e
       (log/info "couldn't handle" (get msg "method" "a response") "-" (ex-message e))
       (when (and (contains? msg "id") (contains? msg "method"))
-        (send-client! proxy (lsp/error-response (get msg "id") -32603 (ex-message e)))))))
+        (send-client! proxy (lsp/error-response (get msg "id") lsp/internal-error (ex-message e)))))))

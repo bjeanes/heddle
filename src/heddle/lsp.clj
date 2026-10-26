@@ -5,6 +5,11 @@
             [heddle.json :as json])
   (:import (java.io InputStream OutputStream)))
 
+(def internal-error -32603)
+(def invalid-params -32602)
+(def server-not-initialized -32002)
+(def request-failed -32803)
+
 (defn- read-header-line
   "Reads one header line, without its CRLF. Nil at end of stream."
   [^InputStream in]

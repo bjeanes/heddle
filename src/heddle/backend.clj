@@ -20,6 +20,13 @@
            (java.util UUID)
            (java.util.concurrent TimeUnit)))
 
+(def default-timeouts
+  {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
+   :read-timeout-ms 10000}) ; for each `read` of a fetched file
+
+(def exit-code-wait-ms 1000) ; for a backend that has stopped to give its exit code
+(def ^:private slow-prepare-ms 1000) ; long enough to mention when initialize times out
+
 (defn new-id
   "A backend ID, which is the project's name and a random suffix. It only uses
   characters that Docker allows in a container name."
@@ -82,10 +89,6 @@
     (when-let [command (spec/command spec "prepare" runtime)]
       (prepare! command dir start-timeout-ms))
     (spawn (spec/command spec "start" runtime) dir on-message)))
-
-(def default-timeouts
-  {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
-   :read-timeout-ms 10000}) ; for each `read` of a fetched file
 
 (defn backend
   "A backend for the `spec` (see heddle.spec), not yet started. `timeouts`
@@ -223,12 +226,12 @@
         (= ::timed-out response)
         (do ((:kill (:conn @(:state backend))))
             (throw (ex-info (str "it didn't answer initialize within " (process/duration start-timeout-ms)
-                                 (when (<= 1000 connect-ms)
+                                 (when (<= slow-prepare-ms connect-ms)
                                    (str ", of which prepare took " (process/duration connect-ms))))
                             {})))
 
         (nil? response)
-        (throw (ex-info (str "it exited" (some->> (exit-code backend 1000) (str " with "))
+        (throw (ex-info (str "it exited" (some->> (exit-code backend exit-code-wait-ms) (str " with "))
                              " before answering initialize")
                         {}))
 
