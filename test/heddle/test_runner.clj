@@ -18,6 +18,7 @@
             [heddle.process-test]
             [heddle.proxy-test]
             [heddle.readme-test]
+            [heddle.requests-test]
             [heddle.runner-test]
             [heddle.starter-test]
             [heddle.translate-test]))

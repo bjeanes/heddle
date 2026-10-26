@@ -15,7 +15,8 @@
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.paths :as paths]
-            [heddle.process :as process])
+            [heddle.process :as process]
+            [heddle.requests :as requests])
   (:import (java.io BufferedInputStream InputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.util UUID)
@@ -108,7 +109,7 @@
            :fetched (atom #{})
            :root (config/server-scope config server-type scope repo)
            :state (atom {:status :starting :queue []})
-           :requests (atom {:last-id 0 :open {}})})))
+           :requests (atom requests/empty-table)})))
 
 (defn status
   "One of :starting, :ready, :failed or :exited."
@@ -155,12 +156,7 @@
   ([backend method params tag on-response]
    (let [{:keys [last-id stopped]}
          (swap! (:requests backend)
-                (fn [{:keys [last-id] :as requests}]
-                  (if (:stopped requests)
-                    requests
-                    (-> requests
-                        (assoc :last-id (inc last-id))
-                        (assoc-in [:open (inc last-id)] {:tag tag :on-response on-response})))))]
+                #(cond-> % (not (:stopped %)) (requests/add tag on-response)))]
      (if stopped
        (on-response nil)
        (send! backend (lsp/request last-id method params)))
@@ -169,13 +165,11 @@
 (defn tagged-request
   "The ID of the open request tagged with `tag`, or nil if there isn't one."
   [backend tag]
-  (first (for [[id request] (:open @(:requests backend))
-               :when (= tag (:tag request))]
-           id)))
+  (first (requests/tagged @(:requests backend) tag)))
 
 (defn- take-callback! [backend id]
-  (let [[old] (swap-vals! (:requests backend) update :open dissoc id)]
-    (get-in old [:open id :on-response])))
+  (let [[old] (swap-vals! (:requests backend) requests/answered id)]
+    (requests/on-response old id)))
 
 (defn- stopped! [backend]
   (swap! (:state backend) #(cond-> % (= :ready (:status %)) (assoc :status :exited)))

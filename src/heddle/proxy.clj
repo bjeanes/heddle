@@ -17,6 +17,7 @@
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
+            [heddle.requests :as requests]
             [heddle.translate :as translate])
   (:import (java.net URI)))
 
@@ -40,8 +41,7 @@
   (assoc opts :state (atom {:backends {}
                             :documents {}
                             :opened {}
-                            :last-id 0
-                            :to-client {}
+                            :to-client requests/empty-table
                             :progress {}
                             :registered {}
                             :reported {}})))
@@ -74,25 +74,19 @@
   `on-response` with the client's response. `origin` is the backend and ID of
   the request this one forwards, if any."
   [proxy method params origin on-response]
-  (let [state (swap! (:state proxy)
-                     (fn [{:keys [last-id] :as state}]
-                       (-> state
-                           (assoc :last-id (inc last-id))
-                           (assoc-in [:to-client (inc last-id)] {:origin origin
-                                                                 :on-response on-response}))))]
-    (send-client! proxy (lsp/request (:last-id state) method params))))
+  (let [state (swap! (:state proxy) update :to-client requests/add origin on-response)]
+    (send-client! proxy (lsp/request (get-in state [:to-client :last-id]) method params))))
 
 (defn- client-response! [proxy {:strs [id] :as msg}]
-  (let [[old] (swap-vals! (:state proxy) update :to-client dissoc id)]
-    (if-let [{:keys [on-response]} (get-in old [:to-client id])]
+  (let [[old] (swap-vals! (:state proxy) update :to-client requests/answered id)]
+    (if-let [on-response (requests/on-response (:to-client old) id)]
       (on-response msg)
       (log/info "the client answered an unknown request" (pr-str id)))))
 
 (defn- cancel-client-request!
   "Passes on a backend's cancellation of a request it sent the client."
   [proxy origin]
-  (doseq [[id request] (:to-client @(:state proxy))
-          :when (= origin (:origin request))]
+  (doseq [id (requests/tagged (:to-client @(:state proxy)) origin)]
     (send-client! proxy (lsp/notification "$/cancelRequest" {"id" id}))))
 
 (def ^:private message-type {:error 1 :warning 2})
