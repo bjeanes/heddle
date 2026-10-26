@@ -60,6 +60,9 @@
                        :client {:documents {}
                                 :announced #{}
                                 :registered {}
+                                ;; what each backend registered itself, by
+                                ;; backend ID then qualified registration ID
+                                :registered-by {}
                                 :diagnostics {}
                                 :progress {}}})))
 
@@ -216,9 +219,10 @@
   covering all of their files. Some clients, such as VS Code, ask every
   registration that matches a file. A registration per backend would then
   bring the proxy each request several times. When a registration has to
-  change, the proxy unregisters it and registers it again. Features announced
-  in the answer to `initialize` aren't registered. Nothing is registered until
-  that answer has been sent."
+  change, the proxy unregisters it and registers it again. When no ready
+  backend offers the feature any more, the proxy unregisters it. Features
+  announced in the answer to `initialize` aren't registered. Nothing is
+  registered until that answer has been sent."
   [proxy]
   (channel/serially (:channel proxy)
     (fn []
@@ -228,12 +232,15 @@
                      (remove #(contains? announced (get % "method"))
                              (capabilities/registrations (get-in session [:client-params "capabilities"])
                                                          (ready-backends proxy))))
+            wanted-by-method (into {} (map (juxt #(get % "method") identity)) wanted)
+            withdrawn (remove #(contains? wanted-by-method (get % "method")) (vals registered))
             changed (remove #(= % (get registered (get % "method"))) wanted)
-            replaced (filter #(contains? registered (get % "method")) changed)]
-        (swap! (:state proxy) update-in [:client :registered] into (map (juxt #(get % "method") identity)) changed)
-        (when (seq replaced)
+            replaced (filter #(contains? registered (get % "method")) changed)
+            unregistered (concat withdrawn replaced)]
+        (swap! (:state proxy) assoc-in [:client :registered] wanted-by-method)
+        (when (seq unregistered)
           (ask-client! proxy "client/unregisterCapability"
-                       {"unregisterations" (mapv #(select-keys % ["id" "method"]) replaced)}))
+                       {"unregisterations" (mapv #(select-keys % ["id" "method"]) unregistered)}))
         (when (seq changed)
           (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)}))))))
 
@@ -312,16 +319,29 @@
   (doseq [uri (diagnostics/files-from (get-in @(:state proxy) [:client :diagnostics]) (:backend-id b))]
     (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
 
+(defn- withdraw-registrations!
+  "Unregisters what the backend `b`, which has stopped, registered itself and
+  hasn't unregistered."
+  [proxy b]
+  (let [[old] (swap-vals! (:state proxy) update-in [:client :registered-by] dissoc (:backend-id b))
+        registrations (vals (get-in old [:client :registered-by (:backend-id b)]))]
+    (when (seq registrations)
+      (ask-client! proxy "client/unregisterCapability"
+                   {"unregisterations" (mapv #(select-keys % ["id" "method"]) registrations)}))))
+
 (defn- failed!
   "Replaces the backend `b`, which failed to start or stopped, with a record of
-  why and when under :failures, withdraws its diagnostics and tells the user.
-  `what-happened` follows the backend's description in the message."
+  why and when under :failures, withdraws its diagnostics and registrations,
+  and tells the user. `what-happened` follows the backend's description in the
+  message."
   [proxy b type what-happened]
   (let [message (registry/failure-message b what-happened)
         [old] (swap-vals! (:state proxy) update :registry registry/failed b message (now-ms proxy))]
     (when (registry/entry (:registry old) b)
       (clear-diagnostics! proxy b)
       (when (= :serving (:phase old))
+        (withdraw-registrations! proxy b)
+        (register! proxy)
         (report! proxy b type message)))))
 
 (defn- stopped!
@@ -387,17 +407,33 @@
                                   capabilities/limit-selector selector))
                     registrations)))))
 
+(defn- note-registrations!
+  "Notes what the backend `b` registers or unregisters itself, from the
+  `params` of its request `method` with their IDs qualified."
+  [proxy b method params]
+  (let [path [:client :registered-by (:backend-id b)]]
+    (case method
+      "client/registerCapability"
+      (swap! (:state proxy) update-in path (fnil into {}) (map (juxt #(get % "id") identity)) (get params "registrations"))
+
+      "client/unregisterCapability"
+      (swap! (:state proxy) update-in path #(apply dissoc % (map (fn [u] (get u "id")) (get params "unregisterations"))))
+
+      nil)))
+
 (defn- from-backend! [proxy b {:strs [id method params] :as msg}]
   (cond
     (nil? msg)
     (stopped! proxy b)
 
     (contains? msg "id")
-    (request-client! proxy method (cond->> (fetched/to-client! b (request-params proxy b method params))
-                                    (= "client/registerCapability" method) (limit-selectors b))
-                     [(:backend-id b) id]
-                     (fn [response]
-                       (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id))))
+    (let [params (cond->> (fetched/to-client! b (request-params proxy b method params))
+                   (= "client/registerCapability" method) (limit-selectors b))]
+      (note-registrations! proxy b method params)
+      (request-client! proxy method params
+                       [(:backend-id b) id]
+                       (fn [response]
+                         (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id)))))
 
     (= "$/cancelRequest" method)
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])

@@ -30,6 +30,9 @@ start = ['{cfg:command}']
 read = ['cat', '{read:file}']
 ")
 
+(def ^:private ruby-in-two-scopes
+  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+
 (defn- temp-dir []
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
 
@@ -766,9 +769,7 @@ read = ['cat', '{read:file}']
                     "initialize" [(lsp/response id {"capabilities" {}})]
                     "workspace/executeCommand" [(lsp/response id scope)]
                     nil))
-        t (start :respond respond
-                 :server-types #{"ruby"}
-                 :config (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
         execute (fn [id & arguments]
                   (client! t (lsp/request id "workspace/executeCommand" {"command" "ruby:x" "arguments" (vec arguments)}))
                   (get (from-proxy t) "result"))]
@@ -1016,6 +1017,57 @@ read = ['cat', '{read:file}']
     (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
               (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
         "are limited to the backend's files")))
+
+(defn- registered-methods
+  "The methods of the registrations in the client/registerCapability `msg`."
+  [msg]
+  (map #(get % "method") (get-in msg ["params" "registrations"])))
+
+(deftest withdrawing-registrations-when-a-backend-stops
+  (let [watch {"id" "watch" "method" "workspace/didChangeWatchedFiles"}
+        respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"hoverProvider" true}})]
+                    "textDocument/didOpen" [(lsp/request 1 "client/registerCapability" {"registrations" [watch]})]
+                    "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [watch]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
+        root-files {"language" "ruby" "pattern" {"baseUri" (str "file://" (:repo t)) "pattern" "**/*"}}
+        api-files {"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}
+        hover-selector (fn [msgs]
+                         (some #(when (= ["textDocument/hover"] (registered-methods %))
+                                  (get-in % ["params" "registrations" 0 "registerOptions" "documentSelector"]))
+                               msgs))
+        unregistered (fn [msg]
+                       (is (= "client/unregisterCapability" (get msg "method")))
+                       (get-in msg ["params" "unregisterations"]))]
+    (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (= #{["textDocument/hover"] ["workspace/didChangeWatchedFiles"]}
+           (set (map registered-methods [(from-proxy t) (from-proxy t)]))))
+    (open! t "b.rb" "ruby")
+    (let [msgs [(from-proxy t) (from-proxy t) (from-proxy t)]]
+      (is (= [[{"id" "textDocument/hover" "method" "textDocument/hover"}]]
+             (keep #(get-in % ["params" "unregisterations"]) msgs)))
+      (is (some #{root-files} (hover-selector msgs))))
+    (testing "a backend that stops has what it registered itself withdrawn"
+      (let [qualified-watch (update watch "id" #(str (backend-id t ["ruby" "."]) "/" %))]
+        (stop-backend! t ["ruby" "."])
+        (is (= [qualified-watch] (unregistered (from-proxy t))))))
+    (testing "and the proxy's registrations are registered again without it"
+      (is (= [{"id" "textDocument/hover" "method" "textDocument/hover"}] (unregistered (from-proxy t))))
+      (let [selector (hover-selector [(from-proxy t)])]
+        (is (some #{api-files} selector))
+        (is (not-any? #{root-files} selector))))
+    (is (= 2 (get-in (from-proxy t) ["params" "type"])) "before telling the user")
+    (testing "a backend that unregisters what it registered has nothing left to withdraw"
+      (change! t "api/a.rb" 2 "")
+      (is (= 1 (count (unregistered (from-proxy t)))))
+      (stop-backend! t ["ruby" "api"])
+      (testing "while the proxy's registration of a feature no backend offers any more is withdrawn"
+        (is (= [{"id" "textDocument/hover" "method" "textDocument/hover"}] (unregistered (from-proxy t)))))
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))))
 
 (deftest cancelling-a-request
   (let [respond (fn [_ {:strs [id method]}]
