@@ -71,7 +71,7 @@
   (first (slot b)))
 
 (defn- entry
-  "The registry's entry for the backend `b`, while it's running."
+  "The registry's entry for the backend `b`, while it's live."
   [state b]
   (let [e (get-in state [:registry :backends (slot b)])]
     (when (identical? b (:backend e))
@@ -234,8 +234,9 @@
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
 
-(defn- running-backends
-  "Every running backend, in priority order."
+(defn- live-backends
+  "Every live backend, which is one that is starting or ready, in priority
+  order."
   [proxy]
   (let [{:keys [session registry]} @(:state proxy)
         backends (:backends registry)
@@ -249,10 +250,10 @@
   (origin/qualify-command-ids (server-type-of b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
 
 (defn- ready-backends
-  "The server capabilities and document selector of each running backend that
+  "The server capabilities and document selector of each live backend that
   has started, in priority order."
   [proxy]
-  (for [b (running-backends proxy)
+  (for [b (live-backends proxy)
         :when (backend/ready? b)]
     [(server-capabilities b) (document-selector b)]))
 
@@ -349,7 +350,7 @@
     b))
 
 (defn- backend-for!
-  "The backend for `k`, a [server-type scope], started if it isn't running.
+  "The backend for `k`, a [server-type scope], started if it isn't live.
   Returns nil if it failed within the last `retry-interval-ms`."
   [proxy k]
   (let [{:keys [backends failures]} (:registry @(:state proxy))]
@@ -530,14 +531,14 @@
   (contains? (:opened (entry state b)) uri))
 
 (defn- opened-in
-  "The running backends that have been sent `didOpen` for the file at `uri`,
+  "The live backends that have been sent `didOpen` for the file at `uri`,
   in priority order."
   [proxy uri]
   (let [state @(:state proxy)]
-    (filter #(opened? state % uri) (running-backends proxy))))
+    (filter #(opened? state % uri) (live-backends proxy))))
 
-(defn- running-handlers
-  "The running backends that handle the file at `uri`. While the client has
+(defn- live-handlers
+  "The live backends that handle the file at `uri`. While the client has
   the file open, those are the ones that have been sent `didOpen` for it. A
   backend that started after the file opened knows nothing of it."
   [proxy uri]
@@ -609,7 +610,7 @@
 ;; The workspace
 
 (defn- notify-all! [proxy method params]
-  (doseq [b (running-backends proxy)]
+  (doseq [b (live-backends proxy)]
     (notify-backend! b method params)))
 
 (defn- watched-files-changed!
@@ -619,7 +620,7 @@
         within? (fn [b change]
                   (let [[_ scope] (slot b)]
                     (some->> (paths/uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
-    (doseq [b (running-backends proxy)
+    (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]
       (notify-backend! b "workspace/didChangeWatchedFiles" {"changes" theirs}))))
@@ -650,7 +651,7 @@
 
 (defn- failures
   "Why each of the backends `ks`, as [server-type scope], failed, for those
-  in the `registry` that aren't running because they did."
+  in the `registry` that aren't live because they did."
   [{:keys [backends failures]} ks]
   (keep #(when-not (contains? backends %) (get-in failures [% :message])) ks))
 
@@ -661,8 +662,8 @@
   (lsp/error-response id lsp/request-failed (str/join "\n" reasons)))
 
 (defn- answer-unanswered!
-  "Answers a request that no running backend can, with an empty result. If no
-  backend that would handle the request's file is running, and some have
+  "Answers a request that no live backend can, with an empty result. If no
+  backend that would handle the request's file is live, and some have
   failed, the answer is an error saying why instead."
   [proxy {:strs [id method params]}]
   (let [{:keys [client registry]} @(:state proxy)
@@ -748,11 +749,11 @@
                       (send-client! proxy (combined-response id method offering responses)))))))))
 
 (defn- backend-by-id [proxy backend-id]
-  (first (filter #(= backend-id (:backend-id %)) (running-backends proxy))))
+  (first (filter #(= backend-id (:backend-id %)) (live-backends proxy))))
 
 (defn- item-maker
-  "The running backend that made the marked `item`, and the item as that
-  backend made it. Nil if the item isn't marked or the backend has stopped."
+  "The backend that made the marked `item`, and the item as that backend made
+  it. Nil if the item isn't marked or the backend isn't ready."
   [proxy item]
   (let [[backend-id item] (origin/unmark item)
         b (some->> backend-id (backend-by-id proxy))]
@@ -779,22 +780,22 @@
       (send-client! proxy (lsp/response id nil)))))
 
 (defn- command-backend
-  "The running backend of `server-type` to run a command with `arguments`.
+  "The live backend of `server-type` to run a command with `arguments`.
   Where there are several, the one with the deepest scope that contains a
   file the arguments refer to, or else the first by scope."
   [proxy server-type arguments]
   (let [repo (get-in @(:state proxy) [:session :repo])
         scope (comp second slot)
-        running (sort-by scope (filter #(= server-type (server-type-of %)) (running-backends proxy)))
+        live (sort-by scope (filter #(= server-type (server-type-of %)) (live-backends proxy)))
         files (keep #(repo-relative repo (paths/uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
-        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) running)]
+        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) live)]
     (or (last (sort-by (comp count scope) containing))
-        (first running))))
+        (first live))))
 
-(defn- not-running-response
+(defn- none-ready-response
   "The answer to the request `id` for a command of `server-type`, which has no
-  running backend to run it."
+  ready backend to run it."
   [proxy id server-type]
   (let [registry (:registry @(:state proxy))
         reasons (failures registry (sort (filter #(= server-type (first %)) (keys (:failures registry)))))]
@@ -805,29 +806,29 @@
 (defn- execute-command!
   "Sends `workspace/executeCommand` to a backend of the server type that the
   command is qualified with, as the command ID the backend chose. If none is
-  running, the answer is an error saying why."
+  ready, the answer is an error saying why."
   [proxy {:strs [id params] :as msg}]
   (let [server-types (keys (get-in @(:state proxy) [:session :config "servers"]))
         [server-type command] (origin/command-origin server-types (get params "command"))
         b (when server-type (command-backend proxy server-type (get params "arguments")))
-        not-running #(send-client! proxy (not-running-response proxy id server-type))]
+        none-ready #(send-client! proxy (none-ready-response proxy id server-type))]
     (cond
       (nil? server-type)
       (send-client! proxy (lsp/error-response id lsp/invalid-params (str "unknown command " (pr-str (get params "command")))))
 
       (nil? b)
-      (not-running)
+      (none-ready)
 
       :else
       (backend/when-settled b (fn [ready?]
                                 (if ready?
                                   (forward-request! proxy b (assoc-in msg ["params" "command"] command))
-                                  (not-running)))))))
+                                  (none-ready)))))))
 
 (defn- cancel!
   "Passes on the client's cancellation of a request it sent a backend."
   [proxy client-id]
-  (doseq [b (running-backends proxy)
+  (doseq [b (live-backends proxy)
           :let [id (backend/tagged-request b client-id)]
           :when id]
     (backend/notify! b "$/cancelRequest" {"id" id})))
@@ -844,7 +845,7 @@
   backend may need answers from the client before it can shut down."
   [proxy id]
   (swap! (:state proxy) assoc :phase :shutting-down)
-  (let [backends (running-backends proxy)
+  (let [backends (live-backends proxy)
         answers (mapv backend/shutdown! backends)
         deadline (+ (now-ms proxy) shutdown-timeout-ms)]
     (in-background "answer shutdown"
@@ -859,7 +860,7 @@
   (let [[old] (swap-vals! (:state proxy) assoc :phase :exiting)]
     (run! deref (mapv (fn [b] (in-background (str "stop " (:backend-id b))
                                              #(backend/exit! b exit-timeout-ms)))
-                      (running-backends proxy)))
+                      (live-backends proxy)))
     ((:exit proxy) (if (= :shutting-down (:phase old)) 0 1))))
 
 ;; The client's messages
@@ -876,9 +877,9 @@
       (capabilities/resolve-method? method) (resolve! proxy msg)
       (capabilities/follow-up-method? method) (follow-up! proxy msg)
       (= "workspace/executeCommand" method) (execute-command! proxy msg)
-      (= "workspace/symbol" method) (combine-request! proxy msg (running-backends proxy))
-      (and uri (capabilities/combined? method)) (combine-request! proxy msg (running-handlers proxy uri))
-      uri (route-request! proxy msg (running-handlers proxy uri))
+      (= "workspace/symbol" method) (combine-request! proxy msg (live-backends proxy))
+      (and uri (capabilities/combined? method)) (combine-request! proxy msg (live-handlers proxy uri))
+      uri (route-request! proxy msg (live-handlers proxy uri))
       :else (send-client! proxy (lsp/response id nil)))))
 
 (defn- client-notification! [proxy {:strs [method params]}]

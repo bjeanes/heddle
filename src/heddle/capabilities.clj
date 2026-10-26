@@ -28,7 +28,7 @@
 
 (def ^:private workspace-symbol
   "Workspace symbol search, which the proxy announces at startup whatever the
-  client supports. It isn't about any one file. The proxy asks every running
+  client supports. It isn't about any one file. The proxy asks every live
   backend itself, answering with nothing before any has started."
   (feature-of "workspace/symbol"))
 
@@ -200,7 +200,7 @@
 (defn combined?
   "Whether the answers to the request `method` from several backends are
   combined, as opposed to one backend answering. Combined requests go to
-  every backend for the file that offers the feature, or every running
+  every backend for the file that offers the feature, or every live
   backend for workspace symbols."
   [method]
   (contains? (get methods/table method) :combine))

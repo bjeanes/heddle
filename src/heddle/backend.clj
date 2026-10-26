@@ -99,7 +99,7 @@
           timeouts
           {:spec spec
            :backend-id (new-id)
-           :fetched (atom #{})
+           :refreshed (atom #{})
            ;; :stopped once the connection has closed, whatever the :status
            :state (atom {:status :starting
                          :queue []

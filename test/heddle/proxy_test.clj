@@ -76,7 +76,7 @@ read = ['cat', '{read:file}']
   (str "file://" (:repo t) "/" path))
 
 (defn- backend-of
-  "The running backend `k`, a [server-type scope]."
+  "The live backend `k`, a [server-type scope]."
   [t k]
   (get-in @(:state (:proxy t)) [:registry :backends k :backend]))
 
@@ -659,7 +659,7 @@ read = ['cat', '{read:file}']
               [super] (get (follow 5 "typeHierarchy/supertypes" item) "result")]
           (is (= "super of super of a"
                  (get-in (follow 6 "typeHierarchy/supertypes" super) ["result" 0 "name"])))))
-      (testing "answers with null for an item no running backend made"
+      (testing "answers with null for an item no ready backend made"
         (is (= (lsp/response 7 nil) (follow 7 "callHierarchy/outgoingCalls" (dissoc item "data"))))
         (is (= (lsp/response 8 nil)
                (follow 8 "callHierarchy/outgoingCalls"
@@ -789,7 +789,7 @@ read = ['cat', '{read:file}']
     (open! t "api/a.rb" "ruby")
     (client! t (lsp/request 2 "workspace/symbol" {"query" "x"}))
     (let [symbols (get (from-proxy t) "result")]
-      (testing "combines every running backend's symbols"
+      (testing "combines every live backend's symbols"
         (is (= ["lint" "ruby"] (map #(get % "name") symbols))))
       (testing "resolves a symbol with the backend that found it"
         (client! t (lsp/request 3 "workspaceSymbol/resolve" (second symbols)))
@@ -800,7 +800,7 @@ read = ['cat', '{read:file}']
         received-params (fn [k method] (mapv #(get % "params") (received t k method)))]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (testing "configuration changes go to every running backend"
+    (testing "configuration changes go to every live backend"
       (client! t (lsp/notification "workspace/didChangeConfiguration" {"settings" {}}))
       (is (eventually #(= [{"settings" {}}] (received-params ["ruby" "api"] "workspace/didChangeConfiguration"))))
       (is (eventually #(= [{"settings" {}}] (received-params ["lint" "."] "workspace/didChangeConfiguration")))))

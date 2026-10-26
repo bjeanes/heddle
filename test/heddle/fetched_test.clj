@@ -24,7 +24,7 @@
             :templates (cond-> {"start" ["s"]} read (assoc "read" read))
             :cfg {}}
      :backend-id "heddle-1"
-     :fetched (atom #{})
+     :refreshed (atom #{})
      :read-timeout-ms 10000}))
 
 (defn- cache-of [b]
@@ -35,7 +35,7 @@
 (defn- restarted
   "A new backend in place of `b`, sharing its cache."
   [b]
-  (assoc b :backend-id "heddle-2" :fetched (atom #{})))
+  (assoc b :backend-id "heddle-2" :refreshed (atom #{})))
 
 (defn- cache-root
   "The cache root that a config with `cache` chooses for the repo /code/shop,

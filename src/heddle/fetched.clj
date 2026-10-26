@@ -82,23 +82,23 @@
         (.delete part)))))
 
 (defn- fetch-one!
-  "Copies `file` into the backend's cache and records it as fetched. Returns
+  "Copies `file` into the backend's cache and records it as refreshed. Returns
   nil, or why it couldn't."
-  [{:keys! [spec backend-id fetched read-timeout-ms]} file]
+  [{:keys! [spec backend-id refreshed read-timeout-ms]} file]
   (let [{:keys! [dir cache]} spec
         command (spec/command spec "read" {:backend-id backend-id :file file})
         problem (if command
                   (read-into command dir (io/file (str cache file)) read-timeout-ms)
                   "the runner has no read template")]
     (when-not problem
-      (swap! fetched conj file))
+      (swap! refreshed conj file))
     problem))
 
 (defn fetch!
   "Copies each of `files`, as server paths, into the backend's cache unless the
   backend has copied it already. `backend` has its :spec (see heddle.spec), its
-  :backend-id, the set of files it has :fetched in an atom, and how long each
-  `read` may take in :read-timeout-ms.
+  :backend-id, an atom of the set of files it has copied under :refreshed, and
+  how long each `read` may take in :read-timeout-ms.
 
   Since the cache outlives the backend, a copy left by an earlier one is
   replaced in case the file has changed. If it can't be replaced, it stays as
@@ -106,10 +106,10 @@
 
   The runner's `read` command runs in the scope's directory, as `start` does.
   Returns a map of each file that couldn't be copied to why."
-  [{:keys [fetched] :as backend} files]
+  [{:keys [refreshed] :as backend} files]
   (into {}
         (for [file files
-              :when (not (contains? @fetched file))
+              :when (not (contains? @refreshed file))
               :let [problem (fetch-one! backend file)]
               :when problem]
           [file problem])))
