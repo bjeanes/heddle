@@ -176,9 +176,9 @@
       (parse (slurp f) (str f)))))
 
 (defn warnings
-  "Values in a valid config's scopes that the scope's runner never uses. A
-  server type's boot table can set a value for one runner that a scope then
-  swaps for another, so these aren't errors."
+  "Values in a valid config's scopes that the scope's runner never uses. These
+  aren't errors, since a server type's boot table can set a value for one
+  runner that a scope then swaps for another."
   [config]
   (for [[scope entries] (get config "scopes")
         server-type (keys entries)

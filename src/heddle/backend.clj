@@ -91,7 +91,7 @@
 
 (defn backend
   "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path, and `cache-root` is where fetched files are cached.
+  root as a client path. `cache-root` is where fetched files are cached.
   `timeouts` overrides any of `default-timeouts`. The backend can be used as a
   context for heddle.translate, and with heddle.fetched."
   ([config server-type scope repo cache-root]
@@ -211,7 +211,7 @@
 (defn- settle!
   "Moves the backend to `status`, then runs everything queued, including
   anything queued meanwhile. The backend keeps queueing until it takes an
-  empty queue, so nothing can run ahead of what's already queued."
+  empty queue. That way, nothing can run ahead of what's already queued."
   [backend status]
   (swap! (:state backend) assoc :status status :draining true)
   (loop []

@@ -23,8 +23,8 @@
   --capabilities  print the server's capabilities from initialize in full")
 
 (defn- parse-args
-  "Options are `--name value` pairs, and the rest is the command. jolt itself
-  may consume the `--` before the command, so it is optional."
+  "Options are `--name value` pairs. The rest is the command. The `--` before
+  the command is optional, since jolt itself may consume it."
   [args]
   (loop [opts {} [k v & more :as args] args]
     (if (and k (str/starts-with? k "--") (not= "--" k))

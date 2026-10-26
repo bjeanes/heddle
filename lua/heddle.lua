@@ -80,8 +80,8 @@ local function leave_to_proxy(config, bufnr)
   return config.name ~= name and not vim.list_contains(options.keep, config.name) and covered(bufnr)
 end
 
--- Neovim has no hook that runs before a client starts, so this stands in for
--- `vim.lsp.start`, which `vim.lsp.enable` calls for every config.
+-- Since Neovim has no hook that runs before a client starts, this stands in
+-- for `vim.lsp.start`, which `vim.lsp.enable` calls for every config.
 local start
 local function start_unless_covered(config, opts)
   opts = opts or {}

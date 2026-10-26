@@ -9,8 +9,8 @@
 
 (defn- code-actions
   "The code actions in `answers`. The spec gives a code action no ID, only a
-  title, and two servers may well offer actions with the same title. So, if
-  more than one server offers any, each title names its server type."
+  title. Two servers may well offer actions with the same title. So, if more
+  than one server offers any, each title names its server type."
   [answers]
   (let [offered (filter (comp seq second) answers)]
     (if (< 1 (count offered))

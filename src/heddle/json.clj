@@ -17,7 +17,7 @@
 
   It can be replaced by a library that loads on Jolt without adding runtime
   dependencies to the binary, and that reads and writes characters above U+FFFF
-  correctly. These tests cover both.")
+  correctly. heddle.json-test covers both.")
 
 (def ^:private replacement-char (char 0xFFFD))
 

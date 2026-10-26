@@ -41,11 +41,11 @@
 (defn cache-root
   "The directory that the config's `cache` table chooses for the cache, under
   :root. `repo` is the directory holding the config, which a relative `path` is
-  resolved against, and `getenv` looks up an environment variable.
+  resolved against. `getenv` looks up an environment variable.
 
   If `env` names a variable that is unset, empty or relative, or `xdg` finds
   neither $XDG_CACHE_HOME nor $HOME usable, the cache goes in the system's temp
-  directory instead, and :warning says why."
+  directory instead. :warning then says why."
   [config repo getenv]
   (let [{:strs [env path xdg]} (get config "cache")
         tmpdir (System/getProperty "java.io.tmpdir")

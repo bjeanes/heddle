@@ -1,6 +1,6 @@
 (ns heddle.log
-  "Logging to stderr. Clients usually show a server's stderr in a log of their
-  own, and stdout is the LSP stream. Tests send it elsewhere with
+  "Logging to stderr, since stdout is the LSP stream. Clients usually show a
+  server's stderr in a log of their own. Tests send it elsewhere with
   `set-writer!`.")
 
 (def ^:private lock (Object.))

@@ -106,7 +106,7 @@
                                                               "message" message}))
   (log/info message))
 
-;; Initialization
+;; Initialisation
 
 (defn- config-roots
   "Where to look for a config: the workspace roots the client named in
@@ -258,10 +258,11 @@
 (defn- register!
   "Registers each feature that any ready backend offers, with one registration
   covering all of their files. Some clients, such as VS Code, ask every
-  registration that matches a file, so a registration per backend would bring
-  the proxy each request several times. When a registration has to change, the
-  proxy unregisters it and registers it again. Features announced in the
-  answer to `initialize` aren't registered, and nothing is until it's sent."
+  registration that matches a file. A registration per backend would then
+  bring the proxy each request several times. When a registration has to
+  change, the proxy unregisters it and registers it again. Features announced
+  in the answer to `initialize` aren't registered. Nothing is registered until
+  that answer has been sent."
   [proxy]
   (channel/serially (:channel proxy)
     (fn []
@@ -367,9 +368,9 @@
 
 (defn- publish-diagnostics!
   "Replaces the backend `b`'s diagnostics for the file at `uri`, and publishes
-  every backend's diagnostics for it together. Each publication replaces what
-  the client had for the file, so forwarding a backend's own would hide the
-  others'."
+  every backend's diagnostics for it together. Since each publication replaces
+  what the client had for the file, forwarding one backend's own would hide
+  the others'."
   [proxy b {:strs [uri diagnostics version]}]
   (channel/serially (:channel proxy)
     (fn []
@@ -447,7 +448,7 @@
 
 (defn- progress-params
   "The params of `$/progress` from the backend `b`. A token the backend created
-  is qualified, and a token the client chose is left as it is."
+  is qualified. A token the client chose is left as it is."
   [proxy b {:strs [token value] :as params}]
   (let [qualified (qualify b token)]
     (if (contains? (get-in @(:state proxy) [:client :progress]) qualified)
@@ -890,8 +891,8 @@
 (defn- without-partial-results
   "The client's request `msg` without its token for partial results. A backend
   would send those straight to the client, past the marking, qualifying and
-  fetching that the proxy does to every answer, so backends answer in full
-  instead."
+  fetching that the proxy does to every answer. Without the token, backends
+  answer in full instead."
   [msg]
   (cond-> msg
     (map? (get msg "params")) (update "params" dissoc "partialResultToken")))

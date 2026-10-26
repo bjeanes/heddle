@@ -28,8 +28,8 @@
 
 (def ^:private workspace-symbol
   "Workspace symbol search, which the proxy announces at startup whatever the
-  client supports. It isn't about any one file, and the proxy asks every
-  running backend itself, answering with nothing before any has started."
+  client supports. It isn't about any one file. The proxy asks every running
+  backend itself, answering with nothing before any has started."
   (feature-of "workspace/symbol"))
 
 (defn- document-feature? [feature]
@@ -121,8 +121,8 @@
 
 (defn- merge-option
   "One backend's value for a registration option combined with another's, from
-  a backend of lower priority. Lists such as trigger characters are combined,
-  and a flag such as `resolveProvider` is set if either sets it. Otherwise the
+  a backend of lower priority. Lists such as trigger characters are combined.
+  A flag such as `resolveProvider` is set if either sets it. Otherwise the
   first value stands."
   [a b]
   (cond
@@ -167,7 +167,7 @@
 
 (defn- narrow-pattern
   "A backend's `pattern` limited to the proxy's `own` relative pattern, or nil
-  if a document filter can't express that. Two globs can't be combined, so
+  if a document filter can't express that. Since two globs can't be combined,
   only a pattern for a whole directory can narrow another."
   [pattern own]
   (let [base (uri-path (get own "baseUri"))]
