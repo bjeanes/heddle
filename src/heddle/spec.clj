@@ -30,10 +30,10 @@
    \= "=3D"})
 
 (defn- boot
-  "The server type's `boot` table with the scope's values over the top."
-  [{:strs! [servers scopes]} [server-type scope]]
-  (merge (get-in servers [server-type "boot"])
-         (get-in scopes [scope server-type])))
+  "The `slot`'s whole boot config, which `heddle.config/expand` has layered
+  from the scope, the server type's `boot` table and the runner's defaults."
+  [config [server-type scope]]
+  (get-in config ["scopes" scope server-type]))
 
 (defn- segment
   "`s` as one path segment, with each `/` and `=` as `=` and its hex code.
@@ -70,7 +70,7 @@
      :paths paths
      :cache (cache-dir cache-root slot)
      :templates (select-keys runner runner/templates)
-     :cfg (runner/cfg runner boot)}))
+     :cfg (runner/cfg boot)}))
 
 (defn slots
   "Every [server-type scope] that the config's scopes start, or only those of
@@ -133,8 +133,12 @@
             (str "runner " (pr-str runner) ", " t ": " e)))))))
 
 (defn warnings
-  "Values that the `slot`'s boot config sets but its runner never uses."
+  "Values that the `slot`'s boot config sets but its runner never uses. Values
+  from the runner's defaults don't count, since the config doesn't set them."
   [config slot]
-  (let [{:strs [runner] :as boot} (boot config slot)]
-    (for [k (runner/unused-values (get-in config ["runners" runner]) boot)]
+  (let [{:strs [runner] :as boot} (boot config slot)
+        defaulted (for [[k [origin]] (:sources (meta boot))
+                        :when (= :defaults origin)]
+                    k)]
+    (for [k (runner/unused-values (get-in config ["runners" runner]) (apply dissoc boot defaulted))]
       (str (pr-str k) " isn't used by runner " (pr-str runner)))))

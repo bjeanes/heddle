@@ -39,6 +39,46 @@ boot = { runner = 'host', command = 's' }
 ")))
       "only server types that a scope starts, and only their languages"))
 
+(deftest expands-scopes
+  (let [c (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'compose', service = 'app', command = 'ruby-lsp' }
+
+[runners.r]
+defaults = { runner = 'host', paths = { '.' = '/src' }, x = 'd', y = 'd' }
+start = ['{cfg:x}', '{cfg:y}']
+
+[scopes.'services/api'.ruby-lsp]
+service = 'api'
+[scopes.'tools/cli'.ruby-lsp]
+runner = 'host'
+compose = 'podman-compose'
+[scopes.other.ruby-lsp]
+runner = 'r'
+y = 's'
+")
+        entry #(get-in c ["scopes" % "ruby-lsp"])]
+    (testing "into each slot's whole boot config"
+      (is (= {"runner" "compose" "service" "api" "command" "ruby-lsp" "compose" ["docker" "compose"]}
+             (entry "services/api")))
+      (is (= {"runner" "host" "service" "app" "command" "ruby-lsp" "compose" "podman-compose"}
+             (entry "tools/cli"))
+          "with the defaults of the runner the scope names, not the boot table's"))
+    (testing "saying where each value the scope didn't set came from"
+      (is (= {"runner" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"] "compose" [:defaults "compose"]}
+             (:sources (meta (entry "services/api")))))
+      (is (= {"service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"]}
+             (:sources (meta (entry "tools/cli"))))))
+    (testing "with neither the runner nor paths from a runner's defaults"
+      (is (= {"runner" "r" "service" "app" "command" "ruby-lsp" "x" "d" "y" "s"}
+             (entry "other")))
+      (is (= {"service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"] "x" [:defaults "r"]}
+             (:sources (meta (entry "other"))))))
+    (testing "leaving out what the scopes now hold"
+      (is (= {"languages" ["ruby"]} (get-in c ["servers" "ruby-lsp"])))
+      (is (not-any? #(contains? % "defaults") (vals (get c "runners")))))))
+
 (deftest unknown-server-types
   (is (= ["nosuch"] (config/unknown-server-types design ["ruby-lsp" "nosuch"])))
   (is (empty? (config/unknown-server-types design []))))
@@ -233,6 +273,19 @@ runner = 'host'
 ")))))
   (testing "nothing when every value is used, counting runner, paths and values that replace a default"
     (is (empty? (config/warnings design))))
+  (testing "nothing for a runner's default that its templates never use"
+    (is (empty? (config/warnings (config/parse "
+[servers.s]
+languages = ['x']
+
+[runners.r]
+defaults = { spare = 'd' }
+start = ['{cfg:command}']
+
+[scopes.'.'.s]
+runner = 'r'
+command = 's'
+")))))
   (testing "as one message"
     (is (= "unused values in here.toml:\n  a\n  b"
            (config/warnings-message "here.toml" ["a" "b"])))))

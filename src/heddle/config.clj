@@ -144,15 +144,40 @@
     (when (seq errors) (invalid source errors))
     config))
 
+(defn expand
+  "The structurally valid `config` with each scope's entry for a server type
+  made into that slot's whole boot config: the scope's values over the server
+  type's `boot` table, over the defaults of the runner they name, other than
+  any `runner` or `paths` in those defaults. Under :sources, each entry's
+  metadata says where any value the scope didn't set came from, as
+  [:boot server-type] or [:defaults runner]. The `boot` tables and runners'
+  `defaults` are then left out, since the scopes hold every value of theirs
+  that applies."
+  [{:strs! [servers scopes runners] :as config}]
+  (let [expand-entry (fn [server-type own]
+                       (let [boot (get-in servers [server-type "boot"])
+                             runner (get (merge boot own) "runner")
+                             defaults (runner/cfg (get-in runners [runner "defaults"]))
+                             sources (merge (zipmap (keys defaults) (repeat [:defaults runner]))
+                                            (zipmap (keys boot) (repeat [:boot server-type])))]
+                         (with-meta (merge defaults boot own)
+                           {:sources (apply dissoc sources (keys own))})))]
+    (assoc config
+           "servers" (update-vals servers #(dissoc % "boot"))
+           "runners" (update-vals runners #(dissoc % "defaults"))
+           "scopes" (update-vals scopes #(into {} (for [[server-type own] %]
+                                                    [server-type (expand-entry server-type own)]))))))
+
 (defn parse
-  "Parses and checks config from a TOML string, with the built-in runners added.
-  Throws ex-info listing every problem found, under :errors. `source` names the
-  file in that message."
+  "Parses and checks config from a TOML string, with the built-in runners added
+  and the scopes expanded by `expand`. Throws ex-info listing every problem
+  found, under :errors. `source` names the file in that message."
   ([s] (parse s file-name))
   ([s source]
    (-> (merge {"servers" {} "scopes" {} "runners" {}} (parse-toml source s))
        (checked source structure-errors)
        (update "runners" #(merge runner/builtins %))
+       expand
        (checked source scope-runner-errors))))
 
 (defn read-config

@@ -15,7 +15,7 @@
   ([template boot runtime]
    (let [r {"start" template}
          scope {:repo "/r" :dir "/r/a" :root "/srv/a"}]
-     (runner/expand r "start" (runner/context (runner/cfg r boot) scope runtime)))))
+     (runner/expand r "start" (runner/context (runner/cfg boot) scope runtime)))))
 
 (deftest expansion
   (testing "strings fill placeholders anywhere in an element"

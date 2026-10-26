@@ -70,7 +70,7 @@
            :when e]
        (str t ": " e)))))
 
-(defn- cfg-values
+(defn cfg
   "The boot config's values for `{cfg:…}` placeholders."
   [boot]
   (dissoc boot "runner" "paths"))
@@ -82,7 +82,7 @@
   (let [used (set (for [[_ owner name] (placeholders runner)
                         :when (= "cfg" owner)]
                     name))]
-    (sort (remove used (keys (cfg-values boot))))))
+    (sort (remove used (keys (cfg boot))))))
 
 (defn- value-error
   "Why `{owner:name}` has no usable value in `ctx`, or nil."
@@ -138,12 +138,6 @@
             (nil? v) []
             :else v))
     [(fill ctx element errors)]))
-
-(defn cfg
-  "The values for `{cfg:…}` placeholders: the runner's defaults with the boot
-  config's values over the top."
-  [runner boot]
-  (merge (get runner "defaults") (cfg-values boot)))
 
 (defn context
   "What a runner's templates can draw on. `cfg` is from `cfg`. `scope` has the
