@@ -1,14 +1,12 @@
 (ns heddle.starter-test
-  (:require [clj-toml.core :as toml]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
-            [heddle.runner :as runner]
             [heddle.starter :as starter]))
 
 (defn- uncomment-examples [paragraph]
   (str/join "\n" (for [line (str/split-lines paragraph)]
-                   (if (re-find #"^#[^\s#]" line) (subs line 1) line))))
+                   (if (str/starts-with? line "# ") (subs line 2) line))))
 
 (defn- uncomment
   "The starter with the examples uncommented in each paragraph that has one of
@@ -31,26 +29,21 @@
   (let [c (config/parse (uncomment))]
     (is (= [] (config/warnings c)))
     (is (= {"xdg" true} (get c "cache")))
-    (is (= ["bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "." "start" runtime)))
-    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "services/api" "start" runtime)))
-    (is (= ["docker" "exec" "--interactive" "--workdir" "/app" "worker" "bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "services/worker" "start" runtime)))
-    (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--volume" "/r:/src"
-            "--workdir" "/src/tools/cli" "ruby:3.3" "bundle" "exec" "ruby-lsp"]
-           (config/command c "ruby-lsp" "tools/cli" "start" runtime)))))
+    (is (= ["typescript-language-server" "--stdio"]
+           (config/command c "ts-ls" "." "start" runtime)))
+    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "web" "typescript-language-server" "--stdio"]
+           (config/command c "ts-ls" "apps/web" "start" runtime)))
+    (is (= ["docker" "run" "--rm" "--detach" "--name" "heddle-1" "--volume" "/r:/src"
+            "my-app-dev" "sleep" "infinity"]
+           (config/command c "ts-ls" "tools/cli" "prepare" runtime)))
+    (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "heddle-1"
+            "typescript-language-server" "--stdio"]
+           (config/command c "ts-ls" "tools/cli" "start" runtime)))))
 
 (deftest each-scope-loads-with-only-the-server-type
-  (doseq [[scope runner] {"." "host"
-                          "services/api" "compose"
-                          "services/worker" "docker-exec"
-                          "tools/cli" "docker-run"}]
-    (let [c (config/parse (uncomment "#[servers.ruby-lsp]" (str "#[scopes." (pr-str scope) "]")))]
+  (doseq [[scope header] {"." "# [scopes.\".\"]"
+                          "apps/web" "# [scopes.\"apps/web\""
+                          "tools/cli" "# [runners.docker-detached]"}]
+    (let [c (config/parse (uncomment "# [servers.ts-ls]" header))]
       (is (= [] (config/warnings c)) scope)
-      (is (= [scope] (keys (get c "scopes"))))
-      (is (= runner (get-in c ["scopes" scope "ruby-lsp" "runner"]))))))
-
-(deftest shows-the-built-in-runners-as-they-are
-  (is (= runner/builtins
-         (get (toml/parse-string (uncomment "#[runners.")) "runners"))))
+      (is (= [scope] (keys (get c "scopes")))))))

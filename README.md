@@ -160,11 +160,12 @@ and serves nothing. Run by hand at a terminal, though, it prints the problem
 to stderr and exits 1 instead of waiting on stdin. It does the same there if
 none of the server types named after `serve` is in the config.
 
-`heddle init` writes a starter `.heddle.toml` to the root of DIR. It shows a
-server type, a scope for each built-in runner, the cache, and the built-in
-runners themselves for you to override, all commented out. Uncomment what you
-need, then run `heddle check`. If there's already a config there, `init`
-leaves it alone and exits 1.
+`heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
+through a server type, a scope on the host, a scope in a Compose service, a
+runner of your own, and the cache, all commented out. Its notes start with
+`## ` and its examples with `# `. Uncomment what you need, then run
+`heddle check`. If there's already a config there, `init` leaves it alone and
+exits 1.
 
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
