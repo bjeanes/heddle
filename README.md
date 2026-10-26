@@ -507,6 +507,32 @@ nvim --clean --headless -l dev/nvim-smoke.lua out/heddle
 If your `nvim` is wrapped by Nix with plugins, it loads them even under
 `--clean`. Run the unwrapped binary instead if a plugin gets in the way.
 
+### Installing the module with Nix
+
+The flake's `packages.<system>.vim-plugin` output is the module, built as a
+Neovim plugin. Add heddle to your flake's inputs:
+
+```nix
+inputs.heddle.url = "github:bjeanes/heddle";
+```
+
+Then add the plugin to Neovim. With home-manager, where `heddle` is that
+input, that looks like this:
+
+```nix
+programs.neovim.plugins = [
+  {
+    plugin = heddle.packages.${pkgs.stdenv.hostPlatform.system}.vim-plugin;
+    type = "lua";
+    config = "require('heddle').setup()";
+  }
+];
+```
+
+The flake doesn't build the `heddle` binary yet. You'll still need to install
+it separately, such as with `install-heddle` or a release binary (see
+[Installing it](#installing-it)).
+
 ## Agents, through an MCP bridge
 
 Bridges such as [mcp-language-server][1] give an agent a language server's
