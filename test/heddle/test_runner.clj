@@ -4,6 +4,7 @@
             [heddle.capabilities-test]
             [heddle.channel-test]
             [heddle.config-test]
+            [heddle.diagnostics-test]
             [heddle.fetched-test]
             [heddle.glob-test]
             [heddle.json-test]

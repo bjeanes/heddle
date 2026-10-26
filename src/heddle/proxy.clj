@@ -10,6 +10,7 @@
             [heddle.capabilities :as capabilities]
             [heddle.channel :as channel]
             [heddle.config :as config]
+            [heddle.diagnostics :as diagnostics]
             [heddle.fetched :as fetched]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
@@ -327,36 +328,25 @@
       (contains? backends k) (get-in backends [k :backend])
       (registry/may-start? registry k (now-ms proxy)) (start-backend! proxy k))))
 
-(defn- set-diagnostics
-  "`by-file`, which holds each backend's latest diagnostics for each file,
-  with the backend `backend-id`'s diagnostics for `uri` replaced."
-  [by-file uri backend-id diagnostics]
-  (let [for-file (if (seq diagnostics)
-                   (assoc (get by-file uri) backend-id diagnostics)
-                   (dissoc (get by-file uri) backend-id))]
-    (if (seq for-file)
-      (assoc by-file uri for-file)
-      (dissoc by-file uri))))
-
 (defn- publish-diagnostics!
   "Replaces the backend `b`'s diagnostics for the file at `uri`, and publishes
   every backend's diagnostics for it together. Since each publication replaces
   what the client had for the file, forwarding one backend's own would hide
   the others'."
-  [proxy b {:strs [uri diagnostics version]}]
+  [proxy b {:strs [uri version] :as params}]
   (channel/serially (:channel proxy)
     (fn []
-      (let [state (swap! (:state proxy) update-in [:client :diagnostics] set-diagnostics uri (:backend-id b) diagnostics)]
+      (let [state (swap! (:state proxy) update-in [:client :diagnostics]
+                         diagnostics/published uri (:backend-id b) (get params "diagnostics"))]
         (send-client! proxy (lsp/notification "textDocument/publishDiagnostics"
                                               (cond-> {"uri" uri
-                                                       "diagnostics" (vec (apply concat (vals (get-in state [:client :diagnostics uri]))))}
+                                                       "diagnostics" (diagnostics/union-for (get-in state [:client :diagnostics]) uri)}
                                                 version (assoc "version" version))))))))
 
 (defn- clear-diagnostics!
   "Withdraws the diagnostics of the backend `b`, which has stopped."
   [proxy b]
-  (doseq [[uri for-file] (get-in @(:state proxy) [:client :diagnostics])
-          :when (contains? for-file (:backend-id b))]
+  (doseq [uri (diagnostics/files-from (get-in @(:state proxy) [:client :diagnostics]) (:backend-id b))]
     (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
 
 (defn- failed!
