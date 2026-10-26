@@ -10,10 +10,8 @@
   backend sends, then with nil once it stops. `connect-process` is the real
   connector. Tests use fake backends in the same process instead."
   (:require [clojure.java.io :as io]
-            [heddle.config :as config]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
-            [heddle.paths :as paths]
             [heddle.process :as process]
             [heddle.requests :as requests]
             [heddle.spec :as spec])
@@ -78,36 +76,27 @@
   one, then its `start` command. Both run in the scope's directory. Since
   connecting is the first part of starting, `prepare` has the whole of the
   backend's :start-timeout-ms."
-  [{:keys [config server-type scope repo backend-id start-timeout-ms]} on-message]
-  (let [runtime {:repo repo :backend-id backend-id}
-        dir (paths/client-path repo scope)]
-    (when-let [command (config/command config server-type scope "prepare" runtime)]
+  [{:keys! [spec backend-id start-timeout-ms]} on-message]
+  (let [{:keys! [dir]} spec
+        runtime {:backend-id backend-id}]
+    (when-let [command (spec/command spec "prepare" runtime)]
       (prepare! command dir start-timeout-ms))
-    (spawn (config/command config server-type scope "start" runtime) dir on-message)))
+    (spawn (spec/command spec "start" runtime) dir on-message)))
 
 (def default-timeouts
   {:start-timeout-ms 120000 ; for `prepare` and the answer to `initialize`, together
    :read-timeout-ms 10000}) ; for each `read` of a fetched file
 
 (defn backend
-  "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path. `cache-root` is where fetched files are cached.
-  `timeouts` overrides any of `default-timeouts`. The backend can be used as a
-  context for heddle.translate, and with heddle.fetched."
-  ([config server-type scope repo cache-root]
-   (backend config server-type scope repo cache-root {}))
-  ([config server-type scope repo cache-root timeouts]
+  "A backend for the `spec` (see heddle.spec), not yet started. `timeouts`
+  overrides any of `default-timeouts`."
+  ([spec] (backend spec {}))
+  ([spec timeouts]
    (merge default-timeouts
           timeouts
-          {:config config
-           :server-type server-type
-           :scope scope
-           :repo repo
+          {:spec spec
            :backend-id (new-id)
-           :paths (get (config/boot-config config server-type scope) "paths")
-           :cache (spec/cache-dir cache-root repo [server-type scope])
            :fetched (atom #{})
-           :root (config/server-scope config server-type scope repo)
            :state (atom {:status :starting :queue []})
            :requests (atom requests/empty-table)})))
 

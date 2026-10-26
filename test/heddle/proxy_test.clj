@@ -390,7 +390,7 @@ read = ['cat', '{read:file}']
       (is (nothing-more? t)))))
 
 (defn- cache-of [t k]
-  (:cache (backend-of t k)))
+  (get-in (backend-of t k) [:spec :cache]))
 
 (deftest choosing-the-cache-root
   (testing "a path relative to the config's directory"
@@ -458,7 +458,7 @@ read = ['cat', '{read:file}']
     (testing "go to the first backend that offers the feature, by name when priorities tie"
       (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
       (let [response (from-proxy t)
-            cache (:cache (backend-of t ["ruby" "api"]))]
+            cache (cache-of t ["ruby" "api"])]
         (testing "with the client's ID on the response, and paths translated both ways"
           (is (= "h" (get response "id")))
           (is (= (str "[Rainbow](file://" cache gem "#L1) for " (uri t "api/a.rb"))
@@ -754,7 +754,7 @@ read = ['cat', '{read:file}']
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
     (let [published (from-proxy t)
-          cache (:cache (backend-of t ["ruby" "api"]))]
+          cache (cache-of t ["ruby" "api"])]
       (is (= (str "file://" cache gem)
              (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
       (is (= "module Rainbow; end\n" (slurp (str cache gem)))

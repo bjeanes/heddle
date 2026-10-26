@@ -42,6 +42,11 @@
            ["typescript" "services/web"] ["rubocop" "."]}
          (set (spec/slots design)))))
 
+(deftest specs-by-slot
+  (let [specs (spec/specs design "/r" "/cache")]
+    (is (= (set (spec/slots design)) (set (keys specs))))
+    (is (= (spec-for design ["rubocop" "."]) (get specs ["rubocop" "."])))))
+
 (deftest commands
   (testing "the example in DESIGN.md"
     (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]

@@ -18,6 +18,7 @@
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
+            [heddle.spec :as spec]
             [heddle.translate :as translate])
   (:import (java.net URI)))
 
@@ -56,10 +57,18 @@
                                 :diagnostics {}
                                 :progress {}}})))
 
+(defn- slot
+  "The [server-type scope] that the backend `b` was started for."
+  [b]
+  (get-in b [:spec :slot]))
+
+(defn- server-type-of [b]
+  (first (slot b)))
+
 (defn- entry
   "The registry's entry for the backend `b`, while it's running."
   [state b]
-  (let [e (get-in state [:registry :backends [(:server-type b) (:scope b)]])]
+  (let [e (get-in state [:registry :backends (slot b)])]
     (when (identical? b (:backend e))
       e)))
 
@@ -171,6 +180,7 @@
   as [type message]."
   [proxy params]
   (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
+        specs (spec/specs config repo cache-root)
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
         unknown-warning (when unknown
@@ -180,7 +190,7 @@
       (log/info unknown-warning))
     (swap! (:state proxy) assoc
            :phase :serving
-           :session {:repo repo :config config :cache-root cache-root :client-params params})
+           :session {:repo repo :config config :specs specs :client-params params})
     (when eager?
       (start-every-backend! proxy))
     (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
@@ -215,12 +225,13 @@
 (defn- document-selector
   "The backend's files: those of its languages in its scope or among its
   fetched files, and those matching its globs."
-  [{:keys [config server-type scope repo cache]}]
-  (let [{:strs [languages globs]} (get-in config ["servers" server-type])
-        relative (fn [dir pattern] {"baseUri" (path->uri dir) "pattern" pattern})]
+  [config b]
+  (let [{:keys! [repo dir cache] [server-type] :slot} (:spec b)
+        {:strs [languages globs]} (get-in config ["servers" server-type])
+        relative (fn [base pattern] {"baseUri" (path->uri base) "pattern" pattern})]
     (vec (concat (for [language languages
-                       dir [(paths/client-path repo scope) cache]]
-                   {"language" language "pattern" (relative dir "**/*")})
+                       base [dir cache]]
+                   {"language" language "pattern" (relative base "**/*")})
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
 
@@ -236,15 +247,16 @@
   "The server capabilities of the backend `b`, with its commands qualified
   with its server type."
   [b]
-  (origin/qualify-command-ids (:server-type b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
+  (origin/qualify-command-ids (server-type-of b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
 
 (defn- ready-backends
   "The server capabilities and document selector of each running backend that
   has started, in priority order."
   [proxy]
-  (for [b (running-backends proxy)
-        :when (backend/ready? b)]
-    [(server-capabilities b) (document-selector b)]))
+  (let [config (get-in @(:state proxy) [:session :config])]
+    (for [b (running-backends proxy)
+          :when (backend/ready? b)]
+      [(server-capabilities b) (document-selector config b)])))
 
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
@@ -282,22 +294,24 @@
           (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)}))))))
 
 (defn- init-params [b client-params]
-  (let [root-uri (path->uri (:root b))]
+  (let [{:keys! [root dir]} (:spec b)
+        root-uri (path->uri root)]
     (into {}
           (remove (comp nil? val))
           {"processId" (.pid (ProcessHandle/current))
            "clientInfo" (get client-params "clientInfo")
            "locale" (get client-params "locale")
            "rootUri" root-uri
-           "rootPath" (:root b)
+           "rootPath" root
            "workspaceFolders" [{"uri" root-uri
-                                "name" (last (str/split (paths/client-path (:repo b) (:scope b)) #"/"))}]
+                                "name" (last (str/split dir #"/"))}]
            "capabilities" (assoc-in (get client-params "capabilities" {})
                                     ["general" "positionEncodings"] ["utf-16"])
            "trace" (get client-params "trace")})))
 
-(defn- describe [{:keys [server-type scope]}]
-  (str server-type " in " (if (= "." scope) "the repo root" scope)))
+(defn- describe [b]
+  (let [[server-type scope] (slot b)]
+    (str server-type " in " (if (= "." scope) "the repo root" scope))))
 
 (defn- elapsed?
   "Whether `ms` or more have passed between `since` and `now`, or there's no
@@ -312,7 +326,7 @@
   server type and scope in the last `report-interval-ms`, as a backend that
   keeps failing would otherwise flood them."
   [proxy b type message]
-  (let [k [(:server-type b) (:scope b)]
+  (let [k (slot b)
         now (now-ms proxy)
         due? #(elapsed? (get-in % [:registry :reported k]) now report-interval-ms)
         [old] (swap-vals! (:state proxy) #(cond-> % (due? %) (assoc-in [:registry :reported k] now)))]
@@ -323,9 +337,9 @@
 (declare from-backend! failed! open-documents-in!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
-  (let [{:keys [config repo cache-root client-params]} (:session @(:state proxy))
+  (let [{:keys [specs client-params]} (:session @(:state proxy))
         timeouts (into {} (filter val) (select-keys proxy (keys backend/default-timeouts)))
-        b (backend/backend config server-type scope repo cache-root timeouts)]
+        b (backend/backend (get specs k) timeouts)]
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:registry :backends k] {:backend b :opened #{}})
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
@@ -351,9 +365,9 @@
   "Translates a payload from the backend `b` for the client, after fetching
   any files it refers to that only the backend can see."
   [b payload]
-  (doseq [[file problem] (fetched/fetch! b (translate/fetched-files b payload))]
+  (doseq [[file problem] (fetched/fetch! b (translate/fetched-files (:spec b) payload))]
     (log/info "couldn't fetch" file "from" (:backend-id b) "-" problem))
-  (translate/to-client b payload))
+  (translate/to-client (:spec b) payload))
 
 (defn- set-diagnostics
   "`by-file`, which holds each backend's latest diagnostics for each file,
@@ -392,7 +406,7 @@
   why and when under :failures, withdraws its diagnostics and tells the user.
   `what-happened` follows the backend's description in the message."
   [proxy b type what-happened]
-  (let [k [(:server-type b) (:scope b)]
+  (let [k (slot b)
         now (now-ms proxy)
         message (str (describe b) " " what-happened ". Opening one of its files will start it again, once "
                      (quot retry-interval-ms 1000) " s have passed.")
@@ -425,7 +439,7 @@
   (mapv #(update % "id" (partial qualify b)) registrations))
 
 (defn- qualify-registered-commands [b registrations]
-  (mapv #(origin/qualify-command-ids (:server-type b) % ["registerOptions" "commands"]) registrations))
+  (mapv #(origin/qualify-command-ids (server-type-of b) % ["registerOptions" "commands"]) registrations))
 
 (defn- progress-token!
   "The token to give the client for one that the backend `b` created. The
@@ -460,14 +474,15 @@
 (defn- limit-selectors
   "The params of `client/registerCapability` from the backend `b`, as client
   paths, with each document selector limited to the backend's files."
-  [b params]
-  (update params "registrations"
-          (fn [registrations]
-            (mapv #(cond-> %
-                     (contains? (get % "registerOptions") "documentSelector")
-                     (update-in ["registerOptions" "documentSelector"]
-                                capabilities/limit-selector (document-selector b)))
-                  registrations))))
+  [proxy b params]
+  (let [selector (document-selector (get-in @(:state proxy) [:session :config]) b)]
+    (update params "registrations"
+            (fn [registrations]
+              (mapv #(cond-> %
+                       (contains? (get % "registerOptions") "documentSelector")
+                       (update-in ["registerOptions" "documentSelector"]
+                                  capabilities/limit-selector selector))
+                    registrations)))))
 
 (defn- from-backend! [proxy b {:strs [id method params] :as msg}]
   (cond
@@ -476,10 +491,10 @@
 
     (contains? msg "id")
     (request-client! proxy method (cond->> (to-client! b (request-params proxy b method params))
-                                    (= "client/registerCapability" method) (limit-selectors b))
+                                    (= "client/registerCapability" method) (limit-selectors proxy b))
                      [(:backend-id b) id]
                      (fn [response]
-                       (backend/send! b (assoc (translate/to-server b (dissoc response "id")) "id" id))))
+                       (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id))))
 
     (= "$/cancelRequest" method)
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])
@@ -503,7 +518,7 @@
   "The backend that `path` is a fetched copy for, if any."
   [backends path]
   (first (for [[k {b :backend}] backends
-               :when (and path (str/starts-with? path (str (:cache b) "/")))]
+               :when (and path (str/starts-with? path (str (get-in b [:spec :cache]) "/")))]
            k)))
 
 (defn- handlers
@@ -546,7 +561,7 @@
       (keep #(get-in registry [:backends % :backend]) (handlers proxy uri nil)))))
 
 (defn- notify-backend! [b method params]
-  (let [params (translate/to-server b params)]
+  (let [params (translate/to-server (:spec b) params)]
     (backend/when-ready b #(when (backend/ready? b)
                              (backend/notify! b method params)))))
 
@@ -555,7 +570,7 @@
   one for the file already or has stopped."
   [proxy b params]
   (let [uri (get-in params ["textDocument" "uri"])
-        k [(:server-type b) (:scope b)]
+        k (slot b)
         [old] (swap-vals! (:state proxy)
                           #(cond-> % (entry % b) (update-in [:registry :backends k :opened] conj uri)))]
     (when (and (entry old b) (not (opened? old b uri)))
@@ -566,7 +581,7 @@
   that it handles, as the client last changed it. The backend gets these
   before anything sent to it later."
   [proxy b]
-  (let [k [(:server-type b) (:scope b)]]
+  (let [k (slot b)]
     (doseq [[uri {:keys [language version text]}] (get-in @(:state proxy) [:client :documents])
             :when (some #{k} (handlers proxy uri language))]
       (open-in! proxy b {"textDocument" {"uri" uri "languageId" language "version" version "text" text}}))))
@@ -615,7 +630,8 @@
   [proxy {:strs [changes]}]
   (let [repo (get-in @(:state proxy) [:session :repo])
         within? (fn [b change]
-                  (some->> (uri->path (get change "uri")) (repo-relative repo) (paths/within? (:scope b))))]
+                  (let [[_ scope] (slot b)]
+                    (some->> (uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
     (doseq [b (running-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]
@@ -628,16 +644,16 @@
   client."
   [b method result]
   (let [result (cond->> (to-client! b (normalise/result method result))
-                 (get-in methods/table [method :commands?]) (origin/qualify-commands (:server-type b)))]
+                 (get-in methods/table [method :commands?]) (origin/qualify-commands (server-type-of b)))]
     (origin/mark-result method (:backend-id b) result)))
 
 (defn- forward-request! [proxy b {:strs [id method params]}]
-  (backend/request! b method (translate/to-server b params) id
+  (backend/request! b method (translate/to-server (:spec b) params) id
                     (fn [response]
                       (send-client! proxy
                                     (cond
                                       (nil? response)
-                                      (lsp/error-response id -32603 (str (:server-type b) " stopped before answering"))
+                                      (lsp/error-response id -32603 (str (server-type-of b) " stopped before answering"))
 
                                       (contains? response "error")
                                       (assoc (to-client! b response) "id" id)
@@ -703,7 +719,7 @@
   (let [n (count backends)
         responses (atom {})]
     (doseq [[i b] (map-indexed vector backends)]
-      (backend/request! b method (translate/to-server b params) id
+      (backend/request! b method (translate/to-server (:spec b) params) id
                         (fn [response]
                           (let [all (swap! responses assoc i response)]
                             (when (= n (count all))
@@ -718,7 +734,7 @@
   [id method backends responses]
   (let [answers (for [[b response] (map vector backends responses)
                       :when (answered? response)]
-                  [(:server-type b) (result-for-client b method (get response "result"))])]
+                  [(server-type-of b) (result-for-client b method (get response "result"))])]
     (doseq [[b response] (map vector backends responses)
             :when (not (answered? response))]
       (log/info (:backend-id b) "didn't answer" method "-"
@@ -780,11 +796,12 @@
   file the arguments refer to, or else the first by scope."
   [proxy server-type arguments]
   (let [repo (get-in @(:state proxy) [:session :repo])
-        running (sort-by :scope (filter #(= server-type (:server-type %)) (running-backends proxy)))
+        scope (comp second slot)
+        running (sort-by scope (filter #(= server-type (server-type-of %)) (running-backends proxy)))
         files (keep #(repo-relative repo (uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
-        containing (filter (fn [b] (some #(paths/within? (:scope b) %) files)) running)]
-    (or (last (sort-by (comp count :scope) containing))
+        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) running)]
+    (or (last (sort-by (comp count scope) containing))
         (first running))))
 
 (defn- not-running-response

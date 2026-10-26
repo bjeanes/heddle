@@ -77,6 +77,12 @@
         server-type (keys entries)]
     [server-type scope]))
 
+(defn specs
+  "The spec for every slot that the config's scopes start, by slot."
+  [config repo cache-root]
+  (into {} (for [slot (slots config)]
+             [slot (spec config slot repo cache-root)])))
+
 (defn command
   "The arguments for the spec's `template` (\"start\", \"read\" or \"prepare\"),
   or nil if the runner has no such template. `runtime` has the :backend-id

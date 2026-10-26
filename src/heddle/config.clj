@@ -207,26 +207,3 @@
                dir)]
     (when (seq dirs)
       (apply max-key depth dirs))))
-
-(defn boot-config
-  "The server type's `boot` table with the scope's values over the top."
-  [config server-type scope]
-  (merge (get-in config ["servers" server-type "boot"])
-         (get-in config ["scopes" scope server-type])))
-
-(defn server-scope
-  "The scope's directory as a server path, which is also the backend's root.
-  `repo` is the repo root as a client path."
-  [config server-type scope repo]
-  (let [boot (boot-config config server-type scope)]
-    (paths/to-server (get boot "paths") repo (paths/client-path repo scope))))
-
-(defn command
-  "The arguments for the runner's `template` (\"start\", \"read\" or
-  \"prepare\") for a server type in a scope, or nil if the runner has no such
-  template. `runtime` has the repo root as a client path under :repo, the
-  :backend-id and, for `read`, the server path of the :file to print."
-  [config server-type scope template runtime]
-  (let [boot (boot-config config server-type scope)
-        runner (get-in config ["runners" (get boot "runner")])]
-    (runner/expand runner template (runner/context runner boot scope runtime))))

@@ -3,9 +3,9 @@
   DESIGN.md."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [heddle.config :as config]
             [heddle.paths :as paths]
-            [heddle.process :as process])
+            [heddle.process :as process]
+            [heddle.spec :as spec])
   (:import (java.io File)
            (java.util UUID)))
 
@@ -82,12 +82,11 @@
 (defn- fetch-one!
   "Copies `file` into the backend's cache and records it as fetched. Returns
   nil, or why it couldn't."
-  [{:keys [config server-type scope repo cache fetched read-timeout-ms] :as backend} file]
-  (let [command (config/command config server-type scope "read"
-                                (assoc (select-keys backend [:repo :backend-id]) :file file))
+  [{:keys! [spec backend-id fetched read-timeout-ms]} file]
+  (let [{:keys! [dir cache]} spec
+        command (spec/command spec "read" {:backend-id backend-id :file file})
         problem (if command
-                  (read-into command (paths/client-path repo scope) (io/file (str cache file))
-                             read-timeout-ms)
+                  (read-into command dir (io/file (str cache file)) read-timeout-ms)
                   "the runner has no read template")]
     (when-not problem
       (swap! fetched conj file))
@@ -95,10 +94,9 @@
 
 (defn fetch!
   "Copies each of `files`, as server paths, into the backend's cache unless the
-  backend has copied it already. `backend` has the :config, :server-type and
-  :scope it was started for, the repo root as a client path under :repo, its
-  :backend-id, its :cache directory, the set of files it has :fetched in an
-  atom, and how long each `read` may take in :read-timeout-ms.
+  backend has copied it already. `backend` has its :spec (see heddle.spec), its
+  :backend-id, the set of files it has :fetched in an atom, and how long each
+  `read` may take in :read-timeout-ms.
 
   Since the cache outlives the backend, a copy left by an earlier one is
   replaced in case the file has changed. If it can't be replaced, it stays as
