@@ -156,7 +156,7 @@
      :config no-config
      :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) ".") "there is one"]}))
 
-(declare start-backend! ready-backends register! when-all-ready)
+(declare start-backend! ready-backends register! when-all-settled)
 
 (def ^:private eager-timeout-ms 30000)
 
@@ -167,9 +167,9 @@
   [proxy]
   (let [specs (get-in @(:state proxy) [:session :specs])
         started (promise)]
-    (when-all-ready (doall (for [k (sort-by (fn [[server-type scope]] [scope server-type]) (keys specs))]
-                             (start-backend! proxy k)))
-      #(deliver started true))
+    (when-all-settled (doall (for [k (sort-by (fn [[server-type scope]] [scope server-type]) (keys specs))]
+                               (start-backend! proxy k)))
+      (fn [_] (deliver started true)))
     (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
 
 (defn- start-session!
@@ -340,10 +340,11 @@
     (swap! (:state proxy) assoc-in [:registry :backends k] {:backend b :opened #{}})
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
     (open-documents-in! proxy b)
-    (backend/when-ready b #(if (backend/ready? b)
-                             (register! proxy)
-                             (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
-                                 (future (backend/exit! b 2000)))))
+    (backend/when-settled b (fn [ready?]
+                              (if ready?
+                                (register! proxy)
+                                (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
+                                    (future (backend/exit! b 2000))))))
     b))
 
 (def ^:private retry-interval-ms 30000)
@@ -548,8 +549,9 @@
 
 (defn- notify-backend! [b method params]
   (let [params (translate/to-server (:spec b) params)]
-    (backend/when-ready b #(when (backend/ready? b)
-                             (backend/notify! b method params)))))
+    (backend/when-settled b (fn [ready?]
+                              (when ready?
+                                (backend/notify! b method params))))))
 
 (defn- open-in!
   "Sends the backend `b` the `didOpen` with `params`, unless it has been sent
@@ -683,19 +685,23 @@
   [proxy {:strs [method] :as msg} [b & more]]
   (if (nil? b)
     (answer-unanswered! proxy msg)
-    (backend/when-ready b
-      #(let [feature (capabilities/feature method)]
-         (if (and (backend/ready? b)
-                  (or (nil? feature) (capabilities/offers? (backend/capabilities b) feature)))
-           (forward-request! proxy b msg)
-           (route-request! proxy msg more))))))
+    (backend/when-settled b
+      (fn [ready?]
+        (let [feature (capabilities/feature method)]
+          (if (and ready?
+                   (or (nil? feature) (capabilities/offers? (backend/capabilities b) feature)))
+            (forward-request! proxy b msg)
+            (route-request! proxy msg more)))))))
 
-(defn- when-all-ready
-  "Calls `f` once every one of `backends` has started or failed to start."
-  [backends f]
-  (if-let [[b & more] (seq backends)]
-    (backend/when-ready b #(when-all-ready more f))
-    (f)))
+(defn- when-all-settled
+  "Calls `f` once every one of `backends` has started or failed to start, with
+  those that started, in the same order."
+  ([backends f] (when-all-settled backends [] f))
+  ([backends ready f]
+   (if-let [[b & more] (seq backends)]
+     (backend/when-settled b (fn [ready?]
+                               (when-all-settled more (cond-> ready ready? (conj b)) f)))
+     (f ready))))
 
 (defn- ask-all!
   "Sends the request to each of `backends`, and calls `on-responses` with
@@ -734,16 +740,15 @@
   "Sends a request to every one of `backends` that offers the request's
   feature, and answers with their combined results."
   [proxy {:strs [id method] :as msg} backends]
-  (when-all-ready backends
-    #(let [feature (capabilities/feature method)
-           offering (filterv (fn [b] (and (backend/ready? b)
-                                          (capabilities/offers? (backend/capabilities b) feature)))
-                             backends)]
-       (if (empty? offering)
-         (answer-unanswered! proxy msg)
-         (ask-all! offering msg
-                   (fn [responses]
-                     (send-client! proxy (combined-response id method offering responses))))))))
+  (when-all-settled backends
+    (fn [ready]
+      (let [feature (capabilities/feature method)
+            offering (filterv #(capabilities/offers? (backend/capabilities %) feature) ready)]
+        (if (empty? offering)
+          (answer-unanswered! proxy msg)
+          (ask-all! offering msg
+                    (fn [responses]
+                      (send-client! proxy (combined-response id method offering responses)))))))))
 
 (defn- backend-by-id [proxy backend-id]
   (first (filter #(= backend-id (:backend-id %)) (running-backends proxy))))
@@ -817,9 +822,10 @@
       (not-running)
 
       :else
-      (backend/when-ready b #(if (backend/ready? b)
-                               (forward-request! proxy b (assoc-in msg ["params" "command"] command))
-                               (not-running))))))
+      (backend/when-settled b (fn [ready?]
+                                (if ready?
+                                  (forward-request! proxy b (assoc-in msg ["params" "command"] command))
+                                  (not-running)))))))
 
 (defn- cancel!
   "Passes on the client's cancellation of a request it sent a backend."

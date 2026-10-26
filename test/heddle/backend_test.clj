@@ -54,8 +54,8 @@
                           (fake/connector received respond)
                           {"rootUri" "file:///src"}
                           (fn [_]))]
-    (backend/when-ready b #(backend/notify! b "first" nil))
-    (backend/when-ready b #(backend/notify! b "second" nil))
+    (backend/when-settled b #(when % (backend/notify! b "first" nil)))
+    (backend/when-settled b #(when % (backend/notify! b "second" nil)))
     (testing "sends only initialize until it's answered"
       (is (eventually #(= ["initialize"] (methods-received received))))
       (is (= {"rootUri" "file:///src"} (get-in @received [["s" "."] 0 "params"])))
@@ -66,7 +66,7 @@
       (is (backend/ready? b))
       (is (= {"hoverProvider" true} (backend/capabilities b))))
     (testing "sends straight away once it has started"
-      (backend/when-ready b #(backend/notify! b "third" nil))
+      (backend/when-settled b #(when % (backend/notify! b "third" nil)))
       (is (eventually #(= "third" (peek (methods-received received))))))))
 
 (deftest failing-to-start
@@ -75,9 +75,9 @@
                   [(lsp/error-response (get msg "id") -32603 "no Gemfile")])
         b (backend/backend (spec))
         ran (promise)]
-    (backend/when-ready b #(deliver ran (backend/status b)))
+    (backend/when-settled b #(deliver ran [% (backend/status b)]))
     (backend/start! b (fake/connector received respond) {} (fn [_]))
-    (is (= :failed (deref ran 2000 :timeout)) "queued functions still run")
+    (is (= [false :failed] (deref ran 2000 :timeout)) "queued functions still run")
     (is (= "initialize failed: no Gemfile" (:error @(:state b))))
     (is (= ["initialize"] (methods-received received)))))
 
@@ -86,7 +86,7 @@
     (let [stopped (promise)
           b (backend/backend (spec) {:start-timeout-ms 100})
           ran (promise)]
-      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
       (backend/start! b (fake/connector (atom {}) (constantly nil)) {} #(when (nil? %) (deliver stopped true)))
       (is (= :failed (deref ran 2000 :timeout)))
       (is (= "it didn't answer initialize within 100 ms" (backend/error b)))
@@ -94,7 +94,7 @@
   (testing "says how much of the time prepare took"
     (let [b (backend/backend (prepares-with ["sleep" "1"]) {:start-timeout-ms 1200})
           ran (promise)]
-      (backend/when-ready b #(deliver ran (backend/status b)))
+      (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
       (backend/start! b backend/connect-process {} (fn [_]))
       (is (= :failed (deref ran 5000 :timeout)))
       (is (re-matches #"it didn't answer initialize within 1200 ms, of which prepare took 1\d\d\d ms"
@@ -103,7 +103,7 @@
 (deftest failing-to-prepare-in-time
   (let [b (backend/backend (prepares-with ["sleep" "30"]) {:start-timeout-ms 200})
         ran (promise)]
-    (backend/when-ready b #(deliver ran (backend/status b)))
+    (backend/when-settled b (fn [_] (deliver ran (backend/status b))))
     (backend/start! b backend/connect-process {} (fn [_]))
     (is (= :failed (deref ran 5000 :timeout)) "prepare is killed rather than left to finish")
     (is (= "its prepare command [\"sleep\" \"30\"] didn't finish within 200 ms" (backend/error b)))))

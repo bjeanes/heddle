@@ -187,15 +187,16 @@
 (defn- queueing? [{:keys [status draining]}]
   (or (= :starting status) draining))
 
-(defn when-ready
+(defn when-settled
   "Calls `f` once the backend has either started or failed to start, after
-  anything queued before it. Until a backend has answered `initialize`, nothing
-  else can be sent to it."
+  anything queued before it, with whether it's ready. Until a backend has
+  answered `initialize`, nothing else can be sent to it."
   [backend f]
-  (let [[old] (swap-vals! (:state backend)
-                          #(cond-> % (queueing? %) (update :queue conj f)))]
+  (let [run #(f (ready? backend))
+        [old] (swap-vals! (:state backend)
+                          #(cond-> % (queueing? %) (update :queue conj run)))]
     (when-not (queueing? old)
-      (f))))
+      (run))))
 
 (defn- settle!
   "Moves the backend to `status`, then runs everything queued, including
@@ -261,10 +262,11 @@
   started."
   [backend]
   (let [done (promise)]
-    (when-ready backend
-      #(if (ready? backend)
-         (request! backend "shutdown" nil (fn [_] (deliver done true)))
-         (deliver done false)))
+    (when-settled backend
+      (fn [ready?]
+        (if ready?
+          (request! backend "shutdown" nil (fn [_] (deliver done true)))
+          (deliver done false))))
     done))
 
 (defn exit!
