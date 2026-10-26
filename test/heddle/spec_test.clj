@@ -27,7 +27,12 @@
       (is (= {"services/api" "/app"} (:paths s)))
       (is (re-matches #"/cache/heddle/r-[0-9a-f]{8}/ruby-lsp/services%2Fapi" (:cache s))))
     (testing "keep only the runner's templates"
-      (is (= #{"start" "read"} (set (keys (:templates s)))))))
+      (is (= #{"start" "read"} (set (keys (:templates s))))))
+    (testing "say which files the server type handles"
+      (is (= ["ruby"] (:languages s)))
+      (is (= ["**/Gemfile" "**/*.rake"] (:globs s)))))
+  (testing "give a server type without globs none"
+    (is (= [] (:globs (spec-for design ["rubocop" "."])))))
   (testing "root the root scope where paths map it"
     (is (= "/src" (:root (spec-for design ["rubocop" "."])))))
   (testing "root a scope without paths at its own directory"

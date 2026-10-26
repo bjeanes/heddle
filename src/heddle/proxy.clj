@@ -223,9 +223,8 @@
 (defn- document-selector
   "The backend's files: those of its languages in its scope or among its
   fetched files, and those matching its globs."
-  [config b]
-  (let [{:keys! [repo dir cache] [server-type] :slot} (:spec b)
-        {:strs [languages globs]} (get-in config ["servers" server-type])
+  [b]
+  (let [{:keys! [languages globs repo dir cache]} (:spec b)
         relative (fn [base pattern] {"baseUri" (path->uri base) "pattern" pattern})]
     (vec (concat (for [language languages
                        base [dir cache]]
@@ -251,10 +250,9 @@
   "The server capabilities and document selector of each running backend that
   has started, in priority order."
   [proxy]
-  (let [config (get-in @(:state proxy) [:session :config])]
-    (for [b (running-backends proxy)
-          :when (backend/ready? b)]
-      [(server-capabilities b) (document-selector config b)])))
+  (for [b (running-backends proxy)
+        :when (backend/ready? b)]
+    [(server-capabilities b) (document-selector b)]))
 
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
@@ -464,8 +462,8 @@
 (defn- limit-selectors
   "The params of `client/registerCapability` from the backend `b`, as client
   paths, with each document selector limited to the backend's files."
-  [proxy b params]
-  (let [selector (document-selector (get-in @(:state proxy) [:session :config]) b)]
+  [b params]
+  (let [selector (document-selector b)]
     (update params "registrations"
             (fn [registrations]
               (mapv #(cond-> %
@@ -481,7 +479,7 @@
 
     (contains? msg "id")
     (request-client! proxy method (cond->> (fetched/to-client! b (request-params proxy b method params))
-                                    (= "client/registerCapability" method) (limit-selectors proxy b))
+                                    (= "client/registerCapability" method) (limit-selectors b))
                      [(:backend-id b) id]
                      (fn [response]
                        (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id))))

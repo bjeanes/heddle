@@ -3,6 +3,7 @@
   once the config has loaded. A spec is plain data, with these keys:
 
   - :slot, the [server-type scope] the backend is for, which outlives restarts;
+  - :languages and :globs, the server type's, which say what files it handles;
   - :repo, the repo root as a client path;
   - :dir, the scope's directory on the host, where the runner's commands run;
   - :root, the scope's directory as the server sees it, or nil if the boot
@@ -57,11 +58,14 @@
 (defn spec
   "The spec for the `slot` in a valid config. `repo` is the repo root as a
   client path, and `cache-root` is where fetched files are cached."
-  [config [_ scope :as slot] repo cache-root]
+  [config [server-type scope :as slot] repo cache-root]
   (let [{:strs [paths] :as boot} (boot config slot)
+        {:strs [languages globs]} (get-in config ["servers" server-type])
         runner (get-in config ["runners" (get boot "runner")])
         dir (paths/client-path repo scope)]
     {:slot slot
+     :languages (vec languages)
+     :globs (vec globs)
      :repo repo
      :dir dir
      :root (paths/to-server paths repo dir)
