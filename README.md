@@ -147,7 +147,7 @@ argument and prints which languages the config covers, as JSON such as
 ## Running it
 
 ```
-heddle [serve] [--eager] [SERVER-TYPE...]
+heddle [serve] [--eager] [--trace FILE] [SERVER-TYPE...]
 heddle languages [DIR [SERVER-TYPE...]]
 heddle check [DIR]
 heddle init [DIR]
@@ -181,6 +181,29 @@ exits 1.
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
 exits 2.
+
+### Tracing messages
+
+When a client doesn't behave as you expect, it helps to see exactly what it
+sends. `heddle serve --trace FILE` appends every LSP message to FILE. That
+covers what the client sends heddle, what heddle sends the client, and what
+heddle sends each server or receives from it. Messages to and from a server
+have paths as the server sees them. Setting `HEDDLE_TRACE=FILE` in heddle's
+environment does the same, for clients whose config makes arguments awkward.
+
+Each line of FILE is a JSON object with the `time` in milliseconds since the
+epoch, the `message`, and who it came `from` or went `to`. That's either
+`client` or a backend's ID, such as `heddle-1a2b3c4d`. A backend's lines also
+give its `serverType` and `scope`. For example, to list what the client sent,
+or everything exchanged with `ruby-lsp`:
+
+```sh
+jq -c 'select(.from == "client") | [.time, .message.method, .message.id]' trace.jsonl
+jq -c 'select(.serverType == "ruby-lsp")' trace.jsonl
+```
+
+If heddle can't write to FILE, it says so once on stderr and goes on serving
+without a trace.
 
 ## Starting servers eagerly
 

@@ -7,12 +7,13 @@
             [heddle.lsp :as lsp]
             [heddle.proxy :as proxy]
             [heddle.session :as session]
-            [heddle.starter :as starter])
+            [heddle.starter :as starter]
+            [heddle.trace :as trace])
   (:import (java.io BufferedInputStream)
            (java.lang ProcessBuilder$Redirect)))
 
 (def ^:private usage
-  "usage: heddle [serve] [--eager] [SERVER-TYPE...]
+  "usage: heddle [serve] [--eager] [--trace FILE] [SERVER-TYPE...]
        heddle languages [DIR [SERVER-TYPE...]]
        heddle check [DIR]
        heddle init [DIR]
@@ -25,6 +26,9 @@ serve.
 --eager starts every backend when the client initializes, and waits up to
 30 s for them before answering, so that the answer lists their features and
 commands. Otherwise each backend starts when one of its files opens.
+
+--trace FILE appends every message between the client, heddle and the
+backends to FILE, one JSON object per line. HEDDLE_TRACE=FILE does the same.
 
 languages prints, as JSON, the languages that the config at the root of DIR
 covers, counting only the server types named, if any.
@@ -39,15 +43,29 @@ DIR is the current directory unless given.")
 
 (def ^:private commands #{"serve" "languages" "check" "init" "help"})
 
+(def ^:private trace-variable "HEDDLE_TRACE") ; the environment variable that serves as --trace
+
 (defn- option? [arg]
   (str/starts-with? arg "-"))
+
+(defn- take-traces
+  "The FILEs that `args` give with `--trace FILE`, and `args` without those
+  FILEs."
+  [args]
+  (loop [args args, files [], kept []]
+    (if-let [[arg & more] (seq args)]
+      (if (and (= "--trace" arg) more (not (option? (first more))))
+        (recur (rest more) (conj files (first more)) (conj kept arg))
+        (recur more files (conj kept arg)))
+      [files kept])))
 
 (defn parse-args
   "The command that the command line `args` asks for, as a map with its
   :command, or with an :error saying what's wrong with them."
   [args]
-  (let [options (filter option? args)
-        [command & operands] (remove option? args)]
+  (let [[[trace] args-without-traces] (take-traces args)
+        options (filter option? args-without-traces)
+        [command & operands] (remove option? args-without-traces)]
     (cond
       (or (some #{"--help" "-h"} options) (= "help" command))
       {:command :help}
@@ -59,11 +77,16 @@ DIR is the current directory unless given.")
       {:error (str "unknown command " (pr-str command) " (server types can only be named after serve)")}
 
       (or (nil? command) (= "serve" command))
-      (if-let [unknown (first (remove #{"--eager"} options))]
-        {:error (str "unknown option " unknown)}
-        {:command :serve
-         :eager? (boolean (some #{"--eager"} options))
-         :server-types (vec operands)})
+      (let [unknown (first (remove #{"--eager" "--trace"} options))
+            traces (count (filter #{"--trace"} options))]
+        (cond
+          unknown {:error (str "unknown option " unknown)}
+          (< 1 traces) {:error "--trace can only be given once"}
+          (and (= 1 traces) (nil? trace)) {:error "--trace needs a file"}
+          :else (cond-> {:command :serve
+                         :eager? (boolean (some #{"--eager"} options))
+                         :server-types (vec operands)}
+                  trace (assoc :trace trace))))
 
       (seq options)
       {:error (str command " takes no options, but was given " (first options))}
@@ -179,24 +202,27 @@ DIR is the current directory unless given.")
                  "heddle serve speaks LSP over stdin and stdout, for an editor to run.\n"
                  "`heddle init` writes a starter config, and `heddle check` checks one.")})))
 
-(defn- serve! [eager? server-types]
-  (let [proxy (proxy/create {:send #(lsp/write-message System/out %)
-                             :connect backend/connect-process
-                             :server-types (when (seq server-types) (set server-types))
-                             :eager eager?
-                             :cwd (System/getProperty "user.dir")
-                             :exit #(System/exit %)})
+(defn- serve! [eager? server-types trace-path]
+  (let [trace (some-> trace-path trace/tracer)
+        proxy (proxy/create (cond-> {:send #(lsp/write-message System/out %)
+                                     :connect backend/connect-process
+                                     :server-types (when (seq server-types) (set server-types))
+                                     :eager eager?
+                                     :cwd (System/getProperty "user.dir")
+                                     :exit #(System/exit %)}
+                              trace (trace/traced trace)))
         in (BufferedInputStream. System/in)]
     (loop []
       (if-let [msg (lsp/read-message in)]
-        (do (proxy/handle-client! proxy msg)
+        (do (some-> trace (trace/from-client msg))
+            (proxy/handle-client! proxy msg)
             (recur))
         (proxy/handle-client! proxy (lsp/notification "exit" nil))))))
 
 (defn -main [& args]
-  (let [{:keys [command eager? server-types] :as parsed} (parse-args args)]
+  (let [{:keys [command eager? server-types trace] :as parsed} (parse-args args)]
     (if (= :serve command)
       (if-let [refusal (nothing-to-serve (System/getProperty "user.dir") server-types)]
         (report! refusal)
-        (serve! eager? server-types))
+        (serve! eager? server-types (or trace (not-empty (System/getenv trace-variable)))))
       (report! (outcome parsed)))))
