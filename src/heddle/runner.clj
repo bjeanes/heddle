@@ -27,7 +27,7 @@
 
 (def uncovered-scope "paths don't cover the scope's directory")
 
-(defn- string-list? [v]
+(defn string-list? [v]
   (and (vector? v) (every? string? v)))
 
 (defn- placeholder-error

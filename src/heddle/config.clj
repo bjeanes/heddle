@@ -26,9 +26,6 @@
           (invalid source [(str "TOML syntax error at line " line ", column " column)])
           (throw e))))))
 
-(defn- string-list? [v]
-  (and (vector? v) (every? string? v)))
-
 (defn- server-errors [name server]
   (let [where (str "server type " (pr-str name))]
     (if-not (map? server)
@@ -38,7 +35,7 @@
              :when (not (#{"languages" "globs" "priority" "boot"} k))]
          (str where ": unknown key " (pr-str k)))
        (for [k ["languages" "globs"]
-             :when (and (contains? server k) (not (string-list? (get server k))))]
+             :when (and (contains? server k) (not (runner/string-list? (get server k))))]
          (str where ": " k " must be a list of strings"))
        (when-not (or (contains? server "languages") (contains? server "globs"))
          [(str where " matches no files; give it languages or globs")])
