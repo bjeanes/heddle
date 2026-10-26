@@ -274,5 +274,22 @@ check(#warnings == 0, 'the module read which languages the proxy serves', short(
 vim.notify = notify
 stop_all()
 
+print('\n--eager')
+require('heddle').setup({ cmd = { 'heddle', 'serve', '--eager' } })
+vim.cmd('silent! bwipeout! ' .. vim.fn.fnameescape(greeting))
+vim.cmd.edit(greeting)
+local eager
+vim.wait(60000, function()
+  eager = vim.lsp.get_clients({ bufnr = vim.api.nvim_get_current_buf(), name = 'heddle' })[1]
+  return eager ~= nil and eager.initialized
+end, 100)
+if check(eager ~= nil, 'heddle attached') then
+  check(eager.server_capabilities.hoverProvider ~= nil, 'hover announced at startup')
+  local hover, err = request(eager, 'textDocument/hover', vim.api.nvim_get_current_buf(), { line = 12, character = 4 })
+  local text = hover and hover.contents and (hover.contents.value or vim.inspect(hover.contents))
+  check(text ~= nil and text:find('Rainbow', 1, true) ~= nil, 'hover', short(text or err))
+end
+stop_all()
+
 print(('\n%s'):format(failures == 0 and 'all checks passed' or (failures .. ' check(s) failed')))
 os.exit(failures == 0 and 0 or 1)

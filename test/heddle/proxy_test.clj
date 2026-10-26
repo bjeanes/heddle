@@ -460,6 +460,22 @@ read = ['cat', '{read:file}']
       (is (= (lsp/response 9 nil) (from-proxy t)))
       (is (= 1 (count (received t ["lint" "."] "custom/request")))))))
 
+(deftest opening-a-file-after-starting-backends-eagerly
+  (let [respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"hoverProvider" true}})]
+                    "textDocument/hover" [(lsp/response id {"contents" "Rainbow"})]
+                    nil))
+        t (start :respond respond :eager true :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "tells the running backend about it"
+      (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen"]
+                          (methods-received t ["ruby" "api"])))))
+    (testing "and sends it requests about it"
+      (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 1 {"contents" "Rainbow"}) (from-proxy t))))))
+
 (deftest requests-for-partial-results
   (let [t (start :server-types #{"ruby"})]
     (initialize! t {})
