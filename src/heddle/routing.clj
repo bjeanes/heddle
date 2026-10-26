@@ -43,13 +43,18 @@
 
 (defn command-backend
   "The backend of `server-type` among `backends` to run a command with
-  `arguments`. Where there are several, the one with the deepest scope that
-  contains a file the arguments refer to, or else the first by scope."
-  [repo backends server-type arguments]
+  `arguments`. `offering` holds the backends known to offer the command. If
+  any of them is of `server-type`, this chooses among those. Otherwise it
+  chooses among every backend of `server-type`, since one that is still
+  starting may offer the command once it's ready. Where there are several, the
+  one with the deepest scope that contains a file the arguments refer to, or
+  else the first by scope."
+  [repo backends server-type offering arguments]
   (let [scope (comp second backend/slot)
-        live (sort-by scope (filter #(= server-type (backend/server-type %)) backends))
+        of-type (partial filter #(= server-type (backend/server-type %)))
+        candidates (sort-by scope (or (seq (of-type offering)) (of-type backends)))
         files (keep #(repo-relative repo (paths/uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
-        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) live)]
+        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) candidates)]
     (or (last (sort-by (comp count scope) containing))
-        (first live))))
+        (first candidates))))

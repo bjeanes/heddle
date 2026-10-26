@@ -221,6 +221,15 @@
         :when (backend/ready? b)]
     [(server-capabilities proxy b) (document-selector b)]))
 
+(defn- offering
+  "The ready backends that offer `command`, which is qualified with its server
+  type."
+  [proxy command]
+  (for [b (live-backends proxy)
+        :when (and (backend/ready? b)
+                   (some #{command} (get-in (server-capabilities proxy b) ["executeCommandProvider" "commands"])))]
+    b))
+
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
   refuses."
@@ -756,7 +765,7 @@
         [server-type command] (origin/command-origin server-types (get params "command"))
         b (when server-type
             (routing/command-backend (get-in @(:state proxy) [:session :repo]) (live-backends proxy)
-                                     server-type (get params "arguments")))
+                                     server-type (offering proxy (get params "command")) (get params "arguments")))
         none-ready #(send-client! proxy (none-ready-response proxy id server-type))]
     (cond
       (nil? server-type)

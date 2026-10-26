@@ -783,6 +783,33 @@ read = ['cat', '{read:file}']
     (testing "or else to the first by scope"
       (is (= "." (execute 3))))))
 
+(deftest running-commands-that-one-scope-offers
+  (let [respond (fn [[_ scope] {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" (if (= "api" scope)
+                                                                      {"executeCommandProvider" {"commands" ["fix"]}}
+                                                                      {})})]
+                    "textDocument/didOpen" (when (= "." scope)
+                                             [(lsp/request 1 "client/registerCapability"
+                                                           {"registrations" [{"id" "commands" "method" "workspace/executeCommand"
+                                                                              "registerOptions" {"commands" ["foo"]}}]})])
+                    "workspace/executeCommand" [(lsp/response id scope)]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
+        execute (fn [id command & arguments]
+                  (client! t (lsp/request id "workspace/executeCommand" {"command" command "arguments" (vec arguments)}))
+                  (get (from-proxy t) "result"))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (open! t "b.rb" "ruby")
+    (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+    (is (eventually #(some #{(lsp/response 1 nil)} (get @(:received t) ["ruby" "."]))))
+    (testing "go to the backend that announced the command, whichever file the arguments name"
+      (is (= "api" (execute 1 "ruby:fix" {"uri" (uri t "b.rb")})))
+      (is (= "api" (execute 2 "ruby:fix"))))
+    (testing "or to the backend that registered it"
+      (is (= "." (execute 3 "ruby:foo" {"uri" (uri t "api/a.rb")}))))))
+
 (defn- stop-backend! [t k]
   ((get-in @(:state (backend-of t k)) [:conn :close])))
 

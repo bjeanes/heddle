@@ -477,8 +477,11 @@ The proxy wraps each item's `data` field with the backend it came from and
 unwraps it on the way back. It prefixes command IDs with the server type, which
 also keeps two servers' commands from colliding. A command doesn't say which
 scope it came from, though. When more than one backend of that server type is
-running, the proxy picks the one whose scope contains a file the command's
-arguments refer to, and otherwise the first by scope.
+running, the proxy chooses among those that are ready and offer the command,
+whether they announced it or registered it themselves. If none of them does,
+it chooses among them all, since one that is still starting may offer the
+command once it's ready. Of those, it picks the one whose scope contains a file
+the command's arguments refer to, and otherwise the first by scope.
 
 Backends of one server type in different scopes often register the same
 commands themselves. VS Code refuses a command ID that is registered twice.

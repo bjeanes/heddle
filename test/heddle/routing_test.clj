@@ -44,13 +44,21 @@
   (let [root (backend ["ruby" "."])
         api (backend ["ruby" "api"])
         v1 (backend ["ruby" "api/v1"])
-        backends [(backend ["lint" "."]) v1 api root]
-        backend-for #(routing/command-backend "/repo" backends "ruby" %)]
+        lint (backend ["lint" "."])
+        backends [lint v1 api root]
+        offered-by #(routing/command-backend "/repo" backends "ruby" %1 %2)
+        backend-for #(offered-by [] %)]
     (testing "the deepest scope containing a file the arguments refer to"
       (is (= v1 (backend-for [{"textDocument" {"uri" "file:///repo/api/v1/a.rb"}}])))
       (is (= api (backend-for [{"uri" "file:///repo/api/a.rb"}]))))
     (testing "the first by scope when the arguments refer to no file in the repo"
       (is (= root (backend-for ["x"])))
       (is (= root (backend-for ["file:///elsewhere/a.rb"]))))
+    (testing "only among the backends that offer the command, where any do"
+      (is (= api (offered-by [api] [{"uri" "file:///repo/a.rb"}])))
+      (is (= api (offered-by [api] ["x"])))
+      (is (= root (offered-by [api root] ["x"]))))
+    (testing "among them all when those that offer it are of another server type"
+      (is (= v1 (offered-by [lint] [{"uri" "file:///repo/api/v1/a.rb"}]))))
     (testing "none without a live backend of the server type"
-      (is (nil? (routing/command-backend "/repo" backends "types" []))))))
+      (is (nil? (routing/command-backend "/repo" backends "types" [] []))))))
