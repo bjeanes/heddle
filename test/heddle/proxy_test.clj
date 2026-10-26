@@ -75,6 +75,11 @@ read = ['cat', '{read:file}']
 (defn- uri [t path]
   (str "file://" (:repo t) "/" path))
 
+(defn- backend-of
+  "The running backend `k`, a [server-type scope]."
+  [t k]
+  (get-in @(:state (:proxy t)) [:registry :backends k :backend]))
+
 (defn- initialize!
   "Initializes the proxy as a client with `capabilities` would, and returns
   the proxy's capabilities."
@@ -385,7 +390,7 @@ read = ['cat', '{read:file}']
       (is (nothing-more? t)))))
 
 (defn- cache-of [t k]
-  (get-in @(:state (:proxy t)) [:backends k :cache]))
+  (:cache (backend-of t k)))
 
 (deftest choosing-the-cache-root
   (testing "a path relative to the config's directory"
@@ -453,7 +458,7 @@ read = ['cat', '{read:file}']
     (testing "go to the first backend that offers the feature, by name when priorities tie"
       (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
       (let [response (from-proxy t)
-            cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+            cache (:cache (backend-of t ["ruby" "api"]))]
         (testing "with the client's ID on the response, and paths translated both ways"
           (is (= "h" (get response "id")))
           (is (= (str "[Rainbow](file://" cache gem "#L1) for " (uri t "api/a.rb"))
@@ -554,7 +559,7 @@ read = ['cat', '{read:file}']
       (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
 
 (defn- backend-id [t k]
-  (get-in @(:state (:proxy t)) [:backends k :backend-id]))
+  (:backend-id (backend-of t k)))
 
 (deftest resolving-items
   (let [respond (fn [[server-type] {:strs [id method params]}]
@@ -710,7 +715,7 @@ read = ['cat', '{read:file}']
       (is (= "." (execute 3))))))
 
 (defn- stop-backend! [t k]
-  ((get-in @(:state (get-in @(:state (:proxy t)) [:backends k])) [:conn :close])))
+  ((get-in @(:state (backend-of t k)) [:conn :close])))
 
 (deftest publishing-diagnostics
   (let [respond (fn [[server-type] {:strs [id method params]}]
@@ -749,7 +754,7 @@ read = ['cat', '{read:file}']
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
     (let [published (from-proxy t)
-          cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+          cache (:cache (backend-of t ["ruby" "api"]))]
       (is (= (str "file://" cache gem)
              (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
       (is (= "module Rainbow; end\n" (slurp (str cache gem)))
