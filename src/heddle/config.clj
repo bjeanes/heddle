@@ -172,8 +172,7 @@
   of those in `server-types` if it's non-empty."
   ([config] (languages config nil))
   ([config server-types]
-   (let [started (cond->> (set (mapcat keys (vals (get config "scopes"))))
-                   (seq server-types) (filter (set server-types)))]
+   (let [started (map first (spec/slots config server-types))]
      (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started)))))))
 
 (defn unknown-server-types

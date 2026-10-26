@@ -161,16 +161,14 @@
 (def ^:private eager-timeout-ms 30000)
 
 (defn- start-every-backend!
-  "Starts a backend for every server type the proxy serves in every scope, and
-  waits until they have all started or failed, or the timeout runs out."
+  "Starts a backend for every slot the proxy has a spec for, by scope then
+  server type, and waits until they have all started or failed, or the
+  timeout runs out."
   [proxy]
-  (let [config (get-in @(:state proxy) [:session :config])
-        only (:server-types proxy)
+  (let [specs (get-in @(:state proxy) [:session :specs])
         started (promise)]
-    (when-all-ready (doall (for [[scope entries] (sort-by key (get config "scopes"))
-                                 server-type (sort (keys entries))
-                                 :when (or (nil? only) (contains? only server-type))]
-                             (start-backend! proxy [server-type scope])))
+    (when-all-ready (doall (for [k (sort-by (fn [[server-type scope]] [scope server-type]) (keys specs))]
+                             (start-backend! proxy k)))
       #(deliver started true))
     (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
 
@@ -180,7 +178,7 @@
   as [type message]."
   [proxy params]
   (let [{:keys [repo config cache-root problem warnings]} (load-config (config-roots params (:cwd proxy)))
-        specs (spec/specs config repo cache-root)
+        specs (spec/specs config repo cache-root (:server-types proxy))
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
         unknown-warning (when unknown
@@ -518,17 +516,15 @@
   it's opened as `language`, in priority order."
   [proxy uri language]
   (let [{:keys [session registry]} @(:state proxy)
-        {:keys [config repo]} session
-        only (:server-types proxy)
+        {:keys [config repo specs]} session
         path (uri->path uri)]
     (if-let [k (fetched-by (:backends registry) path)]
       [k]
       (when-let [path (repo-relative repo path)]
         (for [server-type (config/by-priority config (config/server-types config path language))
-              :when (or (nil? only) (contains? only server-type))
-              :let [scope (config/scope-for config server-type path)]
-              :when scope]
-          [server-type scope])))))
+              :let [k [server-type (config/scope-for config server-type path)]]
+              :when (contains? specs k)]
+          k)))))
 
 (defn- opened?
   "Whether the backend `b` has been sent `didOpen` for the file at `uri`."

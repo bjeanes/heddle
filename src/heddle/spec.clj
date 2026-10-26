@@ -71,16 +71,20 @@
      :context context}))
 
 (defn slots
-  "Every [server-type scope] that the config's scopes start."
-  [config]
-  (for [[scope entries] (get config "scopes")
-        server-type (keys entries)]
-    [server-type scope]))
+  "Every [server-type scope] that the config's scopes start, or only those of
+  `server-types` if it's non-empty."
+  ([config] (slots config nil))
+  ([config server-types]
+   (let [served? (if (seq server-types) (set server-types) (constantly true))]
+     (for [[scope entries] (get config "scopes")
+           server-type (keys entries)
+           :when (served? server-type)]
+       [server-type scope]))))
 
 (defn specs
-  "The spec for every slot that the config's scopes start, by slot."
-  [config repo cache-root]
-  (into {} (for [slot (slots config)]
+  "The spec for each of the `slots` of `server-types`, by slot."
+  [config repo cache-root server-types]
+  (into {} (for [slot (slots config server-types)]
              [slot (spec config slot repo cache-root)])))
 
 (defn command

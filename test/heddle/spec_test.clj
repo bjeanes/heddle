@@ -38,13 +38,18 @@
            (get-in (spec-for design ["ruby-lsp" "services/api"]) [:context :cfg "command"])))))
 
 (deftest slots
-  (is (= #{["ruby-lsp" "services/api"] ["ruby-lsp" "services/billing"] ["ruby-lsp" "services/legacy"]
-           ["typescript" "services/web"] ["rubocop" "."]}
-         (set (spec/slots design)))))
+  (testing "of every server type"
+    (is (= #{["ruby-lsp" "services/api"] ["ruby-lsp" "services/billing"] ["ruby-lsp" "services/legacy"]
+             ["typescript" "services/web"] ["rubocop" "."]}
+           (set (spec/slots design))
+           (set (spec/slots design [])))))
+  (testing "of only the server types served"
+    (is (= #{["ruby-lsp" "services/api"] ["ruby-lsp" "services/billing"] ["ruby-lsp" "services/legacy"]}
+           (set (spec/slots design #{"ruby-lsp" "nosuch"}))))))
 
 (deftest specs-by-slot
-  (let [specs (spec/specs design "/r" "/cache")]
-    (is (= (set (spec/slots design)) (set (keys specs))))
+  (let [specs (spec/specs design "/r" "/cache" #{"rubocop"})]
+    (is (= [["rubocop" "."]] (keys specs)))
     (is (= (spec-for design ["rubocop" "."]) (get specs ["rubocop" "."])))))
 
 (deftest commands
