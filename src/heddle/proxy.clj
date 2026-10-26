@@ -80,6 +80,16 @@
 (defn- now-ms [proxy]
   ((or (:clock proxy) #(System/currentTimeMillis))))
 
+(defn- in-background
+  "Calls `f` on a thread of its own, as `future` does. If `f` throws, this
+  logs that the proxy couldn't do `what`. The future's value is then nil."
+  [what f]
+  (future
+    (try
+      (f)
+      (catch Exception e
+        (log/info "couldn't" what "-" (ex-message e))))))
+
 (defn- send-client! [proxy msg]
   (channel/send! (:channel proxy) msg))
 
@@ -334,7 +344,8 @@
                               (if ready?
                                 (register! proxy)
                                 (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
-                                    (future (backend/exit! b exit-timeout-ms))))))
+                                    (in-background (str "stop " (:backend-id b))
+                                                   #(backend/exit! b exit-timeout-ms))))))
     b))
 
 (defn- backend-for!
@@ -836,16 +847,19 @@
   (let [backends (running-backends proxy)
         answers (mapv backend/shutdown! backends)
         deadline (+ (now-ms proxy) shutdown-timeout-ms)]
-    (future
-      (doseq [[b answered] (map vector backends answers)
-              :let [ms-left (max 0 (- deadline (now-ms proxy)))]]
-        (when (= ::timeout (deref answered ms-left ::timeout))
-          (log/info (:backend-id b) "didn't answer shutdown in time")))
-      (send-client! proxy (lsp/response id nil)))))
+    (in-background "answer shutdown"
+      (fn []
+        (doseq [[b answered] (map vector backends answers)
+                :let [ms-left (max 0 (- deadline (now-ms proxy)))]]
+          (when (= ::timeout (deref answered ms-left ::timeout))
+            (log/info (:backend-id b) "didn't answer shutdown in time")))
+        (send-client! proxy (lsp/response id nil))))))
 
 (defn- exit! [proxy]
   (let [[old] (swap-vals! (:state proxy) assoc :phase :exiting)]
-    (run! deref (mapv #(future (backend/exit! % exit-timeout-ms)) (running-backends proxy)))
+    (run! deref (mapv (fn [b] (in-background (str "stop " (:backend-id b))
+                                             #(backend/exit! b exit-timeout-ms)))
+                      (running-backends proxy)))
     ((:exit proxy) (if (= :shutting-down (:phase old)) 0 1))))
 
 ;; The client's messages

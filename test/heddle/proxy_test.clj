@@ -1010,6 +1010,24 @@ read = ['cat', '{read:file}']
     (client! t (lsp/notification "exit" nil))
     (is (= 1 (deref (:exit-code t) 2000 :timeout)))))
 
+(deftest exiting-when-stopping-a-backend-fails
+  (let [logged (atom [])
+        previous-writer (log/set-writer! #(swap! logged conj %))
+        t (start :server-types #{"ruby"})
+        connect (:connect (:proxy t))
+        t (update t :proxy assoc :connect
+                  (fn [b on-message]
+                    (assoc (connect b on-message) :wait (fn [_] (throw (ex-info "can't wait" {}))))))]
+    (try
+      (initialize! t {})
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+      (client! t (lsp/notification "exit" nil))
+      (is (= 1 (deref (:exit-code t) 2000 :timeout)))
+      (is (some #(str/includes? % "can't wait") @logged))
+      (finally
+        (log/set-writer! previous-writer)))))
+
 (defn- start-ruby!
   "Initializes the proxy `t` and opens a file that only ruby in api handles."
   [t]
