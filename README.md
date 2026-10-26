@@ -7,9 +7,10 @@ might need different versions of the same server.
 
 `heddle` is a central place to define a project's language servers, in a
 config checked into the repo, for any editor or agent to use. To your editor,
-or to an agent's MCP bridge, heddle is one ordinary language server. Behind
-that, it starts the right servers for each part of the repo, wherever they
-need to run, such as on the host or inside each service's Compose container.
+to Claude Code through its plugin, or to another agent's MCP bridge, heddle is
+one ordinary language server. Behind that, it starts the right servers for each
+part of the repo, wherever they need to run, such as on the host or inside each
+service's Compose container.
 It translates paths in both directions. When a server points at a file that
 only exists where it runs, such as an installed gem, heddle copies the file
 out so you can open it.
@@ -65,10 +66,13 @@ to pass between, much as heddle picks out the servers that match each file.
 - **One config for the whole team.** The servers are defined once, in the
   repo. Whoever opens it gets the same servers, whichever editor they use.
   (VS Code still needs an extension to start it, which doesn't exist yet.)
-- **Agents.** MCP bridges such as mcp-language-server start one server for
-  one workspace. heddle is how an agent gets every language in the repo
-  through that one server. Since `heddle serve --eager` starts every server up
-  front, workspace symbol search works from the agent's first request.
+- **Agents.** Claude Code uses heddle directly, through [its
+  plugin](#claude-code), as the language server behind Claude's `LSP` tool.
+  Other agents can reach it through an MCP bridge such as mcp-language-server,
+  which starts one server for one workspace. Either way, heddle is how an agent
+  gets every language in the repo through that one server. Since
+  `heddle serve --eager` starts every server up front, workspace symbol search
+  works from the agent's first request.
 - **A containerised or remote toolchain, even for one service.** The app runs
   in Docker, in a Nix shell or over SSH, while your editor stays on the host.
   Docker and Compose have built-in runners. For anything else, you write a
@@ -84,7 +88,8 @@ to pass between, much as heddle picks out the servers that match each file.
 
 - **It's brand new.** heddle is an early prototype. So far it has only been
   tried with ruby-lsp and RuboCop running in Docker Compose on macOS, from
-  Neovim 0.12 and from the session driver in `dev/`. Expect rough edges.
+  Neovim 0.12, from Claude Code's `LSP` tool through the plugin, and from the
+  session driver in `dev/`. Expect rough edges.
 - **It was built with AI.** Most of the code was written by Claude Code, an
   AI coding agent, with me directing the design. It has tests, but it hasn't
   had the scrutiny of a project that people have relied on for years.
@@ -177,6 +182,15 @@ non-zero if there are any errors. `heddle languages` takes the same
 argument and prints which languages the config covers, as JSON such as
 `{"languages":["ruby"]}`.
 
+For more, see the examples:
+
+- [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.
+- [`examples/monorepo`](examples/monorepo) has two Ruby services with their
+  own bundles, plus RuboCop in a separate `lints` service that checks the
+  whole repo.
+
+[The config in full](#the-config-in-full) covers every key.
+
 ## Running it
 
 ```
@@ -265,15 +279,6 @@ for clients that only use what a server announces at startup. A server that
 takes longer joins when it's ready, as it would without the flag. A server
 that fails to start is reported as usual, and starts again the next time you
 open one of its files.
-
-For more, see the examples:
-
-- [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.
-- [`examples/monorepo`](examples/monorepo) has two Ruby services with their
-  own bundles, plus RuboCop in a separate `lints` service that checks the
-  whole repo.
-
-[The config in full](#the-config-in-full) covers every key.
 
 ## The config in full
 
@@ -721,6 +726,9 @@ likely to run into are:
   files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
   files, and no sooner than 30 s after it stopped.
+- Code that several scopes share, such as a path gem used by several services,
+  gets none of their servers once you open it. Only a scope that contains it,
+  such as `"."`, can serve it.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
 - There's no VS Code extension yet. The only release is `edge`, built from
