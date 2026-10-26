@@ -1,4 +1,4 @@
-# The example from DESIGN.md.
+# The example from DESIGN.md, with the runners it uses from "Runners" there.
 
 [servers.ruby-lsp]
 languages = ["ruby"]
@@ -21,10 +21,20 @@ ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billin
 
 # This service's Ruby is too old for ruby-lsp. A newer Ruby on the host runs it.
 [scopes."services/legacy"]
-ruby-lsp = { runner = "host", command = ["ruby-lsp"] }
+ruby-lsp = { command = ["ruby-lsp"] }
 
 [scopes."services/web"]
 typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src" }, args = ["--volume", "{client:repo}:/src"] }
 
 [scopes."."]
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[runners.docker-run]
+defaults = { args = [] }
+start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}", "{cfg:args}", "--workdir", "{server:scope}", "{cfg:image}", "{cfg:command}"]
+read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]

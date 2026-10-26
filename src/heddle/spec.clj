@@ -9,6 +9,8 @@
   - :root, the scope's directory as the server sees it, or nil if the boot
     config's `paths` don't cover it;
   - :paths, the boot config's `paths`;
+  - :also, the client paths of the directories its `also` lists, whose files
+    it handles as well as the scope's;
   - :cache, the directory holding the backend's fetched files;
   - :templates, the runner's command templates;
   - :cfg, the values for those templates' `{cfg:…}` placeholders.
@@ -29,11 +31,21 @@
   {\/ "=2F"
    \= "=3D"})
 
+(def ^:private no-runner
+  "What starts a boot config that names no `runner`: its `command`, run
+  directly."
+  {"start" ["{cfg:command}"]})
+
 (defn- boot
-  "The server type's `boot` table with the scope's values over the top."
-  [{:strs! [servers scopes]} [server-type scope]]
-  (merge (get-in servers [server-type "boot"])
-         (get-in scopes [scope server-type])))
+  "The `slot`'s whole boot config, which `heddle.config/expand` has layered
+  from the scope, the server type's `boot` table and the runner's defaults."
+  [config [server-type scope]]
+  (get-in config ["scopes" scope server-type]))
+
+(defn- runner-of
+  "The runner that the boot config names, or `no-runner` if it names none."
+  [config {:strs [runner]}]
+  (if (some? runner) (get-in config ["runners" runner]) no-runner))
 
 (defn- segment
   "`s` as one path segment, with each `/` and `=` as `=` and its hex code.
@@ -57,9 +69,9 @@
   "The spec for the `slot` in a valid config. `repo` is the repo root as a
   client path, and `cache-root` is where fetched files are cached."
   [config [server-type scope :as slot] repo cache-root]
-  (let [{:strs [paths] :as boot} (boot config slot)
+  (let [{:strs [paths also] :as boot} (boot config slot)
         {:strs [languages globs]} (get-in config ["servers" server-type])
-        runner (get-in config ["runners" (get boot "runner")])
+        runner (runner-of config boot)
         dir (paths/client-path repo scope)]
     {:slot slot
      :languages (vec languages)
@@ -68,9 +80,10 @@
      :dir dir
      :root (paths/to-server paths repo dir)
      :paths paths
+     :also (mapv #(paths/client-path repo %) also)
      :cache (cache-dir cache-root slot)
      :templates (select-keys runner runner/templates)
-     :cfg (runner/cfg runner boot)}))
+     :cfg (runner/cfg boot)}))
 
 (defn slots
   "Every [server-type scope] that the config's scopes start, or only those of
@@ -96,32 +109,38 @@
   [{:keys! [templates cfg] :as spec} template runtime]
   (runner/expand templates template (runner/context cfg spec runtime)))
 
-(defn- paths-errors [paths]
-  (cond
-    (nil? paths) nil
-    (not (map? paths)) ["paths must be a table"]
-    :else (for [[dir server] paths
-                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
-                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
-                :when problem]
-            (str "paths entry " (pr-str dir) " " problem))))
-
 (def ^:private stand-ins
   "Values for checking a spec before any backend is running."
   {:repo "/repo" :cache-root "/cache" :backend-id "id" :file "/file"})
+
+(defn- also-errors
+  "Problems with the boot config's `also`, given that its `paths` are valid.
+  Its `paths`, if it has any, have to cover each directory that `also` lists,
+  since the backend handles their files."
+  [{:strs [paths also] :as boot}]
+  (cond
+    (not (contains? boot "also")) nil
+    (not (and (runner/string-list? also) (every? paths/relative-dir? also)))
+    ["also must be a list of directories relative to the repo root, such as [\"shared/analytics\"]"]
+    :else
+    (for [dir also
+          :let [repo (:repo stand-ins)]
+          :when (nil? (paths/to-server paths repo (paths/client-path repo dir)))]
+      (str "paths don't cover " (pr-str dir) ", which is in also"))))
 
 (defn errors
   "Problems with starting the `slot` in a config whose structure is valid. It
   expands the templates with stand-ins for the values only known once a
   backend runs."
   [config slot]
-  (let [{:strs [runner paths]} (boot config slot)
-        path-errors (paths-errors paths)]
+  (let [{:strs [runner] :as boot} (boot config slot)
+        path-errors (runner/paths-errors boot)
+        also-errors (also-errors boot)]
     (cond
-      (nil? runner) ["names no runner"]
-      (not (string? runner)) ["runner must be a string"]
-      (not (contains? (get config "runners") runner)) [(str "unknown runner " (pr-str runner))]
+      (and (some? runner) (not (string? runner))) ["runner must be a string"]
+      (and (some? runner) (not (contains? (get config "runners") runner))) [(str "unknown runner " (pr-str runner))]
       (seq path-errors) path-errors
+      (seq also-errors) also-errors
       :else
       (let [{:keys! [root templates cfg] :as s} (spec config slot (:repo stand-ins) (:cache-root stand-ins))
             ctx (runner/context cfg s (select-keys stand-ins [:backend-id :file]))]
@@ -130,11 +149,15 @@
           (for [t runner/templates
                 :when (contains? templates t)
                 e (second (runner/expand* templates t ctx))]
-            (str "runner " (pr-str runner) ", " t ": " e)))))))
+            (str (if runner (str "runner " (pr-str runner) ", " t) "when run directly") ": " e)))))))
 
 (defn warnings
-  "Values that the `slot`'s boot config sets but its runner never uses."
+  "Values that the `slot`'s boot config sets but its runner never uses. Values
+  from the runner's defaults don't count, since the config doesn't set them."
   [config slot]
-  (let [{:strs [runner] :as boot} (boot config slot)]
-    (for [k (runner/unused-values (get-in config ["runners" runner]) boot)]
-      (str (pr-str k) " isn't used by runner " (pr-str runner)))))
+  (let [{:strs [runner] :as boot} (boot config slot)
+        defaulted (for [[k [origin]] (:sources (meta boot))
+                        :when (= :defaults origin)]
+                    k)]
+    (for [k (runner/unused-values (runner-of config boot) (apply dissoc boot defaulted))]
+      (str (pr-str k) " isn't used " (if runner (str "by runner " (pr-str runner)) "when run directly")))))

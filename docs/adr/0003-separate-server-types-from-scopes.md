@@ -1,6 +1,7 @@
 # 0003. Separate server types from scopes
 
-Status: Accepted, 2026-10-25
+Status: Accepted, 2026-10-25. Amended by
+[0019](0019-expand-the-config-when-it-loads.md).
 
 ## Context
 

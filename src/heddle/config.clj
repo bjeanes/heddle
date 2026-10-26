@@ -8,9 +8,12 @@
             [heddle.glob :as glob]
             [heddle.paths :as paths]
             [heddle.runner :as runner]
-            [heddle.spec :as spec]))
+            [heddle.spec :as spec]
+            [heddle.toml-writer :as toml-writer]))
 
 (def file-name ".heddle.toml")
+
+(def ^:private no-runner "heddle runs the command directly, with no runner")
 
 (defn- invalid [source errors]
   (throw (ex-info (str/join "\n" (cons (str "invalid config in " source ":")
@@ -131,37 +134,139 @@
              e (runner/runner-errors runner)]
          (str "runner " (pr-str name) ": " e))))))
 
-(defn- about-slot [[server-type scope] message]
-  (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " message))
+(defn implicit?
+  "Whether the `slot` is there only because no scope names its server type."
+  [config [server-type scope]]
+  (boolean (:implicit (meta (get-in config ["scopes" scope server-type])))))
+
+(defn- about-slot [config [server-type scope :as slot] message]
+  (if (implicit? config slot)
+    (str "server type " (pr-str server-type) ", which no scope names: " message)
+    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " message)))
 
 (defn- scope-runner-errors [config]
   (for [slot (spec/slots config)
         e (spec/errors config slot)]
-    (about-slot slot e)))
+    (about-slot config slot e)))
 
 (defn- checked [config source find-errors]
   (let [errors (find-errors config)]
     (when (seq errors) (invalid source errors))
     config))
 
+(defn expand
+  "The structurally valid `config` with each scope's entry for a server type
+  made into that slot's whole boot config: the scope's values over the server
+  type's `boot` table, over the defaults of the runner they name, other than
+  any `runner` in those defaults, since a runner can't choose itself. A key
+  whose value ends up `false` is left out, which is how a layer unsets a value
+  from one below it. Under :sources, each entry's metadata says where any value
+  the scope didn't set came from, as [:boot server-type] or [:defaults runner].
+  The `boot` tables and runners' `defaults` are then left out, since the scopes
+  hold every value of theirs that applies.
+
+  A server type that no scope names runs across the repo, as though the `.`
+  scope named it with an empty entry. Its entry's metadata has :implicit true."
+  [{:strs! [servers scopes runners] :as config}]
+  (let [expand-entry (fn [server-type own]
+                       (let [boot (get-in servers [server-type "boot"])
+                             runner (get (merge boot own) "runner")
+                             defaults (dissoc (get-in runners [runner "defaults"]) "runner")
+                             layered (merge defaults boot own)
+                             unset (for [[k v] layered :when (false? v)] k)
+                             sources (merge (zipmap (keys defaults) (repeat [:defaults runner]))
+                                            (zipmap (keys boot) (repeat [:boot server-type])))]
+                         (with-meta (apply dissoc layered unset)
+                           {:sources (apply dissoc sources (concat (keys own) unset))})))
+        named (set (mapcat keys (vals scopes)))
+        add-implicit (fn [scopes server-type]
+                       (assoc-in scopes ["." server-type]
+                                 (vary-meta (expand-entry server-type {}) assoc :implicit true)))]
+    (assoc config
+           "servers" (update-vals servers #(dissoc % "boot"))
+           "runners" (update-vals runners #(dissoc % "defaults"))
+           "scopes" (reduce add-implicit
+                            (update-vals scopes #(into {} (for [[server-type own] %]
+                                                            [server-type (expand-entry server-type own)])))
+                            (remove named (keys servers))))))
+
 (defn parse
-  "Parses and checks config from a TOML string, with the built-in runners added.
-  Throws ex-info listing every problem found, under :errors. `source` names the
-  file in that message."
+  "Parses and checks config from a TOML string, with the scopes expanded by
+  `expand`. Throws ex-info listing every problem found, under :errors.
+  `source` names the file in that message."
   ([s] (parse s file-name))
   ([s source]
    (-> (merge {"servers" {} "scopes" {} "runners" {}} (parse-toml source s))
        (checked source structure-errors)
-       (update "runners" #(merge runner/builtins %))
+       expand
        (checked source scope-runner-errors))))
+
+(defn- line-finder
+  "A function from the path of a key in the TOML text `s` to the line it's set
+  on, or nil if `s` doesn't set it."
+  [s]
+  (let [positions (meta (toml/parse-string s))]
+    (fn [path]
+      (when-let [at (get-in positions (conj (vec path) ::toml/start))]
+        (inc (count (filter #{\newline} (take at s))))))))
+
+(defn- origin
+  "The path of the key that set the value of `k` in the entry for `slot`, by
+  its `source` in the entry's :sources."
+  [[server-type scope] k source]
+  (let [[layer name] source]
+    (case layer
+      nil ["scopes" scope server-type k]
+      :boot ["servers" name "boot" k]
+      :defaults ["runners" name "defaults" k])))
+
+(defn- entry-table [config line-of [server-type scope :as slot]]
+  (let [entry (get-in config ["scopes" scope server-type])
+        comment (fn [k]
+                  (let [path (origin slot k (get-in (meta entry) [:sources k]))]
+                    (cond-> (toml-writer/dotted-key (butlast path))
+                      (line-of path) (str " (line " (line-of path) ")"))))]
+    {:path ["scopes" scope server-type]
+     :comments (when (implicit? config slot)
+                 [(str (toml-writer/key-str server-type) " runs across the whole repo, since no scope names it")])
+     :rows (concat (when-not (contains? entry "runner") [no-runner])
+                   (for [k (sort-by (juxt #(not= "runner" %) identity) (keys entry))]
+                     [k (get entry k) (comment k)]))}))
+
+(defn expanded-toml
+  "The `config` parsed from the TOML text `s`, written back out as TOML. A
+  comment on each value in a scope says which table, and which line of `s`, it
+  came from. The TOML parses to the same config."
+  [{:strs! [servers runners scopes] :as config} s]
+  (let [line-of (line-finder s)]
+    (toml-writer/write
+     (concat (toml-writer/tables ["servers"] servers)
+             (toml-writer/tables ["runners"] runners)
+             (if (empty? scopes)
+               [{:path ["scopes"]}]
+               (for [[scope entries] (sort-by key scopes)
+                     table (if (empty? entries)
+                             [{:path ["scopes" scope]}]
+                             (for [server-type (sort (keys entries))]
+                               (entry-table config line-of [server-type scope])))]
+                 table))
+             (for [k ["cache" "trace"]
+                   :when (contains? config k)
+                   table (toml-writer/tables [k] (get config k))]
+               table)))))
+
+(defn read-file
+  "Reads the config in the file `f`, or returns nil if there's no such file."
+  [f]
+  (let [f (io/file f)]
+    (when (.exists f)
+      (parse (slurp f) (str f)))))
 
 (defn read-config
   "Reads the config at the root of the repo at `root`, or returns nil if it has
   none."
   [root]
-  (let [f (io/file root file-name)]
-    (when (.exists f)
-      (parse (slurp f) (str f)))))
+  (read-file (io/file root file-name)))
 
 (defn warnings
   "Values in a valid config's scopes that the scope's runner never uses. These
@@ -170,7 +275,7 @@
   [config]
   (for [slot (spec/slots config)
         w (spec/warnings config slot)]
-    (about-slot slot w)))
+    (about-slot config slot w)))
 
 (defn warnings-message
   "The `warnings` for the config file at `source`, as one message."
@@ -180,11 +285,11 @@
 
 (defn trace-path
   "The file that the config's `trace` table names, or nil if it has none.
-  `repo` is the directory holding the config, which a relative `path` is
+  `dir` is the directory holding the config, which a relative `path` is
   resolved against."
-  [config repo]
+  [config dir]
   (when-let [path (get-in config ["trace" "path"])]
-    (if (str/starts-with? path "/") path (paths/client-path repo path))))
+    (if (str/starts-with? path "/") path (paths/client-path dir path))))
 
 (defn server-types
   "The server types that handle the file at the repo-relative `path`, which the
@@ -196,12 +301,27 @@
          name)))
 
 (defn languages
-  "The languages, sorted, of every server type that some scope starts, or only
-  of those in `server-types` if it's non-empty."
+  "The languages, sorted, of every server type, or only of those in
+  `server-types` if it's non-empty."
   ([config] (languages config nil))
   ([config server-types]
    (let [started (map first (spec/slots config server-types))]
      (vec (sort (distinct (mapcat #(get-in config ["servers" % "languages"]) started)))))))
+
+(defn where-each-runs-message
+  "The scopes that each server type runs in, as one message, or nil if the
+  config has no server types."
+  [config]
+  (when-let [by-server-type (not-empty (group-by first (spec/slots config)))]
+    (str/join "\n" (cons "Each server type runs in these scopes:"
+                         (for [[server-type slots] (sort-by key by-server-type)]
+                           (str "  " server-type ": "
+                                (str/join ", " (for [[_ scope :as slot] (sort-by second slots)
+                                                     :let [also (get-in config ["scopes" scope server-type "also"])]]
+                                                 (cond
+                                                   (implicit? config slot) (str scope " (the whole repo, since no scope names it)")
+                                                   (seq also) (str scope " (also " (str/join ", " also) ")")
+                                                   :else scope)))))))))
 
 (defn unknown-server-types
   "Those of the server types `names` that the config doesn't have."
@@ -234,3 +354,14 @@
                dir)]
     (when (seq dirs)
       (apply max-key depth dirs))))
+
+(defn scopes-for
+  "The scopes, sorted, that handle the repo-relative `path` for `server-type`:
+  the one that `scope-for` gives, and each whose entry for `server-type` lists
+  a directory containing `path` under `also`."
+  [config server-type path]
+  (let [longest (scope-for config server-type path)]
+    (sort (for [[dir entries] (get config "scopes")
+                :when (or (= longest dir)
+                          (some #(paths/within? % path) (get-in entries [server-type "also"])))]
+            dir))))

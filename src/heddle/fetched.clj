@@ -30,14 +30,14 @@
         (not (str/starts-with? value "/")) (str "is a relative path, " (pr-str value))))
 
 (defn- chosen-root
-  "The directory that the config's `cache` table chooses, under :root. `repo`
+  "The directory that the config's `cache` table chooses, under :root. `dir`
   is the directory holding the config, which a relative `path` is resolved
   against. `getenv` looks up an environment variable.
 
   If `env` names a variable that is unset, empty or relative, or `xdg` finds
   neither $XDG_CACHE_HOME nor $HOME usable, the cache goes in the system's temp
   directory instead. :warning then says why."
-  [config repo getenv]
+  [config dir getenv]
   (let [{:strs [env path xdg]} (get config "cache")
         tmpdir (System/getProperty "java.io.tmpdir")
         fall-back (fn [why]
@@ -45,7 +45,7 @@
                      :warning (str "The config's cache " why ". "
                                    "Fetched files are cached in " tmpdir " instead.")})]
     (cond
-      path {:root (if (str/starts-with? path "/") path (paths/client-path repo path))}
+      path {:root (if (str/starts-with? path "/") path (paths/client-path dir path))}
 
       xdg
       (let [cache-home (getenv "XDG_CACHE_HOME")
@@ -70,15 +70,14 @@
   (str (str/replace root #"/+$" "") "/heddle/" (repo-key repo)))
 
 (defn cache-root
-  "The directory holding the repo's cache under :root, and any :warning about
-  the config's `cache` table, as `chosen-root` describes.
+  "The directory holding the cache of the repo at `repo` under :root, and any
+  :warning about the config's `cache` table, as `chosen-root` describes for the
+  config in `dir`.
 
-  A `path` is used as given, since it's only in this repo's config. Since the
-  temp directory, `xdg` and `env` can each name a directory that other repos
-  use too, the repo's cache is `heddle/<repo>-<hash>` inside it."
-  [config repo getenv]
-  (cond-> (chosen-root config repo getenv)
-    (not (get-in config ["cache" "path"])) (update :root repo-dir repo)))
+  Since any of them can name a directory that other repos use too, the repo's
+  cache is `heddle/<repo>-<hash>` inside it."
+  [config dir repo getenv]
+  (update (chosen-root config dir getenv) :root repo-dir repo))
 
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only

@@ -7,9 +7,10 @@ might need different versions of the same server.
 
 `heddle` is a central place to define a project's language servers, in a
 config checked into the repo, for any editor or agent to use. To your editor,
-or to an agent's MCP bridge, heddle is one ordinary language server. Behind
-that, it starts the right servers for each part of the repo, wherever they
-need to run, such as on the host or inside each service's Compose container.
+to Claude Code through its plugin, or to another agent's MCP bridge, heddle is
+one ordinary language server. Behind that, it starts the right servers for each
+part of the repo, wherever they need to run, such as on the host or inside each
+service's Compose container.
 It translates paths in both directions. When a server points at a file that
 only exists where it runs, such as an installed gem, heddle copies the file
 out so you can open it.
@@ -21,6 +22,41 @@ to pass between, much as heddle picks out the servers that match each file.
 [DESIGN.md](DESIGN.md) covers how it works.
 [docs/adr](docs/adr/README.md) records the decisions behind it, and what else
 was considered.
+
+## What it does
+
+- **Routes each file by what it is and where it is.** A file goes to every
+  server type whose `languages` or `globs` match it, started in the longest
+  [scope](#server-types-and-scopes) that contains the file, such as its
+  service's directory.
+- **Puts several servers on one file.** Requests that want one answer, such as
+  hover, definition and rename, go to the server type with the highest
+  `priority`. heddle combines every server's answers to the rest, such as
+  diagnostics, completions, code actions and references.
+- **Searches workspace symbols across every server** that's running.
+- **Translates paths and fetches files.** When a server points at a file that
+  only exists on its side, such as an installed gem, heddle copies it to
+  [the cache](#the-cache) for you to open.
+- **Runs each command on a backend that offers it**, and lists a command once
+  when several backends register it.
+- **Syncs documents the way each server asks**, with the full text or an
+  incremental edit on each change.
+- **Starts servers when you first open one of their files**, or all up front
+  with [`--eager`](#starting-servers-eagerly).
+- **Restarts a backend that fails or stops** the next time you open one of its
+  files, and no sooner than 30 s after. heddle tells you why and withdraws its
+  diagnostics.
+- **Runs servers on your machine, or wherever a command can reach.** A
+  [runner](#runners) is a few lines of TOML that start a server somewhere else,
+  such as in Compose, Docker, a Nix shell or over SSH. There are
+  [examples](#example-runners) for Compose and Docker to copy.
+- **Comes with tooling.** `heddle init` writes a starter config, `heddle check`
+  checks one, `heddle config` prints what each scope ends up with, and
+  `heddle languages` lists the languages it covers. To see every message,
+  [trace them](#tracing-messages) to a file.
+- **Has clients for Neovim and Claude Code.** The [Neovim module](#neovim)
+  keeps your usual servers from starting for the languages heddle serves. The
+  [Claude Code plugin](#claude-code) puts heddle behind Claude's `LSP` tool.
 
 ## Why you might use it
 
@@ -34,14 +70,17 @@ was considered.
 - **One config for the whole team.** The servers are defined once, in the
   repo. Whoever opens it gets the same servers, whichever editor they use.
   (VS Code still needs an extension to start it, which doesn't exist yet.)
-- **Agents.** MCP bridges such as mcp-language-server start one server for
-  one workspace. heddle is how an agent gets every language in the repo
-  through that one server. Since `heddle serve --eager` starts every server up
-  front, workspace symbol search works from the agent's first request.
+- **Agents.** Claude Code uses heddle directly, through [its
+  plugin](#claude-code), as the language server behind Claude's `LSP` tool.
+  Other agents can reach it through an MCP bridge such as mcp-language-server,
+  which starts one server for one workspace. Either way, heddle is how an agent
+  gets every language in the repo through that one server. Since
+  `heddle serve --eager` starts every server up front, workspace symbol search
+  works from the agent's first request.
 - **A containerised or remote toolchain, even for one service.** The app runs
   in Docker, in a Nix shell or over SSH, while your editor stays on the host.
-  Docker and Compose have built-in runners. For anything else, you write a
-  runner that wraps the command, such as `nix develop --command` or `ssh`.
+  You write a runner that wraps the command, such as `docker compose exec`,
+  `nix develop --command` or `ssh`.
   Since heddle maps paths between the two sides and fetches files that only
   exist on the server's side, go-to-definition keeps working inside your
   installed packages.
@@ -53,7 +92,8 @@ was considered.
 
 - **It's brand new.** heddle is an early prototype. So far it has only been
   tried with ruby-lsp and RuboCop running in Docker Compose on macOS, from
-  Neovim 0.12 and from the session driver in `dev/`. Expect rough edges.
+  Neovim 0.12, from Claude Code's `LSP` tool through the plugin, and from the
+  session driver in `dev/`. Expect rough edges.
 - **It was built with AI.** Most of the code was written by Claude Code, an
   AI coding agent, with me directing the design. It has tests, but it hasn't
   had the scrutiny of a project that people have relied on for years.
@@ -120,7 +160,9 @@ to install somewhere else, as in `install-heddle ~/.local/bin`.
 ## Configuring a repo
 
 The proxy looks for `.heddle.toml` at the root of the workspace your
-editor opens. A minimal one, for one Ruby service, looks like this:
+editor opens, unless you [give it a config from elsewhere](#using-a-config-from-elsewhere).
+The smallest one names a server type, which files it handles, and how to start
+it:
 
 ```toml
 # Server types say which servers handle which files, and how to start them
@@ -128,30 +170,87 @@ editor opens. A minimal one, for one Ruby service, looks like this:
 [servers.ruby-lsp]
 languages = ["ruby"]
 boot = { command = ["bundle", "exec", "ruby-lsp"] }
+```
+
+With nothing else, the proxy runs that command on your machine, for the whole
+repo. To run it differently for the files under a directory, such as in a
+container, give it a scope, and a runner to start it there. Once a scope names
+a server type, the server type runs only where scopes name it. For one Ruby
+service in Compose, that looks like this:
+
+```toml
+[servers.ruby-lsp]
+languages = ["ruby"]
+boot = { command = ["bundle", "exec", "ruby-lsp"] }
 
 # Scopes say how to start each server type for the files under a directory.
 # The longest scope that contains a file wins.
 [scopes."services/api"]
-# Run it with `docker compose exec` in the `api` service, which mounts
-# services/api at /app.
+# Run it with the runner below in the `api` service, which mounts services/api
+# at /app.
 ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/app" } }
+
+# Runners are commands that start a server somewhere. This one runs it with
+# `docker compose exec`, in the scope's service.
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
 ```
+
+[Runners](#runners) covers what goes in one.
+[Example runners](#example-runners) has more to copy.
 
 Since the proxy doesn't start containers itself, bring them up first with
 `docker compose up --detach`.
 
 To check a config, run `heddle check` from the repo root, or give it the
 root as an argument. It prints the config's errors and warnings, and exits
-non-zero if there are any errors. `heddle languages` takes the same
-argument and prints which languages the config covers, as JSON such as
-`{"languages":["ruby"]}`.
+non-zero if there are any errors. Otherwise, it lists the scopes each server
+type runs in:
+
+```
+No errors in /home/you/shop/.heddle.toml.
+Each server type runs in these scopes:
+  ruby-lsp: services/api
+```
+
+To see what a scope ends up with once its values are layered over the server
+type's `boot` table and its runner's `defaults`, run `heddle config`. It takes
+the same argument and prints the config as TOML, with a comment on each of a
+scope's values saying where it came from. For the config above, its scope
+comes out as:
+
+```toml
+[scopes."services/api".ruby-lsp]
+runner = "compose"                        # scopes."services/api".ruby-lsp (line 10)
+command = ["bundle", "exec", "ruby-lsp"]  # servers.ruby-lsp.boot (line 3)
+compose = ["docker", "compose"]           # runners.compose.defaults (line 15)
+paths = { "services/api" = "/app" }       # scopes."services/api".ruby-lsp (line 10)
+service = "api"                           # scopes."services/api".ruby-lsp (line 10)
+```
+
+The output is a config in its own right, which loads to the same thing.
+
+`heddle languages` takes the same argument and prints which languages the
+config covers, as JSON such as `{"languages":["ruby"]}`.
+
+For more, see the examples:
+
+- [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.
+- [`examples/monorepo`](examples/monorepo) has two Ruby services with their
+  own bundles, plus RuboCop in a separate `lints` service that checks the
+  whole repo.
+
+[The config in full](#the-config-in-full) covers every key.
 
 ## Running it
 
 ```
-heddle [serve] [--eager] [--trace FILE] [SERVER-TYPE...]
-heddle languages [DIR [SERVER-TYPE...]]
-heddle check [DIR]
+heddle [serve] [--eager] [--trace FILE] [--config FILE] [SERVER-TYPE...]
+heddle languages [--config FILE] [DIR [SERVER-TYPE...]]
+heddle check [--config FILE] [DIR]
+heddle config [--config FILE] [DIR]
 heddle init [DIR]
 heddle help
 ```
@@ -166,23 +265,40 @@ in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
 
 If there's no `.heddle.toml`, `serve` fails the editor's `initialize` request
-with an error saying where it looked. If the config is invalid, or no scope in
-it starts a server type, `serve` still answers the editor, shows it a message
-saying what's wrong, and serves nothing. Run by hand at a terminal, though, it
-prints the problem to stderr and exits 1 instead of waiting on stdin. It does
-the same there if none of the server types named after `serve` is in the
-config.
+with an error saying where it looked. If the config is invalid, or has no
+server types, `serve` still answers the editor, shows it a message saying
+what's wrong, and serves nothing. Run by hand at a terminal, though, it prints
+the problem to stderr and exits 1 instead of waiting on stdin. It does the same
+there if none of the server types named after `serve` is in the config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
-through a server type, a scope on the host, a scope in a Compose service, a
-runner of your own, the cache, and tracing, all commented out. Its notes start
-with `## ` and its examples with `# `. Uncomment what you need, then run
-`heddle check`. If there's already a config there, `init` leaves it alone and
-exits 1.
+through a server type, a scope in a Compose service with a runner for it, a
+scope on the host, a runner that starts a container, the cache, and tracing,
+all commented out. Its notes start with `## ` and its examples with `# `.
+Uncomment what you need, then run `heddle check`. If there's already a config
+there, `init` leaves it alone and exits 1.
 
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
 exits 2.
+
+### Using a config from elsewhere
+
+If you can't commit a config to the repo, or want one config for several
+checkouts, keep it anywhere and pass it as `--config FILE` to `serve`, `check`,
+`config` or `languages`. Setting `HEDDLE_CONFIG=FILE` in heddle's environment
+does the same. If you give both, `--config` wins. A relative FILE is relative
+to the current directory.
+
+heddle still takes the repo from the editor or the command line. For `serve`,
+that's the first workspace root the editor names, or else the current
+directory. For `check`, `config` and `languages`, it's DIR. Scopes and
+`paths` stay relative to the repo root. A relative path in the config's `cache`
+or `trace` table is relative to FILE's own directory, though.
+
+If FILE doesn't exist, heddle won't fall back to the repo's `.heddle.toml`.
+Instead, `check`, `config` and `languages` print an error naming FILE and
+exit 1. `serve` fails the editor's `initialize` request with the same error.
 
 ### Tracing messages
 
@@ -235,25 +351,17 @@ takes longer joins when it's ready, as it would without the flag. A server
 that fails to start is reported as usual, and starts again the next time you
 open one of its files.
 
-For more, see the examples:
-
-- [`examples/ruby-compose`](examples/ruby-compose) is a single Ruby service.
-- [`examples/monorepo`](examples/monorepo) has two Ruby services with their
-  own bundles, plus RuboCop in a separate `lints` service that checks the
-  whole repo.
-
-[The config in full](#the-config-in-full) covers every key.
-
 ## The config in full
 
 The config has three main tables. `servers` says which language servers handle
 which files. `scopes` says how to start each of those servers for the files
 under a directory. `runners` holds the commands that start a server somewhere,
-such as on the host or in a container. You'll often only need the first two,
-because the proxy ships with runners for the host, Docker and Compose. Compose
-has no special treatment in the proxy. It's one of those built-in runners,
-written in the same TOML you'd use for your own. An optional fourth table,
-`cache`, says where to keep [copies of files from the servers](#the-cache).
+such as in a container. To run servers on your machine, you only need the first
+two, since a server with no runner runs its command directly. heddle has no
+runners of its own. To run servers in Compose, for instance, you write a runner
+in a few lines of TOML, or copy one from [Example runners](#example-runners).
+An optional fourth table, `cache`, says where to keep
+[copies of files from the servers](#the-cache).
 An optional fifth, `trace`, names a file to [trace messages](#tracing-messages)
 to.
 
@@ -271,12 +379,28 @@ type that matches a file, the proxy uses the longest scope that contains the
 file and lists that server type. If there isn't one, that server type doesn't
 handle the file.
 
+A server type that no scope lists runs across the whole repo, as though the
+`.` scope listed it with no values of its own. Once any scope lists it, it
+runs only where scopes list it. `heddle check` prints the scopes each server
+type runs in, marking one that runs across the repo for that reason.
+
 The proxy lays a scope's values over the server type's `boot` table, one key
 at a time. That lets you give the command once, on the server type, and only
-say where it runs in each scope. Two keys in the result belong to the proxy.
-`runner` names the runner to use. `paths` maps directories in the repo to the
+say where it runs in each scope. Three keys in the result belong to the proxy.
+`runner` names the runner to use. Without one, the proxy runs `command`
+directly, on your machine. `paths` maps directories in the repo to the
 absolute directories the server sees, such as where a container mounts them.
-Every other key, `command` included, is a value for the runner's templates.
+`also` lists directories outside the scope for the server to handle too, as
+[Shared code](#shared-code) describes. Every other key, `command` included,
+is a value for the runner's templates.
+
+Setting a key to `false` unsets it, since TOML has no null. Say the server
+type's `boot` runs it in Compose with `paths = { "." = "/srv" }`. A scope that
+runs it on your machine instead, with `runner = false`, needs `paths = false`
+as well. Otherwise, the proxy would still translate its paths to `/srv`. In the
+same way, a `false` in `boot` unsets a value from the runner's `defaults`.
+`heddle config` prints what each scope ends up with, and where each of its
+values came from.
 
 <!-- example: full config -->
 ```toml
@@ -286,7 +410,7 @@ globs = ["**/Gemfile", "**/*.rake"]      # optional if languages is given
 priority = 10                            # optional, defaults to 0
 
 [servers.ruby-lsp.boot]                  # optional, defaults to empty
-runner = "compose"                       # required, here or in each scope
+runner = "compose"                       # optional, here or in each scope
 command = ["bundle", "exec", "ruby-lsp"] # a value for the runner
 
 [servers.rubocop]
@@ -295,17 +419,22 @@ boot = { command = ["rubocop", "--lsp"] }
 
 [scopes."services/api".ruby-lsp]         # starts ruby-lsp under services/api
 service = "api"                          # a value for the runner, which compose requires
-paths = { "services/api" = "/app" }      # optional, defaults to each path as itself
+paths = { "services/api" = "/app" }      # optional, defaults to the runner's, or else each path as itself
 
 [scopes."services/legacy".ruby-lsp]
-runner = "host"                          # replaces the server type's runner
+runner = false                           # unsets the server type's runner, to run on your machine
 command = ["ruby-lsp"]                   # replaces the server type's command
 
 [scopes."."]                             # the repo root, as a catch-all
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
 
+[runners.compose]                        # a runner, named as you like
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
 [cache]                                  # optional, defaults to the system's temp directory
-xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/in/the/repo"
+xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/beside/the/config"
 
 [trace]                                  # optional, defaults to no trace
 path = "heddle-trace.jsonl"              # or "/absolute/file"
@@ -313,6 +442,33 @@ path = "heddle-trace.jsonl"              # or "/absolute/file"
 
 With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`
 service and RuboCop in the `lints` service.
+
+### Shared code
+
+A directory that several services use, such as a gem kept in the repo, often
+sits outside every service's scope. Since the longest scope that contains a
+file wins, no scope's ruby-lsp would handle its files. `also` lists
+directories, relative to the repo root, whose files a scope's backend handles
+as well as its own. Its `paths` have to cover them, if it has any:
+
+<!-- example: shared code -->
+```toml
+[scopes."services/orders".ruby-lsp]
+service = "orders"
+paths = { "services/orders" = "/app", "shared/analytics" = "/shared/analytics" }
+also = ["shared/analytics"]
+
+[scopes."services/billing".ruby-lsp]
+service = "billing"
+paths = { "services/billing" = "/app", "shared/analytics" = "/shared/analytics" }
+also = ["shared/analytics"]
+```
+
+Added to the config above, a file under `shared/analytics` goes to both
+backends. A request that wants one answer, such as hover or rename, goes to the
+first of them by scope, which is `services/billing`. Requests whose answers are
+combined go to both. When both report the same diagnostic, you see it once.
+`heddle check` lists each scope's `also` beside it.
 
 ### Runners
 
@@ -332,19 +488,22 @@ scope's directory as its working directory.
   it when a server refers to a file that `paths` doesn't cover, such as an
   installed gem, to copy the file out for you to open. Without it, you can't
   open those files. Each `read` has 10 s to finish.
-- `defaults` is optional. It gives values for the templates that a boot config
-  can override.
+- `defaults` is optional. It gives values for the templates. The proxy lays
+  the server type's `boot` table over them, then the scope's values, one key at
+  a time. Either can override a default, or unset it with `false`. `defaults`
+  can also give `paths`, which the boot config can override or unset in the
+  same way.
 
 Templates draw on values through placeholders:
 
-| Placeholder          | Value                                                     |
-| -------------------- | --------------------------------------------------------- |
-| `{cfg:NAME}`         | the boot config's `NAME`, or else the runner's `defaults` |
-| `{client:repo}`      | the repo root, as a path on your machine                  |
-| `{client:scope}`     | the scope's directory, as a path on your machine          |
-| `{server:scope}`     | the scope's directory, as the server sees it              |
-| `{read:file}`        | the file to print, as the server sees it (only in `read`) |
-| `{proxy:backend_id}` | an ID unique to the backend, safe as a container name     |
+| Placeholder          | Value                                                            |
+| -------------------- | ---------------------------------------------------------------- |
+| `{cfg:NAME}`         | `NAME` from the scope, else `boot`, else the runner's `defaults` |
+| `{client:repo}`      | the repo root, as a path on your machine                         |
+| `{client:scope}`     | the scope's directory, as a path on your machine                 |
+| `{server:scope}`     | the scope's directory, as the server sees it                     |
+| `{read:file}`        | the file to print, as the server sees it (only in `read`)        |
+| `{proxy:backend_id}` | an ID unique to the backend, safe as a container name            |
 
 A `{cfg:…}` value can be a string or a list of strings. The other placeholders
 are always a single string. Since there's no shell to split a string into
@@ -355,13 +514,15 @@ in `"{client:repo}:/src"`, though not another `{cfg:…}`.
 
 When the proxy loads the config, it checks every scope against its runner. It
 reports a value the runner needs but nobody gives, an unknown placeholder, or
-`paths` that don't cover the scope's directory. It warns about a value that the
-runner's templates never use, which is often a misspelt key.
+`paths` that don't cover the scope's directory or a directory in its `also`. It
+warns about a value that the runner's templates never use, which is often a
+misspelt key.
 
 `prepare` is for anything that has to be in place before the server can start.
-The built-in `docker-run` makes the server the container's main process. If
-you'd rather start the container first and run the server inside it, add a
-runner whose `prepare` starts the container, and name it from a scope:
+The `docker-run` runner in [Example runners](#example-runners) makes the server
+the container's main process. If you'd rather start the container first and run
+the server inside it, add a runner whose `prepare` starts the container, and
+name it from a scope:
 
 <!-- example: custom runner -->
 ```toml
@@ -387,20 +548,39 @@ However, the proxy has no teardown step yet. When the backend exits, the
 container keeps running until you `docker stop` it. Only then does `--rm`
 remove it.
 
-### The built-in runners
+A runner is also a place to say things once that every scope using it shares.
+Where a Compose project mounts the repo is a fact about that project, for
+instance. A runner for the project can give its compose file and its `paths`
+in `defaults`, which leaves each scope to name only its service:
 
-The proxy adds these to your config's `runners`. If you define a runner with
-the same name, yours replaces the built-in one. Since there's no default
-runner, every boot config has to name one.
-
-<!-- resources/heddle/runners.toml -->
+<!-- example: runner defaults -->
 ```toml
-# The runners that ship with the proxy. A project's config can override any of
-# these by name, or add its own.
+[runners.dev]                                    # the project in dev/compose.yml
+defaults = { compose = ["docker", "compose", "--file", "dev/compose.yml"], paths = { "." = "/src" } }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
 
-[runners.host]
-start = ["{cfg:command}"]
+[scopes."services/api".ruby-lsp]
+runner = "dev"
+service = "api"
 
+[scopes."services/billing".ruby-lsp]
+runner = "dev"
+service = "billing"
+```
+
+A scope that uses another runner, or none, doesn't get these `paths`, since
+only the defaults of the runner a scope uses apply to it. A `runner` in
+`defaults` has no effect.
+
+### Example runners
+
+These runners start servers in Compose and Docker. Copy the ones you need into
+your config, under whatever names you like. To run a server on your machine,
+leave out `runner` instead.
+
+<!-- example: runners -->
+```toml
 [runners.compose]
 defaults = { compose = ["docker", "compose"] }
 start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
@@ -418,14 +598,19 @@ read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 
 Every one of them needs a `command`.
 
-- `host` runs it on your machine.
 - `compose` runs it in a running Compose `service`. To pass Compose flags such
   as `--file`, set `compose`, which defaults to `["docker", "compose"]`.
 - `docker-exec` runs it in a running `container`.
 - `docker-run` starts a new container from `image` for each backend, and
   removes it when the server exits. Since `paths` only translates paths, you
   mount the repo yourself with `args`, as in
-  `args = ["--volume", "{client:repo}:/src"]`.
+  `args = ["--volume", "{client:repo}:/src"]`, repeating what `paths` says.
+
+`docker exec` acts on a container that already exists, which is why
+`docker-exec` takes a `container`. `docker run` creates a new one from an
+`image` instead. The runner names it after the backend's ID. That lets `read`
+find it, and keeps two editors running the same config from fighting over one
+name.
 
 ### The cache
 
@@ -449,10 +634,9 @@ until then.
 - `env` names an environment variable that holds the root. If the variable is
   unset, empty or a relative path, the proxy warns you and uses the temp
   directory.
-- `path` gives the cache directory itself, either absolute or relative to the
-  directory holding the config. The copies go straight in it, without
-  `heddle/<repo>/`, since only this repo's config names it. As `~` isn't
-  expanded, use `xdg` or `env` for a directory in your home.
+- `path` gives the root, either absolute or relative to the directory holding
+  the config. As `~` isn't expanded, use `xdg` or `env` for a directory in your
+  home.
 
 Each choice has its trade-offs:
 
@@ -470,8 +654,7 @@ Each choice has its trade-offs:
   inherit it, or the proxy will warn and use the temp directory.
 - **An absolute path** is the same for everyone who uses the config. That's
   awkward in a config checked into the repo, since machines lay out their
-  directories differently. Several checkouts of the repo would also share the
-  one directory, each replacing the others' copies.
+  directories differently.
 - **A path in the repo** needs an entry in `.gitignore`. Since it's inside the
   repo, tools that search or watch the repo will see it too, unless they
   ignore it.
@@ -505,6 +688,12 @@ a repo with a `.heddle.toml`. It takes these options:
   has to be the proxy itself, rather than a wrapper such as `nix run`, since
   the module runs it with `languages` too.
 - `keep` lists other clients, by name, that should start as usual.
+
+Since the module finds a repo by its `.heddle.toml`, it won't start the client,
+or stop your other servers, in a repo whose config
+[lives elsewhere](#using-a-config-from-elsewhere). For one of those, configure
+the client yourself, with `root_markers` that fit the repo and `--config` in
+`cmd`.
 
 In a repo with a config, Neovim would otherwise also start your usual servers
 for the same files, on the host. To prevent that, the module runs
@@ -625,6 +814,11 @@ too, such as the official ruby-lsp plugin:
 If you leave the other plugin on, `/plugin` shows an error such as `LSP server
 "heddle" is not used for .rb files`.
 
+For a repo whose config [lives elsewhere](#using-a-config-from-elsewhere), try
+setting `HEDDLE_CONFIG` in the environment you start Claude Code from, as in
+`HEDDLE_CONFIG=~/configs/shop.toml claude`. I expect heddle to inherit it from
+Claude Code, but I haven't confirmed that.
+
 Because of `--eager`, workspace symbol search covers every service from the
 start. However, heddle waits up to 30 s for the servers before it answers
 `initialize`. Until then, Claude Code reports that the server is starting.
@@ -632,11 +826,10 @@ start. However, heddle waits up to 30 s for the servers before it answers
 ### Letting Claude open cached files
 
 Claude Code drops go-to-definition results that point into a git-ignored
-directory. I
-confirmed from a [trace](#tracing-messages) that heddle had returned the
-location. Hover still showed it as a link. Since a cache in the repo has to be
-ignored, Claude can only follow a server into an installed gem when
-[the cache](#the-cache) is outside the repo. `xdg = true` keeps it in
+directory. I confirmed from a [trace](#tracing-messages) that heddle had
+returned the location. Hover still showed it as a link. Since a cache in the
+repo has to be ignored, Claude can only follow a server into an installed gem
+when [the cache](#the-cache) is outside the repo. `xdg = true` keeps it in
 `~/.cache/heddle`:
 
 ```toml
@@ -644,11 +837,23 @@ ignored, Claude can only follow a server into an installed gem when
 xdg = true
 ```
 
-Claude also needs permission to read it. Add the directory to
-`permissions.additionalDirectories` in the same settings file. If the session
-runs in Claude Code's sandbox, or your organisation limits reads outside the
-working directory, check that those settings let Claude read it too. I haven't
-confirmed which keys that takes.
+Claude also needs permission to read it. I tested this in a session running in
+Claude Code's sandbox, with `blockReadsOutsideWorkingDirectories` turned on:
+
+| Settings                                                | Read tool | Bash reads | Bash writes |
+| ------------------------------------------------------- | --------- | ---------- | ----------- |
+| none                                                    | no        | no         | no          |
+| `sandbox.filesystem.allowRead`                          | no        | yes        | no          |
+| `allowRead` and a `Read(~/.cache/heddle/**)` allow rule | no        | yes        | no          |
+| `allowRead` and `permissions.additionalDirectories`     | yes       | yes        | yes         |
+
+Under `blockReadsOutsideWorkingDirectories`, an allow rule doesn't get the Read
+tool past the block. Only a working directory does. Adding the cache to
+`permissions.additionalDirectories` in the same settings file, or with
+`/add-dir`, makes it one. However, Claude can then write there too. If that
+matters to you, either turn the setting off or grant only `allowRead`. With
+`allowRead` alone, Claude can still follow a definition into a gem. It has to
+open the source through Bash instead of the Read tool.
 
 ## Agents, through an MCP bridge
 

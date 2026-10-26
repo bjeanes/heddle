@@ -33,6 +33,12 @@
       (is (= ["**/Gemfile" "**/*.rake"] (:globs s)))))
   (testing "give a server type without globs none"
     (is (= [] (:globs (spec-for design ["rubocop" "."])))))
+  (testing "say which directories the backend also serves, without passing them to the runner"
+    (let [s (spec-for (config/parse "[servers.s]\nlanguages = ['x']\n[scopes.a.s]\ncommand = 's'\nalso = ['shared', 'lib/x']\n")
+                      ["s" "a"])]
+      (is (= ["/r/shared" "/r/lib/x"] (:also s)))
+      (is (= {"command" "s"} (:cfg s))))
+    (is (= [] (:also (spec-for design ["rubocop" "."])))))
   (testing "root the root scope where paths map it"
     (is (= "/src" (:root (spec-for design ["rubocop" "."])))))
   (testing "root a scope without paths at its own directory"
@@ -50,7 +56,20 @@
            (set (spec/slots design [])))))
   (testing "of only the server types served"
     (is (= #{["ruby-lsp" "services/api"] ["ruby-lsp" "services/billing"] ["ruby-lsp" "services/legacy"]}
-           (set (spec/slots design #{"ruby-lsp" "nosuch"}))))))
+           (set (spec/slots design #{"ruby-lsp" "nosuch"})))))
+  (testing "including those of a server type that no scope names"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { command = 's' }
+[servers.t]
+languages = ['x']
+boot = { command = 't' }
+
+[scopes.a.s]
+")]
+      (is (= #{["s" "a"] ["t" "."]} (set (spec/slots c))))
+      (is (= [["t" "."]] (spec/slots c #{"t"}))))))
 
 (deftest specs-by-slot
   (let [specs (spec/specs design "/r" "/cache" #{"rubocop"})]
@@ -70,7 +89,24 @@
     (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--volume" "/r:/src"
             "--workdir" "/src/services/web" "web-tools" "typescript-language-server" "--stdio"]
            (command design ["typescript" "services/web"] "start"))))
-  (testing "a project's runner replaces a built-in of the same name"
+  (testing "the command alone, with no runner"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { runner = 'compose', service = 'app', command = 's' }
+[servers.t]
+languages = ['x']
+boot = { command = 't' }
+
+[scopes.'.']
+s = { runner = false }
+t = { paths = { '.' = '/src' } }
+")]
+      (is (= ["s"] (command c ["s" "."] "start")) "when the scope cancels the server type's runner")
+      (is (= ["t"] (command c ["t" "."] "start")) "when nothing names one")
+      (is (= "/src" (:root (spec-for c ["t" "."]))) "with paths as given")
+      (is (nil? (command c ["t" "."] "read")))))
+  (testing "a runner named host is like any other"
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
@@ -80,19 +116,42 @@ start = ['env', '{cfg:command}']
 
 [scopes.'.']
 s = { runner = 'host', command = 's' }
+[scopes.a]
+s = { command = 's' }
 ")]
       (is (= ["env" "s"] (command c ["s" "."] "start")))
-      (is (contains? (get c "runners") "compose") "the other built-ins remain")))
+      (is (= ["s"] (command c ["s" "a"] "start")) "and a scope with no runner doesn't use it")))
   (testing "a runner's defaults fill in values the boot config leaves out"
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
 
+[runners.docker-run]
+defaults = { args = [] }
+start = ['docker', 'run', '--rm', '--interactive', '--name', '{proxy:backend_id}', '{cfg:args}', '--workdir', '{server:scope}', '{cfg:image}', '{cfg:command}']
+
 [scopes.a]
 s = { runner = 'docker-run', image = 'i', command = 's' }
 ")]
       (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--workdir" "/r/a" "i" "s"]
-             (command c ["s" "a"] "start"))))))
+             (command c ["s" "a"] "start")))))
+  (testing "a runner's defaults can give paths, which root the server and aren't template values"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { runner = 'c', command = 's' }
+
+[runners.c]
+defaults = { paths = { '.' = '/src' } }
+start = ['run', '{server:scope}', '{cfg:command}']
+
+[scopes.a.s]
+")
+          s (spec-for c ["s" "a"])]
+      (is (= {"." "/src"} (:paths s)))
+      (is (= "/src/a" (:root s)))
+      (is (= {"command" "s"} (:cfg s)))
+      (is (= ["run" "/src/a" "s"] (command c ["s" "a"] "start"))))))
 
 (deftest cache-dirs
   (let [dir (spec/cache-dir "/cache" ["ruby" "services/api"])]

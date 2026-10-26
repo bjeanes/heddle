@@ -1,19 +1,8 @@
 (ns heddle.runner
   "Runners and the expansion of their command templates. See \"Runners\" in
   DESIGN.md."
-  (:require [clj-toml.core :as toml]
-            [clojure.java.io :as io]
-            [clojure.string :as str]))
-
-(defmacro ^:private inline-resource
-  "`jolt build` doesn't bundle resources into the binary, so this reads the
-  file when the namespace compiles."
-  [path]
-  (slurp (io/resource path)))
-
-(def builtin-toml (inline-resource "heddle/runners.toml"))
-
-(def builtins (get (toml/parse-string builtin-toml) "runners"))
+  (:require [clojure.string :as str]
+            [heddle.paths :as paths]))
 
 (def templates ["start" "read" "prepare"])
 
@@ -48,6 +37,20 @@
         [_ owner name] (re-seq placeholder element)]
     [t owner name]))
 
+(defn paths-errors
+  "Problems with the `paths` in a boot config or a runner's defaults that don't
+  depend on any scope. A `false` there unsets it."
+  [{:strs [paths] :as boot}]
+  (cond
+    (or (not (contains? boot "paths")) (false? paths)) nil
+    (= {} paths) ["paths can't be empty; use paths = false to unset it"]
+    (not (map? paths)) ["paths must be a table"]
+    :else (for [[dir server] paths
+                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
+                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
+                :when problem]
+            (str "paths entry " (pr-str dir) " " problem))))
+
 (defn runner-errors
   "Problems with a runner's definition that don't depend on any scope."
   [runner]
@@ -59,8 +62,10 @@
        (str "unknown key " (pr-str k)))
      (when-not (contains? runner "start")
        ["has no start template"])
-     (when-not (map? (get runner "defaults" {}))
-       ["defaults must be a table"])
+     (let [defaults (get runner "defaults" {})]
+       (if (map? defaults)
+         (for [e (paths-errors defaults)] (str "defaults: " e))
+         ["defaults must be a table"]))
      (for [t templates
            :let [template (get runner t)]
            :when (and template (not (string-list? template)))]
@@ -70,10 +75,10 @@
            :when e]
        (str t ": " e)))))
 
-(defn- cfg-values
+(defn cfg
   "The boot config's values for `{cfg:…}` placeholders."
   [boot]
-  (dissoc boot "runner" "paths"))
+  (dissoc boot "runner" "paths" "also"))
 
 (defn unused-values
   "The names, sorted, of the boot config's values that none of the runner's
@@ -82,7 +87,7 @@
   (let [used (set (for [[_ owner name] (placeholders runner)
                         :when (= "cfg" owner)]
                     name))]
-    (sort (remove used (keys (cfg-values boot))))))
+    (sort (remove used (keys (cfg boot))))))
 
 (defn- value-error
   "Why `{owner:name}` has no usable value in `ctx`, or nil."
@@ -138,12 +143,6 @@
             (nil? v) []
             :else v))
     [(fill ctx element errors)]))
-
-(defn cfg
-  "The values for `{cfg:…}` placeholders: the runner's defaults with the boot
-  config's values over the top."
-  [runner boot]
-  (merge (get runner "defaults") (cfg-values boot)))
 
 (defn context
   "What a runner's templates can draw on. `cfg` is from `cfg`. `scope` has the

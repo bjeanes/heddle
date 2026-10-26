@@ -29,6 +29,19 @@
     (let [b (backend ["ruby" "api"] {:cache "/cache/ruby"})]
       (is (= [["ruby" "api"]]
              (routing/handlers session {["ruby" "api"] {:backend b}} "file:///cache/ruby/gems/x.rb" "ruby")))))
+  (testing "every scope that also serves a directory containing the file, as well as the longest, by scope"
+    (let [config (-> config
+                     (assoc-in ["scopes" "web"] {"ruby" {"also" ["shared"]}})
+                     (assoc-in ["scopes" "api" "ruby" "also"] ["shared" "web/vendor"]))
+          session (assoc session
+                         :config config
+                         :specs (assoc (:specs session) ["ruby" "web"] {}))]
+      (is (= [["lint" "."] ["ruby" "."] ["ruby" "api"] ["ruby" "web"]]
+             (routing/handlers session {} "file:///repo/shared/a.rb" "ruby")))
+      (is (= [["lint" "."] ["ruby" "api"] ["ruby" "web"]]
+             (routing/handlers session {} "file:///repo/web/vendor/a.rb" "ruby")))
+      (is (= [["lint" "."] ["ruby" "web"]]
+             (routing/handlers session {} "file:///repo/web/a.rb" "ruby")))))
   (testing "nothing for a file outside the repo, or in no server type's languages"
     (is (empty? (routing/handlers session {} "file:///elsewhere/a.rb" "ruby")))
     (is (empty? (routing/handlers session {} "file:///repo/README.md" "markdown")))))

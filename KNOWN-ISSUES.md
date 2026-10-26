@@ -9,20 +9,25 @@ them, under "Pinned for later".
 - **Some requests are answered by only one server.** When several servers
   handle a file, hover, definition, rename, formatting and the like go to the
   server type with the highest `priority`. Completion, code actions, references
-  and a few others are combined from all of them, without any smarter merging.
+  and a few others are combined from all of them. Beyond dropping duplicate
+  references and workspace symbols, and labelling code actions with their
+  server type, the proxy only concatenates them.
 - **Semantic tokens from several servers can be miscoloured.** The client
   decodes every file's tokens with one legend. When servers number their tokens
   differently, only one server's legend is used.
 - **Semantic tokens and on-type formatting need `--eager` in some clients.**
   Without it, the proxy can only offer them to clients that accept
   registrations after startup.
-- **A server that registers a feature itself is registered once for each
+- **A feature that a server registers itself is registered once for each
   scope it runs in.** Clients such as VS Code may then ask the proxy, and show
-  the answer, once per registration.
+  the answer, once per registration. Commands are the exception. The proxy
+  merges those into a registration of its own, which lists each command once.
 - **Pulled diagnostics are always reported in full**, since the proxy drops
   each server's result IDs.
-- **The client sends whole files on every change.** Messages are larger than
-  with incremental sync.
+- **The client sends the whole file on every change.** The proxy asks for it
+  that way, to keep each open file's text for servers that start later. A
+  server that syncs incrementally gets each change as one edit replacing the
+  whole text. Messages are larger than with incremental sync.
 - **File operations and workspace folder changes aren't passed on.** Servers
   aren't told about files you rename, create or delete through the editor, or
   about folders added to the workspace.
@@ -71,8 +76,8 @@ them, under "Pinned for later".
   one, which leaves an old cache behind each time. The `cache` table can keep
   them somewhere stable, such as `xdg = true`, but nothing sweeps that either.
   See [The cache](README.md#the-cache).
-- **`docker-run` needs its mounts listed twice**, once in `args` and again in
-  `paths`.
+- **A runner that uses `docker run` needs its mounts listed twice**, once in
+  its arguments and again in `paths`.
 
 ## Editors and agents
 
@@ -81,7 +86,8 @@ them, under "Pinned for later".
   `--eager`. Neovim only runs commands announced at startup.
 - **Nobody has tried an MCP bridge with it yet.**
 - **It has only been tried with ruby-lsp and RuboCop**, in Docker Compose on
-  macOS, from Neovim 0.12.
+  macOS, from Neovim 0.12 and from Claude Code's `LSP` tool through the
+  plugin.
 
 ## Building and platforms
 

@@ -20,7 +20,7 @@ languages = ['ruby']
 globs = ['**/Gemfile']
 
 [scopes.'.']
-lint = { runner = 'host', command = 'lint' }
+lint = { command = 'lint' }
 
 [scopes.api]
 ruby = { runner = 'local', command = 'ruby', paths = { 'api' = '/app' } }
@@ -31,7 +31,7 @@ read = ['cat', '{read:file}']
 ")
 
 (def ^:private ruby-in-two-scopes
-  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { command = 'ruby' }\n"))
 
 (defn- temp-dir []
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
@@ -45,7 +45,7 @@ read = ['cat', '{read:file}']
   keys of `refuse` fails, as described by the value. Returns the proxy and its
   repo, a queue of what it sends the client, an atom of what each backend
   receives, and an atom of the proxy's clock in milliseconds."
-  [& {:keys [respond refuse server-types eager eager-timeout-ms start-timeout-ms] :as opts}]
+  [& {:keys [respond refuse server-types eager eager-timeout-ms start-timeout-ms config-file] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
@@ -64,6 +64,7 @@ read = ['cat', '{read:file}']
                            :eager eager
                            :eager-timeout-ms eager-timeout-ms
                            :start-timeout-ms start-timeout-ms
+                           :config-file config-file
                            :cwd (temp-dir)
                            :exit #(deliver exit-code %)
                            :clock #(deref now)})}))
@@ -150,15 +151,21 @@ read = ['cat', '{read:file}']
       (is (= 1 (deref (:exit-code t) 2000 nil)))
       (is (nil? (.poll (:out t))))
       (is (= {} @(:received t)))))
-  (testing "warns that no scope starts a server type, and serves nothing"
-    (let [t (start :config "[servers.ruby]\nlanguages = ['ruby']\n")]
+  (testing "fails `initialize` if the config file it was given isn't there"
+    (let [file (str (temp-dir) "/nosuch.toml")
+          t (start :config-file file)]
+      (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+      (is (= (lsp/error-response 0 -32803 (str "There's no config file " file ".") {"retry" false})
+             (from-proxy t)))))
+  (testing "warns that there's no server type, and serves nothing"
+    (let [t (start :config "[scopes.'.']\n")]
       (initialize! t {})
-      (is (= (shown 2 (str "No scope in " (:repo t) "/.heddle.toml starts a server type.\n"
-                           "heddle is serving nothing until a scope starts one and it restarts."))
+      (is (= (shown 2 (str "There's no server type in " (:repo t) "/.heddle.toml.\n"
+                           "heddle is serving nothing until the config has one and it restarts."))
              (from-proxy t)))
       (is (serves-nothing? t))))
   (testing "shows the config's errors, and serves nothing"
-    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = { runner = 'host' }\n")]
+    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = {}\n")]
       (is (= {"openClose" true "change" 1 "save" true}
              (get (initialize! t {}) "textDocumentSync")))
       (let [{:strs [method params]} (from-proxy t)]
@@ -196,6 +203,13 @@ read = ['cat', '{read:file}']
     (open! t "api/a.rb" "ruby")
     (is (eventually #(= 3 (count (methods-received t ["lint" "."])))))
     (is (= [["lint" "."]] (keys @(:received t))))))
+
+(deftest serving-a-server-type-that-no-scope-names
+  (let [t (start :server-types #{"ts"} :eager true
+                 :config (str config "\n[servers.ts]\nlanguages = ['typescript']\nboot = { command = 'ts' }\n"))]
+    (initialize! t {})
+    (is (eventually #(= ["initialize" "initialized"] (methods-received t ["ts" "."]))))
+    (is (= [["ts" "."]] (keys @(:received t))))))
 
 (deftest open-files
   (let [t (start)]
@@ -355,6 +369,22 @@ read = ['cat', '{read:file}']
       (is (= log (from-proxy t)))
       (is (nothing-more? t)))))
 
+(deftest with-a-config-file
+  (let [file (str (temp-dir) "/shared.toml")]
+    (spit file config)
+    (testing "serves the repo at the client's root, with the config in the file"
+      (let [t (start :config "[scopes.'.']\n" :config-file file)]
+        (initialize! t {})
+        (is (nothing-more? t))
+        (open! t "api/a.rb" "ruby")
+        (is (eventually #(seq (methods-received t ["ruby" "api"]))))
+        (is (= (:repo t) (get-in (backend-of t ["ruby" "api"]) [:spec :repo])))))
+    (testing "serves the working directory if the client names no root"
+      (let [t (start :config-file file)]
+        (client! t (lsp/request 0 "initialize" {"capabilities" {}}))
+        (is (contains? (from-proxy t) "result"))
+        (is (= (get-in t [:proxy :cwd]) (get-in @(:state (:proxy t)) [:session :repo])))))))
+
 (def ^:private config-with-unused-value
   (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))
 
@@ -406,7 +436,7 @@ read = ['cat', '{read:file}']
       (initialize! t {})
       (open! t "api/a.rb" "ruby")
       (is (eventually #(cache-of t ["ruby" "api"])))
-      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/ruby/")))))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/heddle/")))))
   (testing "an unset environment variable, which warns once after initialize and falls back"
     (let [t (start :config (str "cache = { env = 'HEDDLE_TEST_UNSET' }\n" config))]
       (initialize! t {})
@@ -836,6 +866,60 @@ read = ['cat', '{read:file}']
     (testing "withdraws a backend's diagnostics once it stops"
       (stop-backend! t ["lint" "."])
       (is (= #{"ruby"} (messages (from-proxy t)))))))
+
+(def ^:private sharing-config "
+[servers.ruby]
+languages = ['ruby']
+
+[scopes.api]
+ruby = { command = 'ruby', also = ['shared'] }
+
+[scopes.web]
+ruby = { command = 'ruby', also = ['shared'] }
+")
+
+(deftest serving-shared-directories
+  (let [respond (fn [[_ scope] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"textDocumentSync" 1 "hoverProvider" true}})]
+                    "textDocument/didOpen" [(lsp/notification "textDocument/publishDiagnostics"
+                                                              {"uri" (get-in params ["textDocument" "uri"])
+                                                               "diagnostics" [{"message" "unused"}]})]
+                    "textDocument/hover" [(lsp/response id {"contents" scope})]
+                    nil))
+        t (start :respond respond :config sharing-config)]
+    (initialize! t {})
+    (open! t "shared/a.rb" "ruby")
+    (testing "sends a shared file to every backend whose scope also serves it"
+      (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen"]
+                          (methods-received t ["ruby" "api"])
+                          (methods-received t ["ruby" "web"])))))
+    (testing "publishes the diagnostics they both report once"
+      (is (= [{"message" "unused"}] (get-in (from-proxy t) ["params" "diagnostics"])))
+      (is (= [{"message" "unused"}] (get-in (from-proxy t) ["params" "diagnostics"]))))
+    (testing "asks the first by scope a request that wants one answer"
+      (client! t (request-about t 1 "textDocument/hover" "shared/a.rb"))
+      (is (= (lsp/response 1 {"contents" "api"}) (from-proxy t))))
+    (testing "sends a file in one scope only to that scope's backend"
+      (open! t "web/b.rb" "ruby")
+      (is (eventually #(= 2 (count (received t ["ruby" "web"] "textDocument/didOpen")))))
+      (is (= 1 (count (received t ["ruby" "api"] "textDocument/didOpen")))))
+    (testing "passes on changes to watched files in a shared directory too"
+      (client! t (lsp/notification "workspace/didChangeWatchedFiles"
+                                   {"changes" [{"uri" (uri t "shared/c.rb") "type" 2}
+                                               {"uri" (uri t "web/d.rb") "type" 2}]}))
+      (is (eventually #(= [[(uri t "shared/c.rb")] [(uri t "shared/c.rb") (uri t "web/d.rb")]]
+                          (for [k [["ruby" "api"] ["ruby" "web"]]]
+                            (map #(get % "uri")
+                                 (get-in (received t k "workspace/didChangeWatchedFiles") [0 "params" "changes"])))))))))
+
+(deftest registering-features-for-shared-directories
+  (let [t (start :config sharing-config)]
+    (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "shared") "pattern" "**/*"}}}
+              (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
+        "covers the files in the directories a backend also serves")))
 
 (deftest publishing-diagnostics-about-fetched-files
   (let [gem (str (temp-dir) "/gems/rainbow.rb")

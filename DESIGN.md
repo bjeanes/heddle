@@ -58,26 +58,40 @@ The proxy finds its config by looking for `.heddle.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
 in.
 
+`--config FILE`, or `HEDDLE_CONFIG`, reads the config from FILE instead, for a
+config that can't be committed to the repo or is shared between checkouts. The
+repo is still the workspace root, or else the directory heddle was started in,
+whether or not it has a `.heddle.toml`. That keeps scopes and `paths` relative
+to the repo. Only the relative paths of the `cache` and `trace` tables follow
+FILE, since they're documented as relative to the config's directory. If FILE
+doesn't exist, heddle reports that and doesn't fall back to the repo's own
+config.
+
 `heddle languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
-Instead, it prints the languages that the config at the root of DIR covers, as
+Instead, it prints the languages that the config for DIR covers, as
 JSON such as `{"languages":["ruby"]}`. DIR defaults to the directory it was
-started in. Only server types that some scope starts count and, if any are
-named, only those. If there's no config, it's invalid, or it doesn't have a
-server type that was named, it prints the problems to stderr and exits
-non-zero. A client uses this to stop its own servers for those languages from
-starting alongside the proxy, since few clients can parse TOML themselves.
+started in. If any server types are named, only those count. If there's no
+config, it's invalid, or it doesn't have a server type that was named, it
+prints the problems to stderr and exits non-zero. A client uses this to stop
+its own servers for those languages from starting alongside the proxy, since
+few clients can parse TOML themselves.
 Given the same server types as `serve`, it answers for exactly what that proxy
 serves.
 
 `heddle check [DIR]` reads the same config and prints its errors and
 warnings, exiting non-zero if there are errors. That way, someone editing the
-config can see its problems without starting an editor.
+config can see its problems without starting an editor. If there are no
+errors, it also lists the scopes that each server type runs in, marking a
+server type that runs across the repo only because no scope names it.
+
+`heddle config [DIR]` prints the config as the proxy sees it once each scope
+has its whole boot config, as TOML that loads to the same thing. A comment on
+each of a scope's values names the table and line it came from.
 
 `heddle init [DIR]` writes a starter config to the root of DIR, and refuses
 to replace one that's already there. Everything in it is commented out, so it
-loads as written, with no server types. It shows a server type, a scope for
-each built-in runner, the cache, and the built-in runners' own definitions,
-which come from the same file the proxy loads them from.
+loads as written, with no server types. It shows a server type, scopes with and
+without a runner, the runners they name, the cache, and tracing.
 
 `heddle help`, `--help` or `-h` prints the usage to stdout and exits 0.
 A command line it can't parse is a usage error instead. It prints the error and
@@ -96,8 +110,10 @@ apart:
    Its command can differ between them too.
 
 The config has a section for each. **Server types** answer the first question
-and **scopes** answer the second. A scope names a **runner** for each server
-type it starts, which decides where and how the server process runs.
+and **scopes** answer the second. A scope can name a **runner** for each server
+type it starts, which decides where and how the server process runs. Without
+one, the proxy runs the server's `command` directly, on the host. The config
+defines its runners too. The ones this example names are in "Runners" below.
 
 ```toml
 [servers.ruby-lsp]
@@ -121,7 +137,7 @@ ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billin
 
 # This service's Ruby is too old for ruby-lsp. A newer Ruby on the host runs it.
 [scopes."services/legacy"]
-ruby-lsp = { runner = "host", command = ["ruby-lsp"] }
+ruby-lsp = { command = ["ruby-lsp"] }
 
 [scopes."services/web"]
 typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src" }, args = ["--volume", "{client:repo}:/src"] }
@@ -141,7 +157,16 @@ each open file's language.
 
 A server type's `boot` table holds defaults for starting it. Scopes override
 them one key at a time. That avoids repeating a command in every scope, without
-tying the command to the server type. Any scope can still replace it.
+tying the command to the server type. Any scope can still replace it. When
+the proxy loads the config, it lays each scope's values over the `boot` table
+and its runner's `defaults`. It keeps only the result, which `heddle config`
+prints.
+
+Since TOML has no null, setting a key to `false` unsets it, along with
+whatever a lower layer gave it. A scope on the host can then drop the `paths`
+that a `boot` table gives for a container, which would otherwise translate
+its paths to ones that don't exist on the host. `false` is never a value of its
+own, since none of the keys takes a boolean.
 
 A server type's optional `priority` decides which backend answers when several
 handle a file. "Requests about one file" below covers how.
@@ -158,6 +183,13 @@ _longest_ path that contains the file and starts that server type. If no scope
 starts a server type for a file, that server type doesn't handle the file. For
 a catch-all, give the server type a scope at `.`, as `rubocop` has above.
 
+A directory that several services use, such as a gem kept in the repo, often
+lies outside every one of their scopes. A scope's entry can list directories
+like that under `also`. Its backend then handles their files too, alongside
+the backend of the longest scope that contains them, if there is one. If the
+entry has `paths`, they have to cover each of those directories, since the
+backend would otherwise get files it can't see.
+
 Taking `services/api/app/models/user.rb` from the example above, its language is
 `ruby`. That matches both `ruby-lsp` and `rubocop`.
 
@@ -166,12 +198,23 @@ Taking `services/api/app/models/user.rb` from the example above, its language is
 - For `rubocop`, only `.` starts it. It runs `rubocop --lsp` in the `lints`
   service, rooted at `/src`.
 
+A server type that no scope names runs across the whole repo, as though the
+`.` scope named it with no values of its own. Its `boot` table is then its
+whole boot config. That makes the smallest config a single server type, whose
+`boot` table gives the command to run on the host. As soon as any scope names
+a server type, it runs only where scopes name it. Otherwise, giving a server
+type a scope for one service's container would leave it running from its
+`boot` table across the rest of the repo, where its command may not even
+exist. Since adding a scope then changes where a server type runs elsewhere,
+`heddle check` lists the scopes each one runs in. None of the server types in
+the example above runs this way, since each of them has a scope.
+
 ## Runners
 
 A runner describes how to start a server somewhere, whether that's on the host,
 in a container, or anywhere else a command can reach. The proxy itself knows
-nothing about any particular runner. Every runner, including the ones that ship
-with the proxy, is defined in config as a set of command templates.
+nothing about any particular runner. Every runner is defined in the project's
+config as a set of command templates.
 
 - **`start`** starts the server, which then talks LSP over its stdin and stdout.
 - **`read`** prints a file from the server's side. The proxy runs it to get
@@ -180,13 +223,10 @@ with the proxy, is defined in config as a set of command templates.
 - **`prepare`** runs before `start`, for example to bring up a stopped
   container. It's optional too.
 
-These are the runners that ship with the proxy, from
-`resources/heddle/runners.toml`:
+These runners cover Compose, `docker exec` and `docker run`. The example above
+uses the first and the last:
 
 ```toml
-[runners.host]
-start = ["{cfg:command}"]
-
 [runners.compose]
 defaults = { compose = ["docker", "compose"] }
 start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
@@ -202,10 +242,13 @@ start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}
 read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 ```
 
-A project's config can override any of these by name, or add its own, such as
-one for Podman, `kubectl exec` or `nix develop --command`. Projects that only
-use the built-ins don't need to repeat them, and they pick up fixes to them. A
-command that prints the built-in definitions would make them easy to copy from.
+The proxy doesn't ship these, or any others. Running the command directly
+already covers the host. The rest are a few lines of TOML, which a project can
+copy from the README and adapt, or use as a model for its own, such as one for
+Podman, `kubectl exec` or `nix develop --command`. Leaving them out means no
+runner name is privileged. Every runner a config names is one it defines. In
+exchange, the README has to teach people to write a runner, rather than only to
+name one.
 
 `docker-exec` and `docker-run` show why an image and a container need separate
 values. `docker exec` acts on a container that already exists, which the scope
@@ -235,11 +278,13 @@ comes from.
 only exist in `read`, and the proxy reports using one anywhere else as an error
 when it loads the config. Anything else the proxy provides goes under `proxy:`.
 
-A boot config names its `runner` and gives it `paths`. Every other key in it,
-including `command`, is a value for `{cfg:…}`. When the proxy loads the config,
-it checks each scope against its runner's templates. If a template uses a
-`{cfg:…}` value that neither the boot config nor the runner's `defaults` has,
-that is an error. A `compose` scope with no `service` is one example.
+A boot config can name its `runner`, give it `paths`, and list other
+directories it serves under `also`. Every other key in it, including `command`,
+is a value for `{cfg:…}`. The runner's `defaults` can give `paths` too, as
+"Paths" below describes. When the proxy loads the config, it checks each scope
+against its runner's templates. If a template uses a `{cfg:…}` value that
+neither the boot config nor the runner's `defaults` has, that is an error. A
+`compose` scope with no `service` is one example.
 
 The proxy only provides values that exist for every valid scope. That is why
 there is no `{server:repo}`. The repo root only has a server path if `paths`
@@ -266,10 +311,30 @@ one of them turns out to be needed.
 `paths` maps client paths to server paths, by directory. Its keys are relative
 to the repo root and its values are absolute. There can be several entries. The
 longest match wins in either direction. If a boot config has no `paths`, every
-path maps to itself. That is right for the `host` runner. It's also right for
+path maps to itself. That is right for a server on the host. It's also right for
 containers that mount the repo at the same path as on the host. If someone
 forgets `paths` for a container that mounts it elsewhere, the server will fail
 early on paths that don't exist.
+
+Where a Compose project mounts the repo is a fact about that project, which
+every scope run in it shares. So, a runner's `defaults` can give `paths` too,
+layered under the `boot` table and the scope like any other value. A runner
+defined for the project can then say it once, along with the project's compose
+file. Each scope only names its service:
+
+```toml
+[runners.dev]
+defaults = { compose = ["docker", "compose", "--file", "dev/compose.yml"], paths = { "." = "/src" } }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[scopes."services/api"]
+ruby-lsp = { runner = "dev", service = "api" }
+```
+
+Since a scope only gets the defaults of the runner it uses, a scope that runs
+the server on the host doesn't inherit these `paths`. A `runner` in `defaults`
+is left out, since a runner can't choose itself.
 
 The proxy works out `{server:scope}` by translating the scope's directory
 through `paths`, using the same longest-match rule. An entry only has to
@@ -294,10 +359,9 @@ fetched files are read-only. Editing a file needs the real one, under an entry
 in `paths`. In practice, the files anyone edits are in the bind-mounted source
 anyway.
 
-`docker-run` is the one built-in where `paths` and the runner's arguments
-overlap. Its mounts have to be listed in `args`, repeating what `paths` already
-says, as in the `services/web` scope above. I've accepted the repetition for
-now.
+In the `docker-run` runner above, `paths` and the runner's arguments overlap.
+Its mounts have to be listed in `args`, repeating what `paths` already says, as
+in the `services/web` scope above. I've accepted the repetition for now.
 
 The Neovim harness worked its mappings out from `docker inspect` instead. That
 spared writing them down, but it tied the harness to Docker. With the mappings
@@ -461,6 +525,10 @@ languages = ["ruby"]
 priority = 10
 ```
 
+Several backends of one server type can handle a file in a directory that
+their scopes list under `also`. A request that wants one answer then goes to the
+first of them by scope that offers the feature.
+
 Requests whose answers can be combined, such as completion and code actions,
 go to all of them that have started. The proxy concatenates the results.
 
@@ -552,12 +620,17 @@ second server's diagnostics. Instead, the proxy keeps each backend's latest set
 for each file and publishes their union. When a backend stops, the proxy
 publishes the union again without it.
 
+Two backends may report the same problem in a file. That is typical of a file
+in a directory that several scopes list under `also`, since each of their
+backends runs the same server over it. When two diagnostics are equal in every field,
+the proxy publishes only the first.
+
 Clients can also pull a file's diagnostics with `textDocument/diagnostic`. The
 proxy asks every backend for the file that offers it and concatenates their
-items. A backend can give its report a result ID, which the client sends back
-next time so the backend need only report what changed. One backend's ID means
-nothing to another, so the proxy drops them. Every backend then reports in
-full each time.
+items, keeping only the first of any that are equal. A backend can give its
+report a result ID, which the client sends back next time so the backend need
+only report what changed. One backend's ID means nothing to another, so the
+proxy drops them. Every backend then reports in full each time.
 
 ### Paths
 
@@ -582,8 +655,7 @@ fetched file's copy is at its server path under that. For example, `ruby-lsp` in
 `services/api` keeps `/usr/lib/ruby/set.rb` at
 `<root>/heddle/<repo>/ruby-lsp/services/api/=/usr/lib/ruby/set.rb`. `<root>`
 is the system's temp directory unless the config's `cache` table chooses
-another. A `path` in that table replaces `<root>/heddle/<repo>` instead (see
-below).
+another.
 
 Two backends can have different files at the same server path. So, each server
 type and scope gets a directory of its own. The scope's directories are nested
@@ -612,19 +684,14 @@ at a new directory for each shell. An editor started from one would then use a
 new cache each time and leave the old ones behind. So, `cache` can follow the
 XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
-directory, which is the repo root.
+directory, which is the repo root unless the config came from `--config`.
 
-The temp directory, `~/.cache` and a directory named by an environment
-variable may each hold the caches of several repos. An environment variable
-counts as shared because it's set outside the repo, often once for every
-shell. It then names the same directory whichever repo the editor opens.
-`heddle/<repo>` keeps those repos' copies apart. However, only this repo's
-config names a `path`. Since nothing else shares it, the proxy uses it as
-given. `heddle/<repo>` would only add two levels of directories there.
-
-Several checkouts of the repo can still share an absolute `path`. If their
-servers see different versions of a file, one checkout's copy can replace
-another's until a backend fetches it again.
+Any of these roots may hold the caches of several repos. The temp directory
+and `~/.cache` are the same whichever repo the editor opens. Since an
+environment variable is set outside the repo, often once for every shell, the
+directory it names is too. Repos that read the same config through `--config`
+share its `path`. Several checkouts of the repo can also share an absolute
+`path`. `heddle/<repo>` keeps those repos' copies apart.
 
 With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
 path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set
@@ -703,11 +770,11 @@ A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
 and scope, and logs the rest.
 
-If the config is invalid, or has no scope that starts a server type, the
-proxy still answers `initialize`, then shows a message saying so, with the
-config's errors. It also logs the message to stderr, as it does every message
-it shows. It then serves nothing until it restarts, answering every request
-with an empty result. Failing `initialize` instead would leave many clients
+If the config is invalid, or has no server types, the proxy still answers
+`initialize`, then shows a message saying so, with the config's errors. It
+also logs the message to stderr, as it does every message it shows. It then
+serves nothing until it restarts, answering every request with an empty
+result. Failing `initialize` instead would leave many clients
 retrying the proxy or giving up on it, with the reason only in a log. Since
 someone wrote that config to use heddle, the message tells them what to fix.
 
@@ -743,9 +810,9 @@ the JVM, `System/console` also needs stdout to be a terminal, and I haven't
 confirmed that Jolt's detects one at all.
 
 A server type's boot table might set a `service` for the `compose` runner. A
-scope that switches that server type to `host` then has a value that its
-runner's templates never use. Since that is often deliberate, it isn't an
-error. However, an unused value can also be a misspelt key, such as `arg` for
+scope that runs that server type on the host instead then has a value that
+nothing uses. Since that is often deliberate, it isn't an error. However, an
+unused value can also be a misspelt key, such as `arg` for
 `args`. So, after answering `initialize`, the proxy shows one warning that
 lists every unused value in every scope. It then serves as usual.
 `languages` and `check` print the same warnings to stderr and still succeed.
@@ -787,7 +854,7 @@ These may become worth doing once we've used the prototype.
   that is one line of config, such as
   `["{cfg:compose}", "up", "--detach", "{cfg:service}"]` or
   `["docker", "start", "{cfg:container}"]`. Not everyone will want it, which is
-  why the built-in runners leave it out for now.
+  why the example runners leave it out for now.
 - **A `stop` template.** A runner whose `prepare` starts a container leaves it
   running after the backend exits. A `stop` template could run when a backend
   exits or the proxy shuts down. We'd need to decide whether it runs after a
@@ -796,9 +863,9 @@ These may become worth doing once we've used the prototype.
   name or label that a restarted proxy can work out again, which a random
   backend ID isn't.
 - **Setting the time limits.** Starting and `read` have fixed limits (see
-  "Failures"). A runner whose `prepare` pulls images needs longer than `host`
-  does, so the limits may become per-runner settings once someone needs to
-  change them.
+  "Failures"). A runner whose `prepare` pulls images needs longer than a server
+  run directly does, so the limits may become per-runner settings once someone
+  needs to change them.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the

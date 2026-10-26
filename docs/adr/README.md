@@ -12,8 +12,8 @@ record says so instead of guessing.
 | ------ | ----- | ------ |
 | [0001](0001-write-heddle-in-jolt.md) | Write heddle in Jolt | Accepted |
 | [0002](0002-build-a-standalone-proxy.md) | Build a standalone proxy | Accepted |
-| [0003](0003-separate-server-types-from-scopes.md) | Separate server types from scopes | Accepted |
-| [0004](0004-define-runners-as-command-templates.md) | Define runners as command templates | Accepted |
+| [0003](0003-separate-server-types-from-scopes.md) | Separate server types from scopes | Accepted; amended by 0019 |
+| [0004](0004-define-runners-as-command-templates.md) | Define runners as command templates | Accepted; built-in runners superseded by 0019 |
 | [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted; amended by 0006 and 0017 |
 | [0006](0006-start-backends-lazily-with-eager-as-a-flag.md) | Start backends lazily, with `--eager` as a flag | Accepted |
 | [0007](0007-declare-paths-and-fetch-the-rest.md) | Declare paths, and fetch everything else | Accepted |
@@ -28,3 +28,4 @@ record says so instead of guessing.
 | [0016](0016-trace-messages-as-json-lines.md) | Trace messages as JSON Lines, outside the proxy | Accepted |
 | [0017](0017-send-changes-in-each-backends-sync-kind.md) | Send each backend changes in the form its sync kind asks for | Accepted |
 | [0018](0018-cache-fetched-files-by-slot-outside-the-repo.md) | Cache fetched files by slot, outside the repo | Accepted |
+| [0019](0019-expand-the-config-when-it-loads.md) | Simplify the config, and expand it when it loads | Accepted |

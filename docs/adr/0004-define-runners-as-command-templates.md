@@ -1,6 +1,7 @@
 # 0004. Define runners as command templates
 
-Status: Accepted, 2026-10-25
+Status: Accepted, 2026-10-25. The built-in runners were dropped under
+[0019](0019-expand-the-config-when-it-loads.md).
 
 ## Context
 

@@ -4,8 +4,7 @@
 
   The client's messages are handled in order, on the thread that reads them.
   Each backend's messages are handled on that backend's own thread."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [heddle.backend :as backend]
             [heddle.capabilities :as capabilities]
             [heddle.channel :as channel]
@@ -45,8 +44,9 @@
     before answering;
   - :start-timeout-ms and :read-timeout-ms, optionally, to override the
     backends' `default-timeouts` (see heddle.backend);
+  - :config-file, the config to read, or nil to read the repo's own;
   - :cwd, where to look for the config if no workspace root the client names
-    has one;
+    has one, or the repo if the client names none and there's a :config-file;
   - :exit, a function to call with the exit code once the client sends
     `exit`;
   - :clock, optionally, a function that returns the time in milliseconds."
@@ -133,12 +133,12 @@
   "Starts serving the client that sent `initialize` with `params`, from the
   repo and config `loaded`. Returns the :result to answer with, and the
   :messages to show the user afterwards, each as [type message]."
-  [proxy params {:keys [repo config cache-root problem warnings]}]
+  [proxy params {:keys [repo source config cache-root problem warnings]}]
   (let [specs (spec/specs config repo cache-root (:server-types proxy))
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
         unknown-warning (when unknown
-                          (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))
+                          (config/unknown-server-types-message source unknown))
         warnings (cond-> warnings unknown-warning (conj unknown-warning))]
     (when unknown-warning
       (log/info unknown-warning))
@@ -167,7 +167,7 @@
   [proxy {:strs [id params]}]
   (let [{:keys [result messages error]}
         (try
-          (let [loaded (session/load-config (session/config-roots params (:cwd proxy)))]
+          (let [loaded (session/load-config (session/config-roots params (:cwd proxy)) (:config-file proxy))]
             (if (:repo loaded)
               (start-session! proxy params loaded)
               {:error [lsp/request-failed (second (:problem loaded)) {"retry" false}]}))
@@ -186,13 +186,14 @@
 ;; Backends
 
 (defn- document-selector
-  "The backend's files: those of its languages in its scope or among its
-  fetched files, and those matching its globs."
+  "The backend's files: those of its languages in its scope, in the
+  directories it also serves or among its fetched files, and those matching
+  its globs."
   [b]
-  (let [{:keys! [languages globs repo dir cache]} (:spec b)
+  (let [{:keys! [languages globs repo dir also cache]} (:spec b)
         relative (fn [base pattern] {"baseUri" (paths/path->uri base) "pattern" pattern})]
     (vec (concat (for [language languages
-                       base [dir cache]]
+                       base (concat [dir] also [cache])]
                    {"language" language "pattern" (relative base "**/*")})
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
@@ -600,12 +601,13 @@
     (notify-backend! b method params)))
 
 (defn- watched-files-changed!
-  "Passes on each change to the backends whose scopes contain the file."
+  "Passes on each change to the backends whose scopes, or the directories they
+  also serve, contain the file."
   [proxy {:strs [changes]}]
-  (let [repo (get-in @(:state proxy) [:session :repo])
-        within? (fn [b change]
-                  (let [[_ scope] (backend/slot b)]
-                    (some->> (paths/uri->path (get change "uri")) (routing/repo-relative repo) (paths/within? scope))))]
+  (let [within? (fn [b change]
+                  (let [{:keys! [dir also]} (:spec b)
+                        path (paths/uri->path (get change "uri"))]
+                    (some #(paths/under? % path) (cons dir also))))]
     (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]

@@ -34,7 +34,12 @@
                          ["y" {"kind" "full" "resultId" "2" "items" [{"message" "b"}]
                                "relatedDocuments" {"file:///r" {"kind" "full" "items" [{"message" "d"}]}
                                                    "file:///s" {"kind" "full" "items" [{"message" "e"}]}}}]]))
-      "concatenates the items for each file, and drops the backends' result IDs"))
+      "concatenates the items for each file, and drops the backends' result IDs")
+  (is (= {"kind" "full" "items" [{"message" "a"} {"message" "b"}]}
+         (merge/combine "textDocument/diagnostic"
+                        [["x" {"kind" "full" "items" [{"message" "a"}]}]
+                         ["x" {"kind" "full" "items" [{"message" "a"} {"message" "b"}]}]]))
+      "has a diagnostic that several backends gave once"))
 
 (deftest combining-other-answers
   (testing "concatenates them"

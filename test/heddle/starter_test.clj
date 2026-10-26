@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
+            [heddle.config-test :as config-test]
             [heddle.spec :as spec]
             [heddle.starter :as starter]))
 
@@ -43,8 +44,20 @@
             "typescript-language-server" "--stdio"]
            (command c "tools/cli" "start")))))
 
+(deftest every-example-prints-a-config-that-expands-the-same
+  (doseq [s [(uncomment) (uncomment "# [servers.ts-ls]")]
+          :let [[c again] (config-test/reprinted s)]]
+    (is (= c again))
+    (is (= [] (config/warnings again)))))
+
+(deftest the-server-type-alone-runs-across-the-repo
+  (let [c (config/parse (uncomment "# [servers.ts-ls]"))]
+    (is (= [] (config/warnings c)))
+    (is (config/implicit? c ["ts-ls" "."]))
+    (is (= ["typescript-language-server" "--stdio"] (command c "." "start")))))
+
 (deftest each-scope-loads-with-only-the-server-type
-  (doseq [[scope header] {"." "# [scopes.\".\"]"
+  (doseq [[scope header] {"." "# [scopes.\".\".ts-ls]"
                           "apps/web" "# [scopes.\"apps/web\""
                           "tools/cli" "# [runners.docker-detached]"}]
     (let [c (config/parse (uncomment "# [servers.ts-ls]" header))]
