@@ -16,6 +16,12 @@
             {"title" "Run" "command" "lint:run"}]
            (origin/qualify-commands "lint" [{"title" "Fix" "command" {"title" "Fix" "command" "fix" "arguments" ["x"]}}
                                             {"title" "Run" "command" "run"}]))))
+  (testing "qualifies a list of command IDs where the caller says it is"
+    (is (= {"executeCommandProvider" {"commands" ["lint:fix"]}}
+           (origin/qualify-command-ids "lint" {"executeCommandProvider" {"commands" ["fix"]}}
+                                       ["executeCommandProvider" "commands"])))
+    (is (= {"hoverProvider" true}
+           (origin/qualify-command-ids "lint" {"hoverProvider" true} ["executeCommandProvider" "commands"]))))
   (testing "finds the server type a command belongs to"
     (is (= ["lint" "fix"] (origin/command-origin ["ruby" "lint"] "lint:fix")))
     (is (= ["a:b" "c"] (origin/command-origin ["a" "a:b"] "a:b:c")) "by the longest prefix")

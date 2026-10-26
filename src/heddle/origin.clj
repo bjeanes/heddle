@@ -1,15 +1,24 @@
 (ns heddle.origin
-  "Marks the items and commands in backends' answers, so that requests
-  following up on one reach the backend that made it. See \"Requests about
-  one file\" in DESIGN.md."
+  "Marks the items in backends' answers, and qualifies the commands that
+  backends offer wherever they appear, so that requests following up on one
+  reach the backend that made it. See \"Requests about one file\" in
+  DESIGN.md."
   (:require [clojure.string :as str]
             [heddle.methods :as methods]))
 
-(defn qualify-command
+(defn- qualify-command
   "A command ID that a backend of `server-type` chose, made unique among all
   server types."
   [server-type command]
   (str server-type ":" command))
+
+(defn qualify-command-ids
+  "`v` with the list of command IDs at `path` in it, if any, qualified with
+  `server-type`. Server capabilities and registrations list the commands a
+  backend runs this way."
+  [server-type v path]
+  (cond-> v
+    (get-in v path) (update-in path #(mapv (partial qualify-command server-type) %))))
 
 (defn qualify-commands
   "`v` with the ID of every command in it qualified with `server-type`."

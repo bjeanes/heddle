@@ -219,10 +219,7 @@
   "The server capabilities of the backend `b`, with its commands qualified
   with its server type."
   [b]
-  (cond-> (backend/capabilities b)
-    (get-in (backend/capabilities b) ["executeCommandProvider" "commands"])
-    (update-in ["executeCommandProvider" "commands"]
-               #(mapv (partial origin/qualify-command (:server-type b)) %))))
+  (origin/qualify-command-ids (:server-type b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
 
 (defn- ready-backends
   "The server capabilities and document selector of each running backend that
@@ -408,12 +405,7 @@
   (mapv #(update % "id" (partial qualify b)) registrations))
 
 (defn- qualify-registered-commands [b registrations]
-  (mapv (fn [registration]
-          (cond-> registration
-            (get-in registration ["registerOptions" "commands"])
-            (update-in ["registerOptions" "commands"]
-                       #(mapv (partial origin/qualify-command (:server-type b)) %))))
-        registrations))
+  (mapv #(origin/qualify-command-ids (:server-type b) % ["registerOptions" "commands"]) registrations))
 
 (defn- progress-token!
   "The token to give the client for one that the backend `b` created. The
