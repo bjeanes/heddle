@@ -744,14 +744,19 @@
       :else (lsp/error-response id lsp/internal-error "every backend stopped before answering"))))
 
 (defn- combine-request!
-  "Sends a request to every one of `backends` that offers the request's
-  feature, and answers with their combined results."
+  "Sends a request to every one of `backends` that is ready and offers the
+  request's feature, and answers with their combined results. If none is, it
+  asks each of `backends` that offers the feature as that backend settles,
+  then answers once all of them have."
   [proxy {:strs [id method] :as msg} backends]
-  (ask-each! backends msg
-             (fn [answers]
-               (if (empty? answers)
-                 (answer-unanswered! proxy msg)
-                 (send-client! proxy (combined-response id method (map first answers) (map second answers)))))))
+  (let [feature (capabilities/feature method)
+        answering (filter #(and (backend/ready? %) (capabilities/offers? (backend/capabilities %) feature))
+                          backends)]
+    (ask-each! (if (seq answering) answering backends) msg
+               (fn [answers]
+                 (if (empty? answers)
+                   (answer-unanswered! proxy msg)
+                   (send-client! proxy (combined-response id method (map first answers) (map second answers))))))))
 
 (defn- backend-by-id [proxy backend-id]
   (first (filter #(= backend-id (:backend-id %)) (live-backends proxy))))

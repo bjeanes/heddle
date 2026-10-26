@@ -441,7 +441,28 @@ priority = 10
 ```
 
 Requests whose answers can be combined, such as completion and code actions,
-go to all of them. The proxy concatenates the results.
+go to all of them that have started. The proxy concatenates the results.
+
+A backend can take up to two minutes to start if its `prepare` pulls an image.
+Holding these requests back that long would leave the client waiting on answers
+that the other backends could already give. So, the proxy sends each request
+straight away to the backends that have started and offer the feature. It
+leaves out those still starting, whose answers join from the next request on.
+
+If none of the backends that have started offers the feature, the proxy waits
+for every backend still starting to start or fail. It asks each one that offers
+the feature as it does, in order with the changes the client sends it. That is
+typical of the first request after opening a file, such as a pull for
+diagnostics. If the proxy answered it with nothing, the client might show that
+until something made it ask again. Waiting only for the first backend to start
+would answer sooner. However, the backends left out would then be missing from
+that same answer, for as long as the client has no reason to ask again.
+
+Requests that want one answer still wait for the highest-priority backend that
+handles the file, even while a lower one has started. Answering from the lower
+one would give a different answer, where a combined request only loses part of
+the same one. Besides, the proxy can't know whether the starting backend offers
+the feature until it has started.
 
 The spec gives a code action no unique ID, only a title. Two servers may well
 offer actions with the same title. When a response combines code actions from
@@ -467,8 +488,10 @@ backends whose scopes contain them.
 The proxy announces workspace symbol search at startup, whether or not the
 client could register it later. Since the search isn't about any one file,
 there's nothing for a registration's document selector to narrow. Until a
-backend has started, the proxy answers with no symbols. With `--eager`, every
-backend has started (or failed) by the time the client can ask.
+backend is starting or has started, the proxy answers with no symbols. With
+`--eager`, every backend has started (or failed) by the time the client can
+ask. Otherwise, the proxy asks the backends that have started, the same as for
+a combined request about one file.
 
 ### Requests from backends
 
@@ -564,10 +587,11 @@ command is missing, the proxy tells the user with `window/showMessage`. The
 message names the server type, the scope and the reason.
 
 A backend that hangs while starting counts as failing to start. Until a backend
-has started, every request about its files waits for it, so a `prepare` stuck
-on a prompt or a server that never answers `initialize` would otherwise hold
-those requests up forever without a word to the user. So, a backend has 120 s
-from when it begins starting to finish `prepare` and answer `initialize`.
+has started, requests about its files can wait for it (see "Requests about one
+file"). A `prepare` stuck on a prompt or a server that never answers
+`initialize` would otherwise hold those requests up forever without a word to
+the user. So, a backend has 120 s from when it begins starting to finish
+`prepare` and answer `initialize`.
 After that, the proxy kills whichever is running and reports the backend as
 failed, with the reason, such as "didn't answer initialize within 120 s, of
 which prepare took 95 s". To kill a process, the proxy asks it and every

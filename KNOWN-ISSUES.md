@@ -43,6 +43,10 @@ them, under "Pinned for later".
   Until then, workspace symbol search and references don't cover it, and
   clients that only use what a server announces at startup won't use its
   features. `--eager` starts every server; there's no way to choose some.
+- **While a server starts, combined answers leave it out.** Completion, code
+  actions, references and the like come only from the servers that have
+  started, unless none has. A server whose `prepare` pulls an image can take a
+  couple of minutes. Ask again once it has started to include its results.
 - **A server that failed starts again only when you open one of its files**,
   and no sooner than 30 s after it failed.
 - **With `--eager`, a server that takes longer than 30 s can't add to what was

@@ -437,6 +437,12 @@ read = ['cat', '{read:file}']
 (defn- ready? [t k]
   (some-> (backend-of t k) backend/ready?))
 
+(defn- wait-until-ready
+  "Waits until every live backend has started, since combined requests go
+  only to those that have."
+  [t]
+  (is (eventually #(every? (partial ready? t) (keys (get-in @(:state (:proxy t)) [:registry :backends]))))))
+
 (defn- request-about [t id method path]
   (lsp/request id method {"textDocument" {"uri" (uri t path)}
                           "position" {"line" 0 "character" 0}}))
@@ -546,6 +552,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (testing "from every backend for the file that offers the feature, in priority order"
       (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
       (let [{:strs [id result]} (from-proxy t)]
@@ -573,6 +580,9 @@ read = ['cat', '{read:file}']
       "textDocument/completion" [(lsp/response id [{"label" server-type}])]
       nil)))
 
+(defn- labels [completion-response]
+  (map #(get % "label") (get-in completion-response ["result" "items"])))
+
 (deftest combining-answers-in-order-with-changes
   (let [started (promise)
         t (start :respond (completing-once-started started))]
@@ -585,6 +595,34 @@ read = ['cat', '{read:file}']
                         (take-last 2 (methods-received t ["lint" "."]))))
         "reaches a ready backend before a change the client sends after it")
     (deliver started true)))
+
+(deftest combining-answers-while-a-backend-starts
+  (let [started (promise)
+        t (start :respond (completing-once-started started))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(ready? t ["lint" "."])))
+    (testing "only from the backends that are ready, without waiting for the rest"
+      (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+      (is (= ["lint"] (labels (from-proxy t))))
+      (deliver started true)
+      (is (eventually #(ready? t ["ruby" "api"])))
+      (is (= [] (received t ["ruby" "api"] "textDocument/completion"))))
+    (testing "and from a backend that has started since, from the next request on"
+      (client! t (request-about t 2 "textDocument/completion" "api/a.rb"))
+      (is (= ["lint" "ruby"] (labels (from-proxy t)))))))
+
+(deftest combining-answers-while-every-backend-starts
+  (let [started (promise)
+        t (start :respond (completing-once-started started) :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (testing "waits for them to start"
+      (is (nothing-more? t)))
+    (testing "then answers"
+      (deliver started true)
+      (is (= ["ruby"] (labels (from-proxy t)))))))
 
 (defn- backend-id [t k]
   (:backend-id (backend-of t k)))
@@ -600,6 +638,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
     (let [items (into {} (for [item (get-in (from-proxy t) ["result" "items"])]
                            [(get item "label") item]))]
@@ -638,6 +677,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
     (let [lint (first (filter #(= "lint" (get % "label")) (get-in (from-proxy t) ["result" "items"])))]
       (client! t (lsp/request 2 "completionItem/resolve" lint))
@@ -798,6 +838,7 @@ read = ['cat', '{read:file}']
         t (start :respond respond)]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (lsp/request 1 "textDocument/diagnostic" {"textDocument" {"uri" (uri t "api/a.rb")}}))
     (is (= (lsp/response 1 {"kind" "full" "items" [{"message" "lint"} {"message" "ruby"}]})
            (from-proxy t)))))
@@ -815,6 +856,7 @@ read = ['cat', '{read:file}']
     (testing "answers with nothing before any backend has started"
       (is (= (lsp/response 1 nil) (from-proxy t))))
     (open! t "api/a.rb" "ruby")
+    (wait-until-ready t)
     (client! t (lsp/request 2 "workspace/symbol" {"query" "x"}))
     (let [symbols (get (from-proxy t) "result")]
       (testing "combines every live backend's symbols"
