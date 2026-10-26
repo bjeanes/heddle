@@ -3,7 +3,9 @@
             [monorepo-lsp.config-test]
             [monorepo-lsp.glob-test]
             [monorepo-lsp.json-test]
-            [monorepo-lsp.lsp-test]))
+            [monorepo-lsp.lsp-test]
+            [monorepo-lsp.paths-test]
+            [monorepo-lsp.runner-test]))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (t/run-all-tests #"monorepo-lsp\..*-test")]

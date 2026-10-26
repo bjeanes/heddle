@@ -1,0 +1,19 @@
+# The runners that ship with the proxy. A project's config can override any of
+# these by name, or add its own.
+
+[runners.host]
+start = ["{cfg:command}"]
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[runners.docker-exec]
+start = ["docker", "exec", "--interactive", "--workdir", "{server:scope}", "{cfg:container}", "{cfg:command}"]
+read = ["docker", "exec", "{cfg:container}", "cat", "{read:file}"]
+
+[runners.docker-run]
+defaults = { args = [] }
+start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}", "{cfg:args}", "--workdir", "{server:scope}", "{cfg:image}", "{cfg:command}"]
+read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
