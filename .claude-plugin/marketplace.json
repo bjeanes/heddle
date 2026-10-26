@@ -1,0 +1,11 @@
+{
+  "name": "heddle",
+  "owner": { "name": "Bo Jeanes" },
+  "plugins": [
+    {
+      "name": "heddle",
+      "source": "./claude-code",
+      "description": "Code intelligence through heddle, which starts the language servers each project's .heddle.toml defines"
+    }
+  ]
+}
