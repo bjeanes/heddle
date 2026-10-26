@@ -10,7 +10,7 @@
   - :paths, the boot config's `paths`;
   - :cache, the directory holding the backend's fetched files;
   - :templates, the runner's command templates;
-  - :context, what those templates draw on (see heddle.runner).
+  - :cfg, the values for those templates' `{cfg:…}` placeholders.
 
   Since a backend's own values, such as its ID, are only known once it runs,
   `command` takes them separately."
@@ -60,15 +60,15 @@
   [config [_ scope :as slot] repo cache-root]
   (let [{:strs [paths] :as boot} (boot config slot)
         runner (get-in config ["runners" (get boot "runner")])
-        context (runner/context runner boot scope {:repo repo})]
+        dir (paths/client-path repo scope)]
     {:slot slot
      :repo repo
-     :dir (:client-scope context)
-     :root (:server-scope context)
+     :dir dir
+     :root (paths/to-server paths repo dir)
      :paths paths
      :cache (cache-dir cache-root repo slot)
      :templates (select-keys runner runner/templates)
-     :context context}))
+     :cfg (runner/cfg runner boot)}))
 
 (defn slots
   "Every [server-type scope] that the config's scopes start, or only those of
@@ -91,8 +91,8 @@
   "The arguments for the spec's `template` (\"start\", \"read\" or \"prepare\"),
   or nil if the runner has no such template. `runtime` has the :backend-id
   and, for `read`, the server path of the :file to print."
-  [{:keys! [templates context]} template runtime]
-  (runner/expand templates template (merge context runtime)))
+  [{:keys! [templates cfg] :as spec} template runtime]
+  (runner/expand templates template (runner/context cfg spec runtime)))
 
 (defn- paths-errors [paths]
   (cond
@@ -121,8 +121,8 @@
       (not (contains? (get config "runners") runner)) [(str "unknown runner " (pr-str runner))]
       (seq path-errors) path-errors
       :else
-      (let [{:keys! [root templates context]} (spec config slot (:repo stand-ins) (:cache-root stand-ins))
-            ctx (merge context (select-keys stand-ins [:backend-id :file]))]
+      (let [{:keys! [root templates cfg] :as s} (spec config slot (:repo stand-ins) (:cache-root stand-ins))
+            ctx (runner/context cfg s (select-keys stand-ins [:backend-id :file]))]
         (if-not root
           [runner/uncovered-scope]
           (for [t runner/templates

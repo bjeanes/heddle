@@ -23,7 +23,7 @@
     :paths {"." "/src"}
     :cache "/cache"
     :templates templates
-    :context {}}))
+    :cfg {}}))
 
 (defn- prepares-with
   "A spec for a backend in a new directory, which runs `prepare` then cat."

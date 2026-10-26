@@ -22,7 +22,7 @@
             :paths {"." "/src"}
             :cache (temp-dir)
             :templates (cond-> {"start" ["s"]} read (assoc "read" read))
-            :context {}}
+            :cfg {}}
      :backend-id "heddle-1"
      :fetched (atom #{})
      :read-timeout-ms 10000}))

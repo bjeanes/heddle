@@ -33,9 +33,9 @@
   (testing "root a scope without paths at its own directory"
     (is (= "/r/services/legacy" (:root (spec-for design ["ruby-lsp" "services/legacy"])))))
   (testing "take the scope's values over the server type's"
-    (is (= ["ruby-lsp"] (get-in (spec-for design ["ruby-lsp" "services/legacy"]) [:context :cfg "command"])))
+    (is (= ["ruby-lsp"] (get-in (spec-for design ["ruby-lsp" "services/legacy"]) [:cfg "command"])))
     (is (= ["bundle" "exec" "ruby-lsp"]
-           (get-in (spec-for design ["ruby-lsp" "services/api"]) [:context :cfg "command"])))))
+           (get-in (spec-for design ["ruby-lsp" "services/api"]) [:cfg "command"])))))
 
 (deftest slots
   (testing "of every server type"
