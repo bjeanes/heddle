@@ -125,7 +125,24 @@ languages = ['x']
 s = { runner = 'docker-run', image = 'i', command = 's' }
 ")]
       (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--workdir" "/r/a" "i" "s"]
-             (command c ["s" "a"] "start"))))))
+             (command c ["s" "a"] "start")))))
+  (testing "a runner's defaults can give paths, which root the server and aren't template values"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { runner = 'c', command = 's' }
+
+[runners.c]
+defaults = { paths = { '.' = '/src' } }
+start = ['run', '{server:scope}', '{cfg:command}']
+
+[scopes.a.s]
+")
+          s (spec-for c ["s" "a"])]
+      (is (= {"." "/src"} (:paths s)))
+      (is (= "/src/a" (:root s)))
+      (is (= {"command" "s"} (:cfg s)))
+      (is (= ["run" "/src/a" "s"] (command c ["s" "a"] "start"))))))
 
 (deftest cache-dirs
   (let [dir (spec/cache-dir "/cache" ["ruby" "services/api"])]

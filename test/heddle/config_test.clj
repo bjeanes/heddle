@@ -72,10 +72,10 @@ y = 's'
              (:sources (meta (entry "services/api")))))
       (is (= {"service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"]}
              (:sources (meta (entry "tools/cli"))))))
-    (testing "with neither the runner nor paths from a runner's defaults"
-      (is (= {"runner" "r" "service" "app" "command" "ruby-lsp" "x" "d" "y" "s"}
+    (testing "with paths from a runner's defaults, but not the runner"
+      (is (= {"runner" "r" "service" "app" "command" "ruby-lsp" "paths" {"." "/src"} "x" "d" "y" "s"}
              (entry "other")))
-      (is (= {"service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"] "x" [:defaults "r"]}
+      (is (= {"service" [:boot "ruby-lsp"] "command" [:boot "ruby-lsp"] "paths" [:defaults "r"] "x" [:defaults "r"]}
              (:sources (meta (entry "other"))))))
     (testing "leaving out what the scopes now hold"
       (is (= {"languages" ["ruby"]} (get-in c ["servers" "ruby-lsp"])))
@@ -112,6 +112,41 @@ x = 's'
     (testing "unless a higher layer sets it again"
       (is (= "s" (get (entry "c") "x")))
       (is (not (contains? (:sources (meta (entry "c"))) "x"))))))
+
+(deftest layers-paths-from-runner-defaults
+  (let [c (config/parse "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'c', command = 'ruby-lsp' }
+
+[runners.c]
+defaults = { compose = ['docker', 'compose', '--file', 'dev/compose.yml'], paths = { '.' = '/src' } }
+start = ['{cfg:compose}', 'exec', '-T', '{cfg:service}', '{cfg:command}']
+
+[scopes.'services/api'.ruby-lsp]
+service = 'api'
+[scopes.'services/billing'.ruby-lsp]
+service = 'billing'
+paths = { 'services/billing' = '/app' }
+[scopes.'services/legacy'.ruby-lsp]
+service = 'legacy'
+paths = false
+[scopes.'tools/cli'.ruby-lsp]
+runner = false
+")
+        entry #(get-in c ["scopes" % "ruby-lsp"])]
+    (testing "under every scope that uses the runner"
+      (is (= {"." "/src"} (get (entry "services/api") "paths")))
+      (is (= [:defaults "c"] (get-in (meta (entry "services/api")) [:sources "paths"]))))
+    (testing "unless a scope replaces or unsets them"
+      (is (= {"services/billing" "/app"} (get (entry "services/billing") "paths")))
+      (is (not (contains? (:sources (meta (entry "services/billing"))) "paths")))
+      (is (not (contains? (entry "services/legacy") "paths"))))
+    (testing "but not under a scope that doesn't use the runner"
+      (is (= {"command" "ruby-lsp"} (entry "tools/cli")))
+      (is (= {"command" [:boot "ruby-lsp"]} (:sources (meta (entry "tools/cli"))))))
+    (testing "without warning that the runner's templates don't use them"
+      (is (empty? (config/warnings c))))))
 
 (deftest runs-a-server-type-no-scope-names-across-the-repo
   (let [c (config/parse "
@@ -250,6 +285,14 @@ languages = ['x']
 a = 1
 b = {}
 "))))
+  (testing "a runner's paths"
+    (are [defaults error] (= #{error} (errors (str "[runners.r]\nstart = ['x']\ndefaults = " defaults "\n")))
+      "{ paths = {} }"                         "runner \"r\": defaults: paths can't be empty; use paths = false to unset it"
+      "{ paths = '/src' }"                     "runner \"r\": defaults: paths must be a table"
+      "{ paths = { '/abs' = '/src' } }"        "runner \"r\": defaults: paths entry \"/abs\" must be relative to the repo root"
+      "{ paths = { '.' = 'src' } }"            "runner \"r\": defaults: paths entry \".\" must map to an absolute directory")
+    (is (nil? (errors "[runners.r]\nstart = ['x']\ndefaults = { paths = false }\n")))
+    (is (nil? (errors "[runners.r]\nstart = ['x']\ndefaults = { paths = { '.' = '/src' } }\n"))))
   (testing "runners"
     (is (= #{"runner \"r\": unknown key \"stat\""
              "runner \"r\": has no start template"

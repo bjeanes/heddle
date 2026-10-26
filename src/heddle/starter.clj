@@ -78,14 +78,15 @@
 ##   {proxy:backend_id}  an ID for each server heddle starts
 ##   {read:file}         the file for `read` to print
 ##
-## This runner starts a container, then runs the server inside it. The scope
-## after it uses the runner. Its `args` mount the repo at /src in the container.
-## Its `paths` tell heddle that's where the repo is. Since heddle has no
-## teardown step yet, the container keeps running after the server exits, until
-## you `docker stop` it.
+## This runner starts a container, then runs the server inside it. Its default
+## `args` mount the repo at /src in the container. Its default `paths` tell
+## heddle that's where the repo is. Every scope that uses the runner gets both,
+## leaving the one after it to name only an image. Since heddle has no teardown
+## step yet, the container keeps running after the server exits, until you
+## `docker stop` it.
 
 # [runners.docker-detached]                    # named as you like
-# defaults = { args = [] }
+# defaults = { args = [\"--volume\", \"{client:repo}:/src\"], paths = { \".\" = \"/src\" } }
 # prepare = [\"docker\", \"run\", \"--rm\", \"--detach\", \"--name\", \"{proxy:backend_id}\", \"{cfg:args}\", \"{cfg:image}\", \"sleep\", \"infinity\"]
 # start = [\"docker\", \"exec\", \"--interactive\", \"--workdir\", \"{server:scope}\", \"{proxy:backend_id}\", \"{cfg:command}\"]
 # read = [\"docker\", \"exec\", \"{proxy:backend_id}\", \"cat\", \"{read:file}\"]
@@ -93,8 +94,6 @@
 # [scopes.\"tools/cli\".ts-ls]
 # runner = \"docker-detached\"
 # image = \"my-app-dev\"                         # an image with the server installed
-# args = [\"--volume\", \"{client:repo}:/src\"]
-# paths = { \".\" = \"/src\" }
 
 ## 4. The cache (optional) -----------------------------------------------------
 ##

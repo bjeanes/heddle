@@ -3,7 +3,8 @@
   DESIGN.md."
   (:require [clj-toml.core :as toml]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [heddle.paths :as paths]))
 
 (defmacro ^:private inline-resource
   "`jolt build` doesn't bundle resources into the binary, so this reads the
@@ -48,6 +49,20 @@
         [_ owner name] (re-seq placeholder element)]
     [t owner name]))
 
+(defn paths-errors
+  "Problems with the `paths` in a boot config or a runner's defaults that don't
+  depend on any scope. A `false` there unsets it."
+  [{:strs [paths] :as boot}]
+  (cond
+    (or (not (contains? boot "paths")) (false? paths)) nil
+    (or (nil? paths) (= {} paths)) ["paths can't be empty; use paths = false to unset it"] ; an inline {} reads as nil
+    (not (map? paths)) ["paths must be a table"]
+    :else (for [[dir server] paths
+                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
+                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
+                :when problem]
+            (str "paths entry " (pr-str dir) " " problem))))
+
 (defn runner-errors
   "Problems with a runner's definition that don't depend on any scope."
   [runner]
@@ -59,8 +74,10 @@
        (str "unknown key " (pr-str k)))
      (when-not (contains? runner "start")
        ["has no start template"])
-     (when-not (map? (get runner "defaults" {}))
-       ["defaults must be a table"])
+     (let [defaults (get runner "defaults" {})]
+       (if (map? defaults)
+         (for [e (paths-errors defaults)] (str "defaults: " e))
+         ["defaults must be a table"]))
      (for [t templates
            :let [template (get runner t)]
            :when (and template (not (string-list? template)))]

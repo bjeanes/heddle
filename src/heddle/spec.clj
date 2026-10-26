@@ -106,17 +106,6 @@
   [{:keys! [templates cfg] :as spec} template runtime]
   (runner/expand templates template (runner/context cfg spec runtime)))
 
-(defn- paths-errors [{:strs [paths] :as boot}]
-  (cond
-    (not (contains? boot "paths")) nil
-    (or (nil? paths) (= {} paths)) ["paths can't be empty; use paths = false to unset it"] ; an inline {} reads as nil
-    (not (map? paths)) ["paths must be a table"]
-    :else (for [[dir server] paths
-                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
-                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
-                :when problem]
-            (str "paths entry " (pr-str dir) " " problem))))
-
 (def ^:private stand-ins
   "Values for checking a spec before any backend is running."
   {:repo "/repo" :cache-root "/cache" :backend-id "id" :file "/file"})
@@ -127,7 +116,7 @@
   backend runs."
   [config slot]
   (let [{:strs [runner] :as boot} (boot config slot)
-        path-errors (paths-errors boot)]
+        path-errors (runner/paths-errors boot)]
     (cond
       (and (some? runner) (not (string? runner))) ["runner must be a string"]
       (and (some? runner) (not (contains? (get config "runners") runner))) [(str "unknown runner " (pr-str runner))]

@@ -155,12 +155,12 @@
   "The structurally valid `config` with each scope's entry for a server type
   made into that slot's whole boot config: the scope's values over the server
   type's `boot` table, over the defaults of the runner they name, other than
-  any `runner` or `paths` in those defaults. A key whose value ends up `false`
-  is left out, which is how a layer unsets a value from one below it. Under
-  :sources, each entry's metadata says where any value the scope didn't set
-  came from, as [:boot server-type] or [:defaults runner]. The `boot` tables
-  and runners' `defaults` are then left out, since the scopes hold every value
-  of theirs that applies.
+  any `runner` in those defaults, since a runner can't choose itself. A key
+  whose value ends up `false` is left out, which is how a layer unsets a value
+  from one below it. Under :sources, each entry's metadata says where any value
+  the scope didn't set came from, as [:boot server-type] or [:defaults runner].
+  The `boot` tables and runners' `defaults` are then left out, since the scopes
+  hold every value of theirs that applies.
 
   A server type that no scope names runs across the repo, as though the `.`
   scope named it with an empty entry. Its entry's metadata has :implicit true."
@@ -168,7 +168,7 @@
   (let [expand-entry (fn [server-type own]
                        (let [boot (get-in servers [server-type "boot"])
                              runner (get (merge boot own) "runner")
-                             defaults (runner/cfg (get-in runners [runner "defaults"]))
+                             defaults (dissoc (get-in runners [runner "defaults"]) "runner")
                              layered (merge defaults boot own)
                              unset (for [[k v] layered :when (false? v)] k)
                              sources (merge (zipmap (keys defaults) (repeat [:defaults runner]))

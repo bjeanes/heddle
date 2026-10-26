@@ -363,7 +363,7 @@ boot = { command = ["rubocop", "--lsp"] }
 
 [scopes."services/api".ruby-lsp]         # starts ruby-lsp under services/api
 service = "api"                          # a value for the runner, which compose requires
-paths = { "services/api" = "/app" }      # optional, defaults to each path as itself
+paths = { "services/api" = "/app" }      # optional, defaults to the runner's, or else each path as itself
 
 [scopes."services/legacy".ruby-lsp]
 runner = false                           # unsets the server type's runner, to run on your machine
@@ -401,7 +401,8 @@ scope's directory as its working directory.
   installed gem, to copy the file out for you to open. Without it, you can't
   open those files. Each `read` has 10 s to finish.
 - `defaults` is optional. It gives values for the templates that a boot config
-  can override.
+  can override. It can also give `paths`, which the boot config can override
+  or unset in the same way.
 
 Templates draw on values through placeholders:
 
@@ -454,6 +455,31 @@ started, the container is ready by the time `start` runs.
 However, the proxy has no teardown step yet. When the backend exits, the
 container keeps running until you `docker stop` it. Only then does `--rm`
 remove it.
+
+A runner of your own is also a place to say things once that every scope using
+it shares. Where a Compose project mounts the repo is a fact about that
+project, for instance. A runner for the project can give its compose file and
+its `paths` in `defaults`, which leaves each scope to name only its service:
+
+<!-- example: runner defaults -->
+```toml
+[runners.dev]                                    # the project in dev/compose.yml
+defaults = { compose = ["docker", "compose", "--file", "dev/compose.yml"], paths = { "." = "/src" } }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[scopes."services/api".ruby-lsp]
+runner = "dev"
+service = "api"
+
+[scopes."services/billing".ruby-lsp]
+runner = "dev"
+service = "billing"
+```
+
+A scope that uses another runner, or none, doesn't get these `paths`, since
+only the defaults of the runner a scope uses apply to it. A `runner` in
+`defaults` has no effect.
 
 ### The built-in runners
 

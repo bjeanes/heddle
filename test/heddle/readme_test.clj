@@ -38,3 +38,11 @@
     (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "heddle-1"
             "bundle" "exec" "ruby-lsp"]
            (command c "tools/cli" "start")))))
+
+(deftest runner-defaults-parse
+  (let [c (config/parse (str "[servers.ruby-lsp]\nlanguages = ['ruby']\nboot = { command = ['bundle', 'exec', 'ruby-lsp'] }\n"
+                             (toml-after "example: runner defaults")))]
+    (is (= [] (config/warnings c)))
+    (is (= ["docker" "compose" "--file" "dev/compose.yml" "exec" "-T" "--workdir" "/src/services/billing"
+            "billing" "bundle" "exec" "ruby-lsp"]
+           (command c "services/billing" "start")))))

@@ -256,7 +256,8 @@ only exist in `read`, and the proxy reports using one anywhere else as an error
 when it loads the config. Anything else the proxy provides goes under `proxy:`.
 
 A boot config can name its `runner` and give it `paths`. Every other key in it,
-including `command`, is a value for `{cfg:…}`. When the proxy loads the config,
+including `command`, is a value for `{cfg:…}`. The runner's `defaults` can give
+`paths` too, as "Paths" below describes. When the proxy loads the config,
 it checks each scope against its runner's templates. If a template uses a
 `{cfg:…}` value that neither the boot config nor the runner's `defaults` has,
 that is an error. A `compose` scope with no `service` is one example.
@@ -290,6 +291,26 @@ path maps to itself. That is right for a server on the host. It's also right for
 containers that mount the repo at the same path as on the host. If someone
 forgets `paths` for a container that mounts it elsewhere, the server will fail
 early on paths that don't exist.
+
+Where a Compose project mounts the repo is a fact about that project, which
+every scope run in it shares. So, a runner's `defaults` can give `paths` too,
+layered under the `boot` table and the scope like any other value. A runner
+defined for the project can then say it once, along with the project's compose
+file. Each scope only names its service:
+
+```toml
+[runners.dev]
+defaults = { compose = ["docker", "compose", "--file", "dev/compose.yml"], paths = { "." = "/src" } }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[scopes."services/api"]
+ruby-lsp = { runner = "dev", service = "api" }
+```
+
+Since a scope only gets the defaults of the runner it uses, a scope that runs
+the server on the host doesn't inherit these `paths`. A `runner` in `defaults`
+is left out, since a runner can't choose itself.
 
 The proxy works out `{server:scope}` by translating the scope's directory
 through `paths`, using the same longest-match rule. An entry only has to
