@@ -25,6 +25,11 @@
       (let [handler (get handlers (get msg "method") (constantly nil))]
         [(lsp/response (get msg "id") (handler (get msg "params")))]))))
 
+(def hang-up
+  "A reply that stops the fake backend, as though its process had exited,
+  after it sends the replies before this one."
+  ::hang-up)
+
 (defn connector
   "A connector for fake backends. Each one handles the messages sent to it in
   order, on a thread of its own. It passes each to (respond k msg), where `k`
@@ -40,10 +45,21 @@
           (let [msg (.take inbox)]
             (when-not (= ::closed msg)
               (swap! received update k (fnil conj []) msg)
-              (doseq [reply (respond k msg)]
-                (on-message reply))
-              (recur))))
+              (let [[replies hung-up] (split-with #(not= hang-up %) (respond k msg))]
+                (run! on-message replies)
+                (when (empty? hung-up)
+                  (recur))))))
         (on-message nil))
       {:send #(.put inbox %)
        :close #(.put inbox ::closed)
        :wait (constantly 0)})))
+
+(defn refusing
+  "The connector `connect`, except that connecting a backend whose
+  [server-type scope] is a key of `problems` throws, with the value as the
+  exception's message."
+  [connect problems]
+  (fn [backend on-message]
+    (if-let [problem (get problems [(:server-type backend) (:scope backend)])]
+      (throw (ex-info problem {}))
+      (connect backend on-message))))

@@ -44,12 +44,30 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
   (let [repo (temp-dir)]
     (.mkdirs (io/file repo scope))
     {:config config :server-type "s" :scope scope :repo repo :backend-id "monorepo-lsp-1"
-     :cache (temp-dir)}))
+     :cache (temp-dir) :fetched (atom #{})}))
+
+(defn- restarted
+  "A new backend in place of `b`, sharing its cache."
+  [b]
+  (assoc b :backend-id "monorepo-lsp-2" :fetched (atom #{})))
 
 (deftest cache-dirs
-  (let [dir (fetched/cache-dir "monorepo-lsp-1")]
-    (is (str/ends-with? dir "/monorepo-lsp/monorepo-lsp-1"))
-    (is (not (str/includes? dir "//")))))
+  (let [dir (fetched/cache-dir "/code/shop" "ruby" "services/api")]
+    (testing "are keyed by repo, server type and scope"
+      (is (re-find #"/monorepo-lsp/shop-[0-9a-f]{8}/ruby/services%2Fapi$" dir))
+      (is (not (str/includes? dir "//"))))
+    (testing "are the same every time"
+      (is (= dir (fetched/cache-dir "/code/shop" "ruby" "services/api"))))
+    (testing "give the root scope a segment of its own"
+      (is (str/ends-with? (fetched/cache-dir "/code/shop" "ruby" ".") "/ruby/%2E")))
+    (testing "differ for each repo, server type and scope"
+      (is (= 5 (count (distinct [dir
+                                 (fetched/cache-dir "/other/shop" "ruby" "services/api")
+                                 (fetched/cache-dir "/code/shop" "rubocop" "services/api")
+                                 (fetched/cache-dir "/code/shop" "ruby" "services")
+                                 (fetched/cache-dir "/code/shop" "ruby" ".")])))))
+    (testing "don't nest one scope inside another"
+      (is (not (str/starts-with? dir (str (fetched/cache-dir "/code/shop" "ruby" "services") "/")))))))
 
 (deftest fetching
   (let [server (temp-dir)
@@ -62,10 +80,14 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
       (is (= {} (fetched/fetch! b [file])))
       (is (= "puts '😀'\n" (slurp copy)))
       (is (not (.canWrite copy))))
-    (testing "leaves a file that's already cached"
+    (testing "doesn't read a file again once the backend has fetched it"
       (spit file "changed\n")
       (is (= {} (fetched/fetch! b [file])))
       (is (= "puts '😀'\n" (slurp copy))))
+    (testing "replaces a copy left by an earlier backend the first time"
+      (is (= {} (fetched/fetch! (restarted b) [file])))
+      (is (= "changed\n" (slurp copy)))
+      (is (not (.canWrite copy))))
     (testing "reports a failed read and leaves nothing in the cache"
       (let [gone (str server "/gone.rb")
             failures (fetched/fetch! b [gone file])]
@@ -74,6 +96,24 @@ s = { runner = 'missing', command = 's', paths = { 'missing' = '/missing' } }
         (is (str/includes? (get failures gone) "No such file"))
         (is (= ["lib"] (vec (.list (io/file (str (:cache b) server)))))
             "no copy of gone.rb, partial or otherwise")))))
+
+(deftest failing-to-refresh
+  (let [server (temp-dir)
+        file (str server "/x.rb")
+        b (backend ".")
+        copy (io/file (str (:cache b) file))]
+    (spit file "old\n")
+    (fetched/fetch! b [file])
+    (.delete (io/file file))
+    (let [b (restarted b)]
+      (testing "reports the failure but keeps the earlier copy"
+        (is (= #{file} (set (keys (fetched/fetch! b [file])))))
+        (is (= "old\n" (slurp copy)))
+        (is (= ["x.rb"] (vec (.list (.getParentFile copy))))))
+      (testing "tries again next time"
+        (spit file "new\n")
+        (is (= {} (fetched/fetch! b [file])))
+        (is (= "new\n" (slurp copy)))))))
 
 (deftest reading-from-the-scope
   (let [b (backend "where")]

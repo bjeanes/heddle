@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [monorepo-lsp.fake-backend :as fake :refer [eventually]]
+            [monorepo-lsp.log :as log]
             [monorepo-lsp.lsp :as lsp]
             [monorepo-lsp.proxy :as proxy])
   (:import (java.nio.file Files)
@@ -36,24 +37,31 @@ read = ['cat', '{read:file}']
 
 (defn- start
   "A proxy for a repo with `config` (or the `config` option), with fake
-  backends that answer with `respond`. Returns the proxy and its repo, a queue
-  of what it sends the client, and an atom of what each backend receives."
-  [& {:keys [respond server-types] :as opts}]
+  backends that answer with `respond`. Connecting to the backends that are
+  keys of `refuse` fails, as described by the value. Returns the proxy and its
+  repo, a queue of what it sends the client, an atom of what each backend
+  receives, and an atom of the proxy's clock in milliseconds."
+  [& {:keys [respond refuse server-types eager eager-timeout-ms] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
-        exit-code (promise)]
+        exit-code (promise)
+        now (atom 0)]
     (spit (io/file repo ".monorepo-lsp.toml") (get opts :config config))
     (.mkdirs (io/file repo "api"))
     {:repo repo
      :out out
      :received received
      :exit-code exit-code
+     :now now
      :proxy (proxy/create {:send #(.put out %)
-                           :connect (fake/connector received (or respond offers-hover))
+                           :connect (fake/refusing (fake/connector received (or respond offers-hover)) refuse)
                            :server-types server-types
+                           :eager eager
+                           :eager-timeout-ms eager-timeout-ms
                            :cwd (temp-dir)
-                           :exit #(deliver exit-code %)})}))
+                           :exit #(deliver exit-code %)
+                           :clock #(deref now)})}))
 
 (defn- from-proxy
   "The next message the proxy sends the client, waiting up to two seconds."
@@ -82,6 +90,14 @@ read = ['cat', '{read:file}']
 (defn- methods-received [t k]
   (mapv #(get % "method") (get @(:received t) k)))
 
+(defn- shown [type message]
+  (lsp/notification "window/showMessage" {"type" type "message" message}))
+
+(defn- failure
+  "The message for a backend that failed as `what-happened` says."
+  [what-happened]
+  (str what-happened ". Opening one of its files will start it again, once 30 s have passed."))
+
 (deftest initializing
   (testing "answers with full sync, and finds the config at the client's root"
     (let [t (start)]
@@ -93,15 +109,36 @@ read = ['cat', '{read:file}']
       (spit (io/file cwd ".monorepo-lsp.toml") config)
       (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
       (is (contains? (from-proxy t) "result"))))
-  (testing "answers with an error without a config"
-    (let [t (start)]
-      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
-      (is (str/starts-with? (get-in (from-proxy t) ["error" "message"])
-                            "no .monorepo-lsp.toml in /nowhere or "))))
   (testing "refuses other requests until initialized"
     (let [t (start)]
       (client! t (lsp/request 1 "textDocument/hover" {}))
       (is (= -32002 (get-in (from-proxy t) ["error" "code"]))))))
+
+(defn- serves-nothing? [t]
+  (open! t "api/a.rb" "ruby")
+  (client! t (lsp/request 1 "textDocument/hover" {"textDocument" {"uri" (uri t "api/a.rb")}}))
+  (and (= (lsp/response 1 nil) (from-proxy t))
+       (= {} @(:received t))))
+
+(deftest without-a-usable-config
+  (testing "warns that there's no config, and serves nothing"
+    (let [t (start)
+          cwd (get-in t [:proxy :cwd])]
+      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+      (is (contains? (from-proxy t) "result"))
+      (is (= (shown 2 (str "There's no .monorepo-lsp.toml in /nowhere or " cwd ".\n"
+                           "monorepo-lsp is serving nothing until there is one and it restarts."))
+             (from-proxy t)))
+      (is (serves-nothing? t))))
+  (testing "shows the config's errors, and serves nothing"
+    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = { runner = 'host' }\n")]
+      (is (= {"openClose" true "change" 1 "save" true}
+             (get (initialize! t {}) "textDocumentSync")))
+      (let [{:strs [method params]} (from-proxy t)]
+        (is (= "window/showMessage" method))
+        (is (= 1 (get params "type")))
+        (is (str/includes? (get params "message") "server type \"ruby\" matches no files")))
+      (is (serves-nothing? t)))))
 
 (deftest starting-backends
   (let [t (start)]
@@ -189,6 +226,83 @@ read = ['cat', '{read:file}']
             (is (= (selector lint) (take (count (selector lint)) (selector register))))
             (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
                       (selector register)))))))))
+
+(def ^:private registers-hover-and-commands
+  {"textDocument" {"hover" {"dynamicRegistration" true}
+                   "definition" {"dynamicRegistration" true}}
+   "workspace" {"executeCommand" {"dynamicRegistration" true}}})
+
+(defn- nothing-more? [t]
+  (nil? (.poll (:out t) 200 TimeUnit/MILLISECONDS)))
+
+(deftest starting-backends-eagerly
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {"hoverProvider" true
+                                                       "executeCommandProvider" {"commands" ["fix"]}}})]))
+        t (start :respond respond :eager true)
+        caps (initialize! t registers-hover-and-commands)]
+    (testing "starts every backend before answering initialize"
+      (is (eventually #(= ["initialize" "initialized"] (methods-received t ["ruby" "api"]))))
+      (is (eventually #(= ["initialize" "initialized"] (methods-received t ["lint" "."])))))
+    (testing "announces their features in the answer, with every command qualified"
+      (is (= {} (get caps "hoverProvider")))
+      (is (= {"commands" ["lint:fix" "ruby:fix"]} (get caps "executeCommandProvider"))))
+    (testing "and doesn't register those features again"
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-with-a-slow-backend
+  (let [started (promise)
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (if (= "ruby" server-type)
+                      (do @started
+                          [(lsp/response id {"capabilities" {"hoverProvider" true "definitionProvider" true}})])
+                      [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+        t (start :respond respond :eager true :eager-timeout-ms 100)
+        caps (initialize! t registers-hover-and-commands)]
+    (testing "answers initialize once the timeout runs out, with the backends that have started"
+      (is (contains? caps "hoverProvider"))
+      (is (not (contains? caps "definitionProvider"))))
+    (testing "registers the features only a late backend offers once it starts"
+      (deliver started true)
+      (let [register (from-proxy t)]
+        (is (= "client/registerCapability" (get register "method")))
+        (is (= ["textDocument/definition"] (map #(get % "method") (get-in register ["params" "registrations"])))))
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-holds-back-their-messages
+  (let [log (fn [message] (lsp/notification "window/logMessage" {"type" 3 "message" message}))
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (cond-> [(lsp/response id {"capabilities" {}})]
+                      (= "ruby" server-type) (->> (into [(log "one") (log "two")])))))
+        t (start :respond respond :eager true)]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "until the proxy has answered initialize, then sends them in order"
+      (is (= 0 (get (from-proxy t) "id")))
+      (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
+      (is (nothing-more? t)))))
+
+(deftest starting-backends-eagerly-with-a-failed-backend
+  (let [ruby-starts (atom 0)
+        respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    (if (and (= "ruby" server-type) (= 1 (swap! ruby-starts inc)))
+                      [(lsp/error-response id -32603 "no Gemfile")]
+                      [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+        t (start :respond respond :eager true)
+        caps (initialize! t {})]
+    (testing "answers initialize with the backends that did start"
+      (is (= {} (get caps "hoverProvider"))))
+    (testing "then tells the user as usual"
+      (is (= (shown 1 (failure "ruby in api failed to start: initialize failed: no Gemfile")) (from-proxy t))))
+    (testing "and starts it again only when one of its files opens"
+      (swap! (:now t) + 30000)
+      (is (nothing-more? t))
+      (is (= 1 @ruby-starts))
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 @ruby-starts))))))
 
 (defn- received [t k method]
   (filterv #(= method (get % "method")) (get @(:received t) k)))
@@ -454,18 +568,44 @@ read = ['cat', '{read:file}']
       (is (eventually #(= [{"changes" [{"uri" "file:///app/b.rb" "type" 1}]}]
                           (received-params ["ruby" "api"] "workspace/didChangeWatchedFiles")))))))
 
-(deftest requests-past-a-backend-that-failed-to-start
+(deftest requests-with-a-failed-backend
   (let [respond (fn [[server-type] {:strs [id method]}]
                   (case [server-type method]
                     ["lint" "initialize"] [(lsp/error-response id -32603 "no config")]
                     ["ruby" "initialize"] [(lsp/response id {"capabilities" {"definitionProvider" true}})]
                     ["ruby" "textDocument/definition"] [(lsp/response id "from ruby")]
                     nil))
-        t (start :respond respond)]
+        t (start :respond respond)
+        lint-failed (failure "lint in the repo root failed to start: initialize failed: no config")]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
-    (is (= (lsp/response 1 "from ruby") (from-proxy t)))))
+    (open! t "Gemfile" "plaintext")
+    (is (= (shown 1 lint-failed) (from-proxy t)))
+    (testing "go to another backend that can answer"
+      (client! t (request-about t 1 "textDocument/definition" "api/a.rb"))
+      (is (= (lsp/response 1 "from ruby") (from-proxy t))))
+    (testing "get an empty result while another backend for the file is running"
+      (client! t (request-about t 2 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 2 nil) (from-proxy t))))
+    (testing "get an error saying why when no backend for the file is running"
+      (client! t (request-about t 3 "textDocument/hover" "Gemfile"))
+      (is (= (lsp/error-response 3 -32803 lint-failed) (from-proxy t)))
+      (client! t (request-about t 4 "textDocument/completion" "Gemfile"))
+      (is (= (lsp/error-response 4 -32803 lint-failed) (from-proxy t))))
+    (testing "get an error saying why for a command whose backends have failed"
+      (client! t (lsp/request 5 "workspace/executeCommand" {"command" "lint:fix"}))
+      (is (= (lsp/error-response 5 -32803 lint-failed) (from-proxy t))))))
+
+(deftest requests-with-every-backend-failed
+  (let [t (start :refuse {["ruby" "api"] "ruby: command not found"
+                          ["lint" "."] "lint: command not found"})
+        ruby-failed (failure "ruby in api failed to start: ruby: command not found")
+        lint-failed (failure "lint in the repo root failed to start: lint: command not found")]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (is (= #{(shown 1 ruby-failed) (shown 1 lint-failed)} (set [(from-proxy t) (from-proxy t)])))
+    (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+    (is (= (lsp/error-response 1 -32803 (str lint-failed "\n" ruby-failed)) (from-proxy t)))))
 
 (deftest requests-from-backends
   (let [respond (fn [[server-type] {:strs [id method]}]
@@ -611,3 +751,101 @@ read = ['cat', '{read:file}']
   (let [t (start)]
     (client! t (lsp/notification "exit" nil))
     (is (= 1 (deref (:exit-code t) 2000 :timeout)))))
+
+(defn- start-ruby!
+  "Initializes the proxy `t` and opens a file that only ruby in api handles."
+  [t]
+  (initialize! t {})
+  (open! t "api/a.rb" "ruby"))
+
+(deftest telling-the-user-about-failures
+  (testing "when a backend can't be connected to"
+    (let [t (start :server-types #{"ruby"} :refuse {["ruby" "api"] "ruby: command not found"})]
+      (start-ruby! t)
+      (is (= (shown 1 (failure "ruby in api failed to start: ruby: command not found")) (from-proxy t)))))
+  (testing "when a backend answers initialize with an error"
+    (let [t (start :server-types #{"ruby"}
+                   :respond (fn [_ {:strs [id]}] [(lsp/error-response id -32603 "no Gemfile")]))]
+      (start-ruby! t)
+      (is (= (shown 1 (failure "ruby in api failed to start: initialize failed: no Gemfile")) (from-proxy t)))))
+  (testing "when a backend exits before answering initialize"
+    (let [t (start :server-types #{"ruby"} :respond (constantly [fake/hang-up]))]
+      (start-ruby! t)
+      (is (= (shown 1 (failure "ruby in api failed to start: it exited with 0 before answering initialize"))
+             (from-proxy t)))))
+  (testing "when a running backend stops"
+    (let [t (start :server-types #{"ruby"})]
+      (start-ruby! t)
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didOpen"))))
+      (stop-backend! t ["ruby" "api"])
+      (is (= (shown 2 (failure "ruby in api stopped with exit code 0")) (from-proxy t)))))
+  (testing "naming the repo root for a scope at the root"
+    (let [t (start :server-types #{"lint"} :refuse {["lint" "."] "lint: command not found"})]
+      (initialize! t {})
+      (open! t "Gemfile" "plaintext")
+      (is (= (shown 1 (failure "lint in the repo root failed to start: lint: command not found"))
+             (from-proxy t))))))
+
+(def ^:private fails-initialize
+  (fn [_ {:strs [id method]}]
+    (when (= "initialize" method)
+      [(lsp/error-response id -32603 "no Gemfile")])))
+
+(deftest telling-a-backend-that-failed-initialize-to-exit
+  (let [t (start :server-types #{"ruby"} :respond fails-initialize)]
+    (start-ruby! t)
+    (is (eventually #(seq (received t ["ruby" "api"] "exit"))))))
+
+(deftest retrying-failed-backends
+  (testing "that failed to start, on a didOpen at least 30 s later"
+    (let [t (start :server-types #{"ruby"} :respond fails-initialize)
+          initializes #(count (received t ["ruby" "api"] "initialize"))]
+      (start-ruby! t)
+      (is (= 1 (get-in (from-proxy t) ["params" "type"])))
+      (swap! (:now t) + 29999)
+      (open! t "api/a.rb" "ruby")
+      (is (= 1 (initializes)))
+      (swap! (:now t) inc)
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 (initializes))))))
+  (testing "that stopped, on a didOpen at least 30 s later"
+    (let [t (start :server-types #{"ruby"})
+          opens #(count (received t ["ruby" "api"] "textDocument/didOpen"))]
+      (start-ruby! t)
+      (is (eventually #(= 1 (opens))))
+      (stop-backend! t ["ruby" "api"])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (swap! (:now t) + 29999)
+      (open! t "api/a.rb" "ruby")
+      (is (= 1 (opens)))
+      (swap! (:now t) inc)
+      (open! t "api/a.rb" "ruby")
+      (is (eventually #(= 2 (opens)))))))
+
+(deftest telling-the-user-about-a-backend-at-most-once-a-minute
+  (let [t (start :server-types #{"ruby"})
+        logged (atom [])
+        previous-writer (log/set-writer! #(swap! logged conj %))
+        stops (fn [] (count (filter #(str/includes? % "ruby in api stopped") @logged)))
+        opens #(count (received t ["ruby" "api"] "textDocument/didOpen"))
+        start-and-stop! (fn []
+                          (let [opened (opens)
+                                stopped (stops)]
+                            (open! t "api/a.rb" "ruby")
+                            (is (eventually #(= (inc opened) (opens))))
+                            (stop-backend! t ["ruby" "api"])
+                            (is (eventually #(= (inc stopped) (stops))))))]
+    (try
+      (initialize! t {})
+      (start-and-stop!)
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (testing "logs without showing a message within the minute"
+        (swap! (:now t) + 30000)
+        (start-and-stop!)
+        (is (nil? (.poll (:out t) 0 TimeUnit/MILLISECONDS))))
+      (testing "shows one once the minute has passed"
+        (swap! (:now t) + 30000)
+        (start-and-stop!)
+        (is (= 2 (get-in (from-proxy t) ["params" "type"]))))
+      (finally
+        (log/set-writer! previous-writer)))))

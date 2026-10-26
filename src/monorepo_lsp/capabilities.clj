@@ -5,7 +5,8 @@
   A client says, feature by feature, whether it accepts registrations after
   startup. Those features are registered once a backend that offers them has
   started, with one registration for each feature. The rest are announced in
-  the proxy's own `initialize` reply."
+  the proxy's own `initialize` reply, as are the features of any backends
+  started before it."
   (:require [clojure.string :as str])
   (:import (java.net URI)))
 
@@ -123,17 +124,48 @@
    "change" 1
    "save" true})
 
+(declare merged-options)
+
+(defn- conflicting-legends?
+  "Whether `backends` would number semantic tokens differently. The client
+  decodes every file's tokens with the one legend it was given."
+  [f backends]
+  (and (= "textDocument/semanticTokens" (:method f))
+       (< 1 (count (distinct (keep #(get-in (first %) [(:provider f) "legend"]) backends))))))
+
+(defn- static-options
+  "What to announce for `f` at startup. That is the combined options of the
+  `backends` that offer it, if any, or else the feature's stand-in when the
+  client can't register it later."
+  [client-caps backends f]
+  (if-let [options (when-not (conflicting-legends? f backends)
+                     (merged-options f backends))]
+    (dissoc options "documentSelector")
+    (when-not (registrable? client-caps f)
+      (:static f))))
+
 (defn initialize-result
   "The proxy's answer to the client's `initialize`, given the client's
-  capabilities."
-  [client-caps]
-  {"capabilities" (into {"textDocumentSync" sync-everything
-                         "positionEncoding" "utf-16"
-                         (:provider workspace-symbol) (:static workspace-symbol)}
-                        (for [f features
-                              :when (and (some? (:static f)) (not (registrable? client-caps f)))]
-                          [(:provider f) (:static f)]))
-   "serverInfo" {"name" "monorepo-lsp"}})
+  capabilities and the backends that started before it answered. `backends`
+  are pairs as `registrations` takes them."
+  ([client-caps] (initialize-result client-caps []))
+  ([client-caps backends]
+   {"capabilities" (into {"textDocumentSync" sync-everything
+                          "positionEncoding" "utf-16"
+                          (:provider workspace-symbol) (:static workspace-symbol)}
+                         (for [f features
+                               :let [options (static-options client-caps backends f)]
+                               :when (some? options)]
+                           [(:provider f) options]))
+    "serverInfo" {"name" "monorepo-lsp"}}))
+
+(defn announced-methods
+  "The methods of the features that the server capabilities `caps`, from
+  `initialize-result`, announce. These are never registered later."
+  [caps]
+  (set (for [f features
+             :when (contains? caps (:provider f))]
+         (:method f))))
 
 (defn- merge-option
   "One backend's value for a registration option combined with another's, from
@@ -146,6 +178,19 @@
     (and (boolean? a) (boolean? b)) (or a b)
     :else a))
 
+(defn- merged-options
+  "The options for `f` that combine those of every one of `backends` that
+  offers it, with a document selector covering all of their files, or nil if
+  none offers it."
+  [f backends]
+  (let [offering (filter #(offers? (first %) f) backends)]
+    (when (seq offering)
+      (cond-> (apply merge-with merge-option (for [[server-caps] offering
+                                                   :let [o (get server-caps (:provider f))]]
+                                               (if (map? o) o {})))
+        (document-feature? f)
+        (assoc "documentSelector" (vec (distinct (mapcat second offering))))))))
+
 (defn registrations
   "The registrations for `client/registerCapability`, one for each feature
   that the client accepts registrations for and any of `backends` offers.
@@ -155,16 +200,11 @@
   [client-caps backends]
   (vec (for [f features
              :when (registrable? client-caps f)
-             :let [offering (filter #(offers? (first %) f) backends)]
-             :when (seq offering)
-             :let [options (for [[server-caps] offering
-                                 :let [o (get server-caps (:provider f))]]
-                             (if (map? o) o {}))]]
+             :let [options (merged-options f backends)]
+             :when options]
          {"id" (:method f)
           "method" (:method f)
-          "registerOptions" (cond-> (apply merge-with merge-option options)
-                              (document-feature? f)
-                              (assoc "documentSelector" (vec (distinct (mapcat second offering)))))})))
+          "registerOptions" options})))
 
 (defn- uri-path [uri]
   (when (string? uri)

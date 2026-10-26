@@ -9,6 +9,7 @@
             [monorepo-lsp.log :as log]
             [monorepo-lsp.log-test]
             [monorepo-lsp.lsp-test]
+            [monorepo-lsp.main-test]
             [monorepo-lsp.merge-test]
             [monorepo-lsp.origin-test]
             [monorepo-lsp.paths-test]

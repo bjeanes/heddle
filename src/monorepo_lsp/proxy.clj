@@ -24,20 +24,34 @@
   - :send, a function to call with each message for the client;
   - :connect, the connector for backends (see monorepo-lsp.backend);
   - :server-types, the set of server types to serve, or nil to serve all;
+  - :eager, whether to start every backend when the client initializes, and
+    wait up to :eager-timeout-ms (by default `eager-timeout-ms`) for them
+    before answering;
   - :cwd, where to look for the config if no workspace root the client names
     has one;
   - :exit, a function to call with the exit code once the client sends
-    `exit`."
+    `exit`;
+  - :clock, optionally, a function that returns the time in milliseconds."
   [opts]
   (assoc opts :state (atom {:backends {}
                             :documents {}
                             :last-id 0
                             :to-client {}
                             :progress {}
-                            :registered {}})))
+                            :registered {}
+                            :reported {}})))
 
-(defn- send-client! [proxy msg]
-  ((:send proxy) msg))
+(defn- now-ms [proxy]
+  ((or (:clock proxy) #(System/currentTimeMillis))))
+
+(defn- send-client!
+  "Sends `msg` to the client, or holds it under :held while the proxy is yet
+  to answer `initialize`."
+  [proxy msg]
+  (locking (:state proxy)
+    (if (:held @(:state proxy))
+      (swap! (:state proxy) update :held conj msg)
+      ((:send proxy) msg))))
 
 (defn- uri->path [uri]
   (try
@@ -76,29 +90,87 @@
           :when (= origin (:origin request))]
     (send-client! proxy (lsp/notification "$/cancelRequest" {"id" id}))))
 
+(def ^:private message-type {:error 1 :warning 2})
+
+(defn- show-message!
+  "Shows `message` to the user and logs it."
+  [proxy type message]
+  (send-client! proxy (lsp/notification "window/showMessage" {"type" (message-type type)
+                                                              "message" message}))
+  (log/info message))
+
 ;; Initialization
 
-(defn- config-root
-  "The first directory with a config: the workspace roots the client named in
+(defn- config-roots
+  "Where to look for a config: the workspace roots the client named in
   `initialize`, then `cwd`."
   [params cwd]
-  (let [roots (concat (keep uri->path (cons (get params "rootUri")
-                                            (map #(get % "uri") (get params "workspaceFolders"))))
-                      [cwd])]
-    (or (first (filter #(.exists (io/file % config/file-name)) roots))
-        (throw (ex-info (str "no " config/file-name " in " (str/join " or " (distinct roots))) {})))))
+  (distinct (concat (keep uri->path (cons (get params "rootUri")
+                                          (map #(get % "uri") (get params "workspaceFolders"))))
+                    [cwd])))
+
+(def ^:private no-config {"servers" {} "scopes" {} "runners" {}})
+
+(defn- load-config
+  "The repo and its config, from the first of `roots` with a config. Without a
+  usable config, the proxy serves nothing, and :problem has the type and text
+  of a message for the user."
+  [roots]
+  (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
+    (try
+      {:repo repo :config (config/read-config repo)}
+      (catch Exception e
+        {:repo repo
+         :config no-config
+         :problem [:error (str (ex-message e) "\nmonorepo-lsp is serving nothing until the config is fixed and it restarts.")]}))
+    {:repo (first roots)
+     :config no-config
+     :problem [:warning (str "There's no " config/file-name " in " (str/join " or " roots) "."
+                             "\nmonorepo-lsp is serving nothing until there is one and it restarts.")]}))
+
+(declare start-backend! ready-backends register! when-all-ready)
+
+(def ^:private eager-timeout-ms 30000)
+
+(defn- start-every-backend!
+  "Starts a backend for every server type the proxy serves in every scope, and
+  waits until they have all started or failed, or the timeout runs out."
+  [proxy]
+  (let [{:keys [config]} @(:state proxy)
+        only (:server-types proxy)
+        started (promise)]
+    (when-all-ready (doall (for [[scope entries] (sort-by key (get config "scopes"))
+                                 server-type (sort (keys entries))
+                                 :when (or (nil? only) (contains? only server-type))]
+                             (start-backend! proxy [server-type scope])))
+      #(deliver started true))
+    (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
+
+(defn- answer-initialize!
+  "Sends the client the answer to `initialize`, then everything held back
+  while the proxy was yet to send it."
+  [proxy response]
+  (locking (:state proxy)
+    (let [[old] (swap-vals! (:state proxy) dissoc :held)]
+      ((:send proxy) response)
+      (run! (:send proxy) (:held old)))))
 
 (defn- initialize! [proxy {:strs [id params]}]
-  (try
-    (let [repo (config-root params (:cwd proxy))
-          config (config/read-config repo)]
+  (let [{:keys [repo config problem]} (load-config (config-roots params (:cwd proxy)))
+        eager? (and (:eager proxy) (not problem))]
+    (when-not problem
       (doseq [name (:server-types proxy)
               :when (not (contains? (get config "servers") name))]
-        (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name)))
-      (swap! (:state proxy) assoc :repo repo :config config :client-params params)
-      (send-client! proxy (lsp/response id (capabilities/initialize-result (get params "capabilities")))))
-    (catch Exception e
-      (send-client! proxy (lsp/error-response id -32603 (ex-message e))))))
+        (log/info "there's no server type" (pr-str name) "in" (str repo "/" config/file-name))))
+    (swap! (:state proxy) assoc :repo repo :config config :client-params params :held (when eager? []))
+    (when eager?
+      (start-every-backend! proxy))
+    (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
+      (swap! (:state proxy) assoc :announced (capabilities/announced-methods (get result "capabilities")))
+      (answer-initialize! proxy (lsp/response id result)))
+    (register! proxy)
+    (when-let [[type message] problem]
+      (show-message! proxy type message))))
 
 ;; Backends
 
@@ -130,6 +202,14 @@
     (update-in ["executeCommandProvider" "commands"]
                #(mapv (partial origin/qualify-command (:server-type b)) %))))
 
+(defn- ready-backends
+  "The server capabilities and document selector of each running backend that
+  has started, in priority order."
+  [proxy]
+  (for [b (running-backends proxy)
+        :when (backend/ready? b)]
+    [(server-capabilities b) (document-selector b)]))
+
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
   refuses."
@@ -144,14 +224,15 @@
   covering all of their files. Some clients, such as VS Code, ask every
   registration that matches a file, so a registration per backend would bring
   the proxy each request several times. When a registration has to change, the
-  proxy unregisters it and registers it again."
+  proxy unregisters it and registers it again. Features announced in the
+  answer to `initialize` aren't registered, and nothing is until it's sent."
   [proxy]
   (locking (:state proxy)
-    (let [{:keys [client-params registered]} @(:state proxy)
-          wanted (capabilities/registrations (get client-params "capabilities")
-                                             (for [b (running-backends proxy)
-                                                   :when (backend/ready? b)]
-                                               [(server-capabilities b) (document-selector b)]))
+    (let [{:keys [client-params registered announced held]} @(:state proxy)
+          wanted (when-not held
+                   (remove #(contains? announced (get % "method"))
+                           (capabilities/registrations (get client-params "capabilities")
+                                                       (ready-backends proxy))))
           changed (remove #(= % (get registered (get % "method"))) wanted)
           replaced (filter #(contains? registered (get % "method")) changed)]
       (swap! (:state proxy) update :registered into (map (juxt #(get % "method") identity)) changed)
@@ -176,7 +257,31 @@
                                     ["general" "positionEncodings"] ["utf-16"])
            "trace" (get client-params "trace")})))
 
-(declare from-backend!)
+(defn- describe [{:keys [server-type scope]}]
+  (str server-type " in " (if (= "." scope) "the repo root" scope)))
+
+(defn- elapsed?
+  "Whether `ms` or more have passed between `since` and `now`, or there's no
+  `since`."
+  [since now ms]
+  (or (nil? since) (<= ms (- now since))))
+
+(def ^:private report-interval-ms 60000)
+
+(defn- report!
+  "Shows the user a message about the backend `b`, unless one was shown for its
+  server type and scope in the last `report-interval-ms`, as a backend that
+  keeps failing would otherwise flood them."
+  [proxy b type message]
+  (let [k [(:server-type b) (:scope b)]
+        now (now-ms proxy)
+        due? #(elapsed? (get-in % [:reported k]) now report-interval-ms)
+        [old] (swap-vals! (:state proxy) #(cond-> % (due? %) (assoc-in [:reported k] now)))]
+    (if (due? old)
+      (show-message! proxy type message)
+      (log/info message))))
+
+(declare from-backend! failed!)
 
 (defn- start-backend! [proxy [server-type scope :as k]]
   (let [{:keys [config repo client-params]} @(:state proxy)
@@ -184,12 +289,22 @@
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
     (swap! (:state proxy) assoc-in [:backends k] b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
-    (backend/when-ready b #(register! proxy))
+    (backend/when-ready b #(if (backend/ready? b)
+                             (register! proxy)
+                             (do (failed! proxy b :error (str "failed to start: " (backend/error b)))
+                                 (future (backend/exit! b 2000)))))
     b))
 
-(defn- backend-for! [proxy k]
-  (or (get-in @(:state proxy) [:backends k])
-      (start-backend! proxy k)))
+(def ^:private retry-interval-ms 30000)
+
+(defn- backend-for!
+  "The backend for `k`, a [server-type scope], started if it isn't running.
+  Returns nil if it failed within the last `retry-interval-ms`."
+  [proxy k]
+  (let [{:keys [backends failures]} @(:state proxy)]
+    (cond
+      (contains? backends k) (get backends k)
+      (elapsed? (get-in failures [k :at]) (now-ms proxy) retry-interval-ms) (start-backend! proxy k))))
 
 (defn- to-client!
   "Translates a payload from the backend `b` for the client, after fetching
@@ -230,13 +345,33 @@
           :when (contains? for-file (:backend-id b))]
     (publish-diagnostics! proxy b {"uri" uri "diagnostics" []})))
 
-(defn- stopped! [proxy b]
+(defn- failed!
+  "Replaces the backend `b`, which failed to start or stopped, with a record of
+  why and when under :failures, withdraws its diagnostics and tells the user.
+  `what-happened` follows the backend's description in the message."
+  [proxy b type what-happened]
+  (let [k [(:server-type b) (:scope b)]
+        now (now-ms proxy)
+        message (str (describe b) " " what-happened ". Opening one of its files will start it again, once "
+                     (quot retry-interval-ms 1000) " s have passed.")
+        [old] (swap-vals! (:state proxy)
+                          (fn [state]
+                            (cond-> state
+                              (identical? b (get-in state [:backends k]))
+                              (-> (update :backends dissoc k)
+                                  (assoc-in [:failures k] {:message message :at now})))))]
+    (when (identical? b (get-in old [:backends k]))
+      (clear-diagnostics! proxy b)
+      (when-not (or (:shut-down old) (:exiting old))
+        (report! proxy b type message)))))
+
+(defn- stopped!
+  "Handles the backend `b` stopping. A backend that stops while starting has
+  failed to start instead, which is handled once it settles."
+  [proxy b]
   (log/info (:backend-id b) "stopped")
-  (swap! (:state proxy) update :backends
-         (fn [backends]
-           (let [k [(:server-type b) (:scope b)]]
-             (cond-> backends (identical? b (get backends k)) (dissoc k)))))
-  (clear-diagnostics! proxy b))
+  (when (= :exited (backend/status b))
+    (failed! proxy b :warning (str "stopped" (some->> (backend/exit-code b 1000) (str " with exit code "))))))
 
 (defn- qualify
   "An ID that the backend `b` chose for the client, made unique among all
@@ -364,8 +499,10 @@
 (defn- open! [proxy {:strs [textDocument] :as params}]
   (let [{:strs [uri languageId]} textDocument]
     (swap! (:state proxy) assoc-in [:documents uri] {:language languageId})
-    (doseq [k (handlers proxy uri languageId)]
-      (notify-backend! (backend-for! proxy k) "textDocument/didOpen" params))))
+    (doseq [k (handlers proxy uri languageId)
+            :let [b (backend-for! proxy k)]
+            :when b]
+      (notify-backend! b "textDocument/didOpen" params))))
 
 (defn- document-notification! [proxy method params]
   (let [uri (get-in params ["textDocument" "uri"])]
@@ -421,14 +558,42 @@
                                       :else
                                       (lsp/response id (result-for-client b method (get response "result"))))))))
 
+(def ^:private request-failed -32803)
+
+(defn- failures
+  "Why each of the backends `ks`, as [server-type scope], failed, for those
+  that aren't running because they did."
+  [{:keys [backends failures]} ks]
+  (keep #(when-not (contains? backends %) (get-in failures [% :message])) ks))
+
+(defn- failed-response
+  "An error answering the request `id`, which an agent sees in its tool's
+  result, with why the backends that would have answered it failed."
+  [id reasons]
+  (lsp/error-response id request-failed (str/join "\n" reasons)))
+
+(defn- answer-unanswered!
+  "Answers a request that no running backend can, with an empty result. If no
+  backend that would handle the request's file is running, and some have
+  failed, the answer is an error saying why instead."
+  [proxy {:strs [id method params]}]
+  (let [state @(:state proxy)
+        uri (get-in params ["textDocument" "uri"])
+        ks (handlers proxy uri (get-in state [:documents uri :language]))
+        reasons (when (not-any? #(contains? (:backends state) %) ks)
+                  (failures state ks))]
+    (send-client! proxy (if (seq reasons)
+                          (failed-response id reasons)
+                          (lsp/response id (capabilities/empty-result method))))))
+
 (defn- route-request!
   "Sends a request to the first of the backends `b` and `more`, in priority
-  order, that offers the request's feature, or answers it with an empty result
-  if none does. A request for a feature the proxy doesn't know about goes to
-  the first backend that has started."
-  [proxy {:strs [id method] :as msg} [b & more]]
+  order, that offers the request's feature, or answers it with
+  `answer-unanswered!` if none does. A request for a feature the proxy doesn't
+  know about goes to the first backend that has started."
+  [proxy {:strs [method] :as msg} [b & more]]
   (if (nil? b)
-    (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+    (answer-unanswered! proxy msg)
     (backend/when-ready b
       #(let [feature (capabilities/feature method)]
          (if (and (backend/ready? b)
@@ -486,7 +651,7 @@
                                           (capabilities/offers? (backend/capabilities b) feature)))
                              backends)]
        (if (empty? offering)
-         (send-client! proxy (lsp/response id (capabilities/empty-result method)))
+         (answer-unanswered! proxy msg)
          (ask-all! offering msg
                    (fn [responses]
                      (send-client! proxy (combined-response id method offering responses))))))))
@@ -517,14 +682,25 @@
     (or (last (sort-by (comp count :scope) containing))
         (first running))))
 
+(defn- not-running-response
+  "The answer to the request `id` for a command of `server-type`, which has no
+  running backend to run it."
+  [proxy id server-type]
+  (let [state @(:state proxy)
+        reasons (failures state (sort (filter #(= server-type (first %)) (keys (:failures state)))))]
+    (if (seq reasons)
+      (failed-response id reasons)
+      (lsp/error-response id -32603 (str "no " server-type " backend is running")))))
+
 (defn- execute-command!
   "Sends `workspace/executeCommand` to a backend of the server type that the
-  command is qualified with, as the command ID the backend chose."
+  command is qualified with, as the command ID the backend chose. If none is
+  running, the answer is an error saying why."
   [proxy {:strs [id params] :as msg}]
   (let [server-types (keys (get-in @(:state proxy) [:config "servers"]))
         [server-type command] (origin/command-origin server-types (get params "command"))
         b (when server-type (command-backend proxy server-type (get params "arguments")))
-        not-running #(send-client! proxy (lsp/error-response id -32603 (str "no " server-type " backend is running")))]
+        not-running #(send-client! proxy (not-running-response proxy id server-type))]
     (cond
       (nil? server-type)
       (send-client! proxy (lsp/error-response id -32602 (str "unknown command " (pr-str (get params "command")))))
@@ -570,6 +746,7 @@
       (send-client! proxy (lsp/response id nil)))))
 
 (defn- exit! [proxy]
+  (swap! (:state proxy) assoc :exiting true)
   (run! deref (mapv #(future (backend/exit! % 2000)) (vals (:backends @(:state proxy)))))
   ((:exit proxy) (if (:shut-down @(:state proxy)) 0 1)))
 

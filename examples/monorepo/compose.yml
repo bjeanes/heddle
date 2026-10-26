@@ -1,0 +1,21 @@
+services:
+  api:
+    build: services/api
+    volumes:
+      - ./services/api:/app
+    init: true
+    command: sleep infinity
+
+  billing:
+    build: services/billing
+    volumes:
+      - ./services/billing:/app
+    init: true
+    command: sleep infinity
+
+  lints:
+    build: lints
+    volumes:
+      - .:/src
+    init: true
+    command: sleep infinity
