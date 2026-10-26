@@ -45,3 +45,30 @@
            (merge/combine "textDocument/codeLens" [["x" nil] ["y" [{"title" "b"}]]]))))
   (testing "is nil when no backend has an answer"
     (is (nil? (merge/combine "textDocument/references" [["x" nil] ["y" nil]])))))
+
+(deftest combining-the-same-things
+  (let [a {"uri" "file:///a.rb" "range" {"start" {"line" 1 "character" 0} "end" {"line" 1 "character" 3}}}
+        b (assoc-in a ["range" "start" "line"] 2)]
+    (testing "keeps the first of each location"
+      (is (= [a b] (merge/combine "textDocument/references" [["x" [a]] ["y" [a b]]])))))
+  (let [location {"uri" "file:///shared/gem.rb"
+                  "range" {"start" {"line" 1 "character" 0} "end" {"line" 1 "character" 3}}}
+        symbol {"name" "Gem" "kind" 5 "location" location}
+        x {"heddle/backend" "x"}
+        y {"heddle/backend" "y"}]
+    (testing "keeps the first of each symbol, whatever its container or data"
+      (is (= [(assoc symbol "containerName" "A" "data" x)]
+             (merge/combine "workspace/symbol"
+                            [["ruby-lsp" [(assoc symbol "containerName" "A" "data" x)]]
+                             ["ruby-lsp" [(assoc symbol "containerName" "B" "data" y)]]]))))
+    (testing "keeps symbols that differ in name, kind or location"
+      (let [others [(assoc symbol "name" "Other")
+                    (assoc symbol "kind" 12)
+                    (assoc-in symbol ["location" "uri"] "file:///other.rb")
+                    (assoc-in symbol ["location" "range" "start" "line"] 2)]]
+        (is (= (into [symbol] others)
+               (merge/combine "workspace/symbol" [["x" [symbol]] ["y" (conj others symbol)]])))))
+    (testing "keeps every symbol whose location has no range"
+      (let [in-file (update symbol "location" dissoc "range")]
+        (is (= [in-file in-file]
+               (merge/combine "workspace/symbol" [["x" [in-file]] ["y" [in-file]]])))))))

@@ -20,25 +20,41 @@
       forEachSystem = f: nixpkgs.lib.genAttrs (builtins.attrNames joltReleases) (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forEachSystem (pkgs: {
-        jolt =
-          let
-            release = joltReleases.${pkgs.stdenv.hostPlatform.system};
-          in
-          pkgs.stdenvNoCC.mkDerivation {
-            pname = "jolt";
-            version = joltVersion;
-            src = pkgs.fetchurl {
-              url = "https://github.com/jolt-lang/jolt/releases/download/v${joltVersion}/jolt-v${joltVersion}-${release.platform}.tar.gz";
-              inherit (release) sha256;
+      packages = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          vim-plugin = pkgs.vimUtils.buildVimPlugin {
+            pname = "heddle";
+            version = "0-unstable";
+            src = nixpkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = ./lua;
             };
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.ncurses ];
-            installPhase = ''
-              install -Dm755 jolt $out/bin/jolt
-            '';
           };
-      });
+        }
+        // nixpkgs.lib.optionalAttrs (joltReleases ? ${system}) {
+          jolt =
+            let
+              release = joltReleases.${system};
+            in
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "jolt";
+              version = joltVersion;
+              src = pkgs.fetchurl {
+                url = "https://github.com/jolt-lang/jolt/releases/download/v${joltVersion}/jolt-v${joltVersion}-${release.platform}.tar.gz";
+                inherit (release) sha256;
+              };
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
+              buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.ncurses ];
+              installPhase = ''
+                install -Dm755 jolt $out/bin/jolt
+              '';
+            };
+        }
+      );
 
       devShells = forEachSystem (
         pkgs:

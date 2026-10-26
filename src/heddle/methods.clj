@@ -28,6 +28,7 @@
     :resolves  ; the request whose answer holds the items this one resolves
     :normalise ; how to put one backend's answer into the shape the proxy handles
     :combine   ; how to combine answers, for a request sent to every backend offering the feature
+    :dedupe-by ; the paths to the values that identify a combined item; the proxy keeps the first item with each
     :items     ; the path to the answer's items, which are marked with their backend; :each is every element
     :commands? ; whether the answer can hold commands
     :empty})   ; the answer when no backend offers the feature, if not null
@@ -63,7 +64,8 @@
 
    "textDocument/references"
    {:provider "referencesProvider" :client ["textDocument" "references"] :static true
-    :combine :concat}
+    :combine :concat
+    :dedupe-by [["uri"] ["range"]]}
 
    "textDocument/documentHighlight"
    {:provider "documentHighlightProvider" :client ["textDocument" "documentHighlight"] :static true}
@@ -186,6 +188,7 @@
    "workspace/symbol"
    {:provider "workspaceSymbolProvider" :static {"resolveProvider" true}
     :combine :concat
+    :dedupe-by [["name"] ["kind"] ["location" "uri"] ["location" "range"]]
     :items [:each]}
 
    "workspaceSymbol/resolve"

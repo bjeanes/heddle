@@ -35,15 +35,31 @@
       (seq related) (assoc "relatedDocuments" (into {} (for [[uri rs] related]
                                                          [uri (full-report rs)]))))))
 
+(defn- distinct-at
+  "`items` without those whose values at `paths` match an earlier item's. An
+  item missing a value at any of `paths` is kept, since it can't be told apart
+  from a different item."
+  [paths items]
+  (first (reduce (fn [[kept seen] item]
+                   (let [k (mapv #(get-in item %) paths)]
+                     (cond
+                       (some nil? k) [(conj kept item) seen]
+                       (contains? seen k) [kept seen]
+                       :else [(conj kept item) (conj seen k)])))
+                 [[] #{}]
+                 items)))
+
 (defn combine
   "One answer to the request `method` from `answers`, which are pairs of a
   server type and its backend's result, in priority order. Each result has
   been through heddle.normalise. Nil if every result is."
   [method answers]
-  (let [results (keep second answers)]
+  (let [results (keep second answers)
+        {:keys [combine dedupe-by]} (get methods/table method)]
     (when (seq results)
-      (case (get-in methods/table [method :combine])
+      (case combine
         :completions (completions results)
         :code-actions (code-actions answers)
         :diagnostic-reports (diagnostic-reports results)
-        :concat (vec (apply concat results))))))
+        :concat (cond->> (vec (apply concat results))
+                  dedupe-by (distinct-at dedupe-by))))))
