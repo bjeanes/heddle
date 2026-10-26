@@ -127,6 +127,19 @@
         (is (= {} (fetched/fetch! b [file])))
         (is (= "new\n" (slurp copy)))))))
 
+(deftest translating-for-the-client
+  (let [server (temp-dir)
+        file (str server "/x.rb")
+        b (backend cat-file)
+        copy (str (cache-of b) file)]
+    (spit file "x\n")
+    (testing "rewrites a file only the backend can see to its copy, after fetching it"
+      (is (= {"uri" (str "file://" copy)} (fetched/to-client! b {"uri" (str "file://" file)})))
+      (is (= "x\n" (slurp copy))))
+    (testing "translates paths as heddle.translate does"
+      (is (= {"uri" (str "file://" (get-in b [:spec :repo]) "/a.rb")}
+             (fetched/to-client! b {"uri" "file:///src/a.rb"}))))))
+
 (deftest reading-from-the-scope
   (let [b (backend ["pwd" "-P"])]
     (fetched/fetch! b ["/usr/x.rb"])

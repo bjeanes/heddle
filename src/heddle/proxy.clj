@@ -361,14 +361,6 @@
       (contains? backends k) (get-in backends [k :backend])
       (elapsed? (get-in failures [k :at]) (now-ms proxy) retry-interval-ms) (start-backend! proxy k))))
 
-(defn- to-client!
-  "Translates a payload from the backend `b` for the client, after fetching
-  any files it refers to that only the backend can see."
-  [b payload]
-  (doseq [[file problem] (fetched/fetch! b (translate/fetched-files (:spec b) payload))]
-    (log/info "couldn't fetch" file "from" (:backend-id b) "-" problem))
-  (translate/to-client (:spec b) payload))
-
 (defn- set-diagnostics
   "`by-file`, which holds each backend's latest diagnostics for each file,
   with the backend `backend-id`'s diagnostics for `uri` replaced."
@@ -490,7 +482,7 @@
     (stopped! proxy b)
 
     (contains? msg "id")
-    (request-client! proxy method (cond->> (to-client! b (request-params proxy b method params))
+    (request-client! proxy method (cond->> (fetched/to-client! b (request-params proxy b method params))
                                     (= "client/registerCapability" method) (limit-selectors proxy b))
                      [(:backend-id b) id]
                      (fn [response]
@@ -500,13 +492,13 @@
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])
 
     (= "$/progress" method)
-    (send-client! proxy (lsp/notification method (to-client! b (progress-params proxy b params))))
+    (send-client! proxy (lsp/notification method (fetched/to-client! b (progress-params proxy b params))))
 
     (= "textDocument/publishDiagnostics" method)
-    (publish-diagnostics! proxy b (to-client! b params))
+    (publish-diagnostics! proxy b (fetched/to-client! b params))
 
     :else
-    (send-client! proxy (lsp/notification method (to-client! b params)))))
+    (send-client! proxy (lsp/notification method (fetched/to-client! b params)))))
 
 ;; Documents
 
@@ -643,7 +635,7 @@
   "The result of the request `method` from the backend `b`, ready for the
   client."
   [b method result]
-  (let [result (cond->> (to-client! b (normalise/result method result))
+  (let [result (cond->> (fetched/to-client! b (normalise/result method result))
                  (get-in methods/table [method :commands?]) (origin/qualify-commands (server-type-of b)))]
     (origin/mark-result method (:backend-id b) result)))
 
@@ -656,7 +648,7 @@
                                       (lsp/error-response id -32603 (str (server-type-of b) " stopped before answering"))
 
                                       (contains? response "error")
-                                      (assoc (to-client! b response) "id" id)
+                                      (assoc (fetched/to-client! b response) "id" id)
 
                                       :else
                                       (lsp/response id (result-for-client b method (get response "result"))))))))

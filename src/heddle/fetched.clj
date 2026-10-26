@@ -3,9 +3,11 @@
   DESIGN.md."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [heddle.log :as log]
             [heddle.paths :as paths]
             [heddle.process :as process]
-            [heddle.spec :as spec])
+            [heddle.spec :as spec]
+            [heddle.translate :as translate])
   (:import (java.io File)
            (java.util UUID)))
 
@@ -111,3 +113,13 @@
               :let [problem (fetch-one! backend file)]
               :when problem]
           [file problem])))
+
+(defn to-client!
+  "Translates the payload `v` from the backend `b` for the client, after
+  fetching any files it refers to that only the backend can see. If a file
+  can't be fetched, it is logged. The payload still refers to its copy in the
+  cache."
+  [{:keys! [spec backend-id] :as b} v]
+  (doseq [[file problem] (fetch! b (translate/fetched-files spec v))]
+    (log/info "couldn't fetch" file "from" backend-id "-" problem))
+  (translate/to-client spec v))
