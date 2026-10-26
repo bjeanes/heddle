@@ -22,7 +22,7 @@ to pass between, much as heddle picks out the servers that match each file.
 [docs/adr](docs/adr/README.md) records the decisions behind it, and what else
 was considered.
 
-## What it's for
+## Why you might use it
 
 - **A multi-service monorepo.** Each service's servers run in that service's
   own container, with the language and gem versions it actually uses. Two Ruby
@@ -49,11 +49,20 @@ was considered.
   environment. You get the versions the project pins, instead of whatever
   happens to be installed globally.
 
-## Status
+## Why you might not
 
-This is an early prototype. It has been tried with ruby-lsp and RuboCop
-running in Docker Compose on macOS, from Neovim 0.12 and from the session
-driver in `dev/`. Expect rough edges.
+- **It's brand new.** heddle is an early prototype. So far it has only been
+  tried with ruby-lsp and RuboCop running in Docker Compose on macOS, from
+  Neovim 0.12 and from the session driver in `dev/`. Expect rough edges.
+- **It was built with AI.** Most of the code was written by Claude Code, an
+  AI coding agent, with me directing the design. It has tests, but it hasn't
+  had the scrutiny of a project that people have relied on for years.
+- **Your current setup may be fine.** If your editor already starts the
+  servers you need on the host, and they work, heddle adds a process between
+  your editor and those servers for little in return. It's for the
+  scenarios above.
+- **It's one more layer to debug.** When something goes wrong, the cause
+  could be the server, the runner that starts it, or heddle itself.
 
 ## Installing it
 
@@ -156,11 +165,13 @@ directory, `languages` only prints the languages of those. If one of them isn't
 in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
 
-If there's no `.heddle.toml`, it's invalid, or no scope in it starts a server
-type, `serve` still answers the editor, shows it a message saying what's wrong,
-and serves nothing. Run by hand at a terminal, though, it prints the problem
-to stderr and exits 1 instead of waiting on stdin. It does the same there if
-none of the server types named after `serve` is in the config.
+If there's no `.heddle.toml`, `serve` fails the editor's `initialize` request
+with an error saying where it looked. If the config is invalid, or no scope in
+it starts a server type, `serve` still answers the editor, shows it a message
+saying what's wrong, and serves nothing. Run by hand at a terminal, though, it
+prints the problem to stderr and exits 1 instead of waiting on stdin. It does
+the same there if none of the server types named after `serve` is in the
+config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
 through a server type, a scope on the host, a scope in a Compose service, a

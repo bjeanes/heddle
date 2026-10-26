@@ -131,21 +131,25 @@ read = ['cat', '{read:file}']
        (= {} @(:received t))))
 
 (deftest without-a-usable-config
-  (testing "warns that there's no config, in a message and on stderr, and serves nothing"
+  (testing "fails `initialize` if there's no config, saying so on stderr, and sends nothing else"
     (let [t (start)
           cwd (get-in t [:proxy :cwd])
-          warning (str "There's no .heddle.toml in /nowhere or " cwd ".\n"
-                       "heddle is serving nothing until there is one and it restarts.")
+          reason (str "There's no .heddle.toml in /nowhere or " cwd ".")
           logged (atom [])
           previous-writer (log/set-writer! #(swap! logged conj %))]
       (try
         (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
         (finally
           (log/set-writer! previous-writer)))
-      (is (contains? (from-proxy t) "result"))
-      (is (= (shown 2 warning) (from-proxy t)))
-      (is (= [(str "heddle: " warning)] @logged))
-      (is (serves-nothing? t))))
+      (is (= (lsp/error-response 0 -32803 reason {"retry" false}) (from-proxy t)))
+      (is (= [(str "heddle: couldn't initialize - " reason)] @logged))
+      (open! t "api/a.rb" "ruby")
+      (client! t (lsp/request 1 "textDocument/hover" {"textDocument" {"uri" (uri t "api/a.rb")}}))
+      (is (= -32002 (get-in (from-proxy t) ["error" "code"])))
+      (client! t (lsp/notification "exit" nil))
+      (is (= 1 (deref (:exit-code t) 2000 nil)))
+      (is (nil? (.poll (:out t))))
+      (is (= {} @(:received t)))))
   (testing "warns that no scope starts a server type, and serves nothing"
     (let [t (start :config "[servers.ruby]\nlanguages = ['ruby']\n")]
       (initialize! t {})

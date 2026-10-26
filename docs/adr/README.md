@@ -22,3 +22,4 @@ record says so instead of guessing.
 | [0010](0010-name-the-project-heddle.md) | Name the project heddle | Accepted |
 | [0011](0011-report-failures-and-retry-after-30-s.md) | Report failures, and retry no sooner than 30 s | Accepted |
 | [0012](0012-route-follow-ups-and-commands-to-their-backend.md) | Route follow-ups and commands to their backend | Accepted |
+| [0013](0013-fail-initialize-only-without-a-config.md) | Fail `initialize` only when there's no config | Accepted |

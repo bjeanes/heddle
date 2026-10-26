@@ -130,12 +130,11 @@
     (deref started (or (:eager-timeout-ms proxy) eager-timeout-ms) nil)))
 
 (defn- start-session!
-  "Starts serving the client that sent `initialize` with `params`. Returns the
-  :result to answer with, and the :messages to show the user afterwards, each
-  as [type message]."
-  [proxy params]
-  (let [{:keys [repo config cache-root problem warnings]} (session/load-config (session/config-roots params (:cwd proxy)))
-        specs (spec/specs config repo cache-root (:server-types proxy))
+  "Starts serving the client that sent `initialize` with `params`, from the
+  repo and config `loaded`. Returns the :result to answer with, and the
+  :messages to show the user afterwards, each as [type message]."
+  [proxy params {:keys [repo config cache-root problem warnings]}]
+  (let [specs (spec/specs config repo cache-root (:server-types proxy))
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
         unknown-warning (when unknown
@@ -162,16 +161,22 @@
 (defn- initialize!
   "Answers `initialize`, which opens the channel to the client. The channel
   opens even if the proxy fails to start serving, with an error as the
-  answer, since what it holds would otherwise never be sent."
+  answer, since what it holds would otherwise never be sent. If no root has a
+  config, the error tells the client not to retry. Retrying would only find
+  none again."
   [proxy {:strs [id params]}]
   (let [{:keys [result messages error]}
         (try
-          (start-session! proxy params)
+          (let [loaded (session/load-config (session/config-roots params (:cwd proxy)))]
+            (if (:repo loaded)
+              (start-session! proxy params loaded)
+              {:error [lsp/request-failed (second (:problem loaded)) {"retry" false}]}))
           (catch Exception e
-            (log/info "couldn't initialize -" (ex-message e))
-            {:error (ex-message e)}))]
+            {:error [lsp/internal-error (ex-message e)]}))]
+    (when-let [[_ message] error]
+      (log/info "couldn't initialize -" message))
     (channel/open! (:channel proxy) (if error
-                                      (lsp/error-response id lsp/internal-error error)
+                                      (apply lsp/error-response id error)
                                       (lsp/response id result)))
     (when-not error
       (register! proxy)

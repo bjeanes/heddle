@@ -69,8 +69,11 @@
 (defn response [id result]
   {"jsonrpc" "2.0" "id" id "result" result})
 
-(defn error-response [id code message]
-  {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}})
+(defn error-response
+  ([id code message]
+   {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}})
+  ([id code message data]
+   (assoc-in (error-response id code message) ["error" "data"] data)))
 
 (defn response?
   "Whether `msg` answers a request, as opposed to being a request or

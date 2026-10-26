@@ -645,16 +645,29 @@ A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
 and scope, and logs the rest.
 
-If the config is missing, invalid, or has no scope that starts a server type,
-the proxy still answers `initialize`, then shows a message saying so, with the
+If the config is invalid, or has no scope that starts a server type, the
+proxy still answers `initialize`, then shows a message saying so, with the
 config's errors. It also logs the message to stderr, as it does every message
 it shows. It then serves nothing until it restarts, answering every request
 with an empty result. Failing `initialize` instead would leave many clients
-retrying the proxy or giving up on it, with the reason only in a log.
+retrying the proxy or giving up on it, with the reason only in a log. Since
+someone wrote that config to use heddle, the message tells them what to fix.
 
-That reasoning only holds for a client, though. A person who runs `heddle` by
-hand in a directory without a usable config would otherwise see nothing at
-all, since the proxy sits waiting for `initialize` on stdin. So, if stdin is a
+If there's no config at all, though, the proxy fails `initialize` with an
+error saying where it looked, and logs it to stderr. Some clients, such as a
+plugin installed for a user, start the proxy in every repo they open, whether
+or not it has a config. If the proxy answered there, the client would leave
+the files it claims to the proxy, which serves nothing. Some of these clients
+never show the user the message either. Failing tells the client that the
+proxy won't serve that repo. The error is `RequestFailed`, with `retry` false
+in its data, since asking again would find no config again. Until the client
+sends `exit` or closes stdin, the proxy then answers any other request with an
+error, as it does before `initialize`. It sends nothing the client didn't ask
+for.
+
+Either way, that only helps a client. A person who runs `heddle` by hand in a
+directory without a usable config would otherwise see nothing at all, since
+the proxy sits waiting for `initialize` on stdin. So, if stdin is a
 terminal, `serve` checks the config in the directory it was started in before
 reading anything. If there's nothing to serve, including when none of the
 server types named after `serve` is in the config, it prints why to stderr,
