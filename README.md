@@ -432,7 +432,9 @@ installed gem, the proxy copies it out with the runner's `read` for you to
 open. It keeps those copies under `<root>/heddle/<repo>/`, where `<root>`
 is the system's temp directory (`TMPDIR`) unless the `cache` table says
 otherwise. `<repo>` is the repo directory's name and a hash of its path, which
-keeps apart the caches of repos sharing a root. Each server refreshes a file
+keeps apart the caches of repos sharing a root. Under it, each copy is at
+`<server type>/<scope>/=/<path on the server>`, such as
+`ruby-lsp/services/api/=/usr/lib/ruby/set.rb`. Each server refreshes a file
 the first time it needs it after starting. A stale copy therefore only lasts
 until then.
 

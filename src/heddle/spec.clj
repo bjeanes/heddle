@@ -17,8 +17,17 @@
   `command` takes them separately."
   (:require [clojure.string :as str]
             [heddle.paths :as paths]
-            [heddle.runner :as runner])
-  (:import (java.net URLEncoder)))
+            [heddle.runner :as runner]))
+
+(def ^:private scope-end
+  "The segment of a cache path between the scope's directories and a fetched
+  file's server path. `segment` never gives it for a scope's directory, which
+  is never empty."
+  "=")
+
+(def ^:private escapes
+  {\/ "=2F"
+   \= "=3D"})
 
 (defn- boot
   "The server type's `boot` table with the scope's values over the top."
@@ -27,21 +36,22 @@
          (get-in scopes [scope server-type])))
 
 (defn- segment
-  "`s` percent-encoded as one path segment. Since `.` and `..` can't name a
-  directory of their own, their dots are encoded too, which URLEncoder doesn't
-  do. The root scope `.` becomes `%2E`."
+  "`s` as one path segment, with each `/` and `=` as `=` and its hex code.
+  Since an empty name or one made only of dots can't name a directory, it gets
+  a leading `=`."
   [s]
-  (let [encoded (URLEncoder/encode ^String s "UTF-8")]
-    (if (re-matches #"\.+" encoded)
-      (str/replace encoded "." "%2E")
-      encoded)))
+  (if (re-matches #"\.*" s)
+    (str "=" s)
+    (str/escape s escapes)))
 
 (defn cache-dir
   "The directory under the repo's cache `root` holding fetched files for the
   `slot`, as a client path. Every backend for the slot uses the same one, in
   any process."
   [root [server-type scope]]
-  (str (str/replace root #"/+$" "") "/" (segment server-type) "/" (segment scope)))
+  (str/join "/" (concat [(str/replace root #"/+$" "") (segment server-type)]
+                        (when-not (= "." scope) (map segment (str/split scope #"/")))
+                        [scope-end])))
 
 (defn spec
   "The spec for the `slot` in a valid config. `repo` is the repo root as a
