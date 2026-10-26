@@ -402,12 +402,32 @@ encoding every backend is guaranteed to accept, the proxy picks it.
 The proxy forwards `didOpen`, `didChange`, `didSave` and `didClose` only to the
 backends that handle the file.
 
-The proxy asks the client for the full contents of a file on every change. As I
-read the spec, a change carrying the full contents is valid whatever kind of
-sync a backend asked for, which spares the proxy from applying edits itself.
-Messages are larger as a result. Applying incremental edits correctly means
-converting UTF-16 offsets into the implementation language's own strings. That
-can come later if message size turns out to matter.
+The proxy asks the client for the full contents of a file on every change, so
+that it always has each open file's text. I had read the spec as allowing a
+change with the full contents whatever kind of sync a backend asked for.
+ruby-lsp disagrees. It asks for incremental sync. When a change arrives
+without a `range`, it fails to apply it and keeps the old text, which it then
+answers every later request from.
+
+So, the proxy sends each backend changes in the form its `textDocumentSync`
+capability asks for:
+
+- A backend that syncs in full gets the file's new contents.
+- A backend that syncs incrementally gets one edit, replacing the whole of the
+  text it last had. The edit's end counts UTF-16 code units, the only encoding
+  the proxy offers backends. Since Jolt's strings count code points, the proxy
+  counts a character above U+FFFF as two.
+- A backend that asks for no sync gets no `didChange`. Neither does one that
+  doesn't say, since the spec defaults to no sync.
+
+  A lax server that leaves out `textDocumentSync` but still expects changes
+  gets none. However, VS Code and Neovim both treat such a server the same way.
+  Since it would already be broken in those editors, following the spec costs
+  little.
+
+If a client sends ranged changes anyway, the proxy applies them to the text it
+keeps. A backend that syncs in full then gets the result. One that syncs
+incrementally gets the edits as the client sent them.
 
 A backend can start after some of its files opened, if it restarted or was
 waiting to start again after failing (see "Failures"). Since the client sends a
@@ -759,8 +779,9 @@ These may become worth doing once we've used the prototype.
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the
   repetition starts to bite.
-- **Incremental sync**, if full contents on every change turns out to be too
-  slow.
+- **Incremental sync from the client**, if full contents on every change turns
+  out to be too slow. The proxy can already apply ranged edits to the text it
+  keeps.
 - **Smarter merging** of answers from several servers.
 
 [1]: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#client_registerCapability

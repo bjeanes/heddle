@@ -566,10 +566,28 @@
       (update-in [:client :documents] dissoc uri)
       (update :registry registry/closed uri)))
 
+(defn- change-in!
+  "Sends the backend `b` the client's `didChange` with `params`, as the
+  backend's sync kind asks for it, given the document's `text` before the
+  change. A backend that wants no changes gets nothing."
+  [b params text]
+  (backend/when-settled b (fn [ready?]
+                            (when-let [changes (and ready?
+                                                    (documents/content-changes
+                                                     (capabilities/sync-kind (backend/capabilities b))
+                                                     text
+                                                     (get params "contentChanges")))]
+                              (->> (assoc params "contentChanges" changes)
+                                   (translate/to-server (:spec b))
+                                   (backend/notify! b "textDocument/didChange"))))))
+
 (defn- document-notification! [proxy method params]
-  (let [uri (get-in params ["textDocument" "uri"])]
+  (let [uri (get-in params ["textDocument" "uri"])
+        text (get-in @(:state proxy) [:client :documents uri :text])]
     (doseq [b (opened-in proxy uri)]
-      (notify-backend! b method params))
+      (if (= "textDocument/didChange" method)
+        (change-in! b params text)
+        (notify-backend! b method params)))
     (case method
       "textDocument/didChange" (swap! (:state proxy) update-in [:client :documents] documents/changed params)
       "textDocument/didClose" (swap! (:state proxy) close uri)

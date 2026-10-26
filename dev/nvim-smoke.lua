@@ -208,6 +208,30 @@ if client then
   check(ran_locally, "Neovim's own commands still run in Neovim")
 end
 
+local function symbol_names(symbols, found)
+  found = found or {}
+  for _, s in ipairs(symbols or {}) do
+    table.insert(found, s.name)
+    symbol_names(s.children, found)
+  end
+  return found
+end
+
+if client then
+  print('\nediting')
+  local last = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_buf_set_lines(bufnr, last, last, false, { '', 'def heddle_smoke_edit; end' })
+  local found = {}
+  check(
+    vim.wait(20000, function()
+      found = symbol_names(request(client, 'textDocument/documentSymbol', bufnr))
+      return vim.list_contains(found, 'heddle_smoke_edit')
+    end, 500),
+    'document symbols include a method added to the buffer',
+    short(table.concat(found, ', '))
+  )
+end
+
 local function names(clients)
   return vim.tbl_map(function(c)
     return c.name

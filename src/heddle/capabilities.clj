@@ -49,6 +49,14 @@
   (let [v (get server-caps (:provider feature))]
     (and (some? v) (not= false v))))
 
+(defn sync-kind
+  "How a backend with the server capabilities `server-caps` wants to hear of
+  changes to documents, as a `TextDocumentSyncKind`. That is 0 if it doesn't
+  say, since the spec defaults to none."
+  [server-caps]
+  (let [sync (get server-caps "textDocumentSync")]
+    (or (if (map? sync) (get sync "change") sync) 0)))
+
 (defn resolve-method?
   "Whether the request `method` resolves an item from an earlier answer."
   [method]
