@@ -31,6 +31,9 @@
     (doseq [k [:client :static :combine]
             [method description] (described-with k)]
       (is (:provider description) (str method " has " k " but offers no feature"))))
+  (testing "dedupes only concatenated answers"
+    (doseq [[method description] (described-with :dedupe-by)]
+      (is (= :concat (:combine description)) method)))
   (testing "combines answers only in ways heddle.merge knows"
     (doseq [[method] (described-with :combine)]
       (is (some? (merge/combine method [["x" []]])) method))))

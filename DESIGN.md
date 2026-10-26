@@ -444,6 +444,20 @@ priority = 10
 Requests whose answers can be combined, such as completion and code actions,
 go to all of them that have started. The proxy concatenates the results.
 
+A directory shared between scopes, such as a gem vendored into the repo, is
+indexed by every backend whose scope contains it. Each of them then finds the
+same symbols and references there. When combining references and workspace
+symbols, the proxy keeps only the first of the items that point at the same
+place, in priority order. It compares a reference on its location. It compares
+a symbol on its name, kind and location, since backends may describe its
+container differently. A backend may give a symbol's location as only its
+file, leaving the range for `workspaceSymbol/resolve` to fill in. Two such
+symbols could be different ones that share a name and kind in that file. Since
+the proxy can't tell them apart, it keeps them all. Each symbol's `data` names
+the backend it came from, as described below. Since the proxy keeps the first
+symbol whole, a later `workspaceSymbol/resolve` reaches the backend that made
+it.
+
 A backend can take up to two minutes to start if its `prepare` pulls an image.
 Holding these requests back that long would leave the client waiting on answers
 that the other backends could already give. So, the proxy sends each request
