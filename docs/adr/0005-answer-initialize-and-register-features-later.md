@@ -1,7 +1,8 @@
 # 0005. Answer `initialize` itself, and register features later
 
 Status: Accepted, 2026-10-25. Amended by
-[0006](0006-start-backends-lazily-with-eager-as-a-flag.md).
+[0006](0006-start-backends-lazily-with-eager-as-a-flag.md) and
+[0017](0017-send-changes-in-each-backends-sync-kind.md).
 
 ## Context
 

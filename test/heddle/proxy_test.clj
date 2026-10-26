@@ -37,7 +37,7 @@ read = ['cat', '{read:file}']
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
 
 (def ^:private offers-hover
-  (fake/answering {"initialize" (constantly {"capabilities" {"hoverProvider" true}})}))
+  (fake/answering {"initialize" (constantly {"capabilities" {"textDocumentSync" 1 "hoverProvider" true}})}))
 
 (defn- start
   "A proxy for a repo with `config` (or the `config` option), with fake
@@ -235,7 +235,7 @@ read = ['cat', '{read:file}']
         respond (fn [_ {:strs [id method]}]
                   (when (= "initialize" method)
                     @started
-                    [(lsp/response id {"capabilities" {}})]))
+                    [(lsp/response id {"capabilities" {"textDocumentSync" 1}})]))
         t (start :respond respond :server-types #{"ruby"})]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
@@ -583,7 +583,7 @@ read = ['cat', '{read:file}']
   (fn [[server-type] {:strs [id method]}]
     (case method
       "initialize" (do (when (= "ruby" server-type) @started)
-                       [(lsp/response id {"capabilities" {"completionProvider" {}}})])
+                       [(lsp/response id {"capabilities" {"textDocumentSync" 1 "completionProvider" {}}})])
       "textDocument/completion" [(lsp/response id [{"label" server-type}])]
       nil)))
 
@@ -1058,7 +1058,7 @@ read = ['cat', '{read:file}']
   (let [watch {"id" "watch" "method" "workspace/didChangeWatchedFiles"}
         respond (fn [_ {:strs [id method]}]
                   (case method
-                    "initialize" [(lsp/response id {"capabilities" {"hoverProvider" true}})]
+                    "initialize" [(lsp/response id {"capabilities" {"textDocumentSync" 1 "hoverProvider" true}})]
                     "textDocument/didOpen" [(lsp/request 1 "client/registerCapability" {"registrations" [watch]})]
                     "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [watch]})]
                     nil))
@@ -1107,7 +1107,7 @@ read = ['cat', '{read:file}']
   (let [registration {"id" "commands" "method" "workspace/executeCommand"}]
     (fn [_ {:strs [id method]}]
       (case method
-        "initialize" [(lsp/response id {"capabilities" {"executeCommandProvider" {"commands" ["fix"]}}})]
+        "initialize" [(lsp/response id {"capabilities" {"textDocumentSync" 1 "executeCommandProvider" {"commands" ["fix"]}}})]
         "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
                                              {"registrations" [(assoc registration "registerOptions" {"commands" commands})]})]
         "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [registration]})]
@@ -1380,6 +1380,26 @@ read = ['cat', '{read:file}']
       (is (eventually #(= #{"file:///app/a.rb" "file:///app/b.rb" "file:///app/c.rb"}
                           (set (keys (opened-documents t ["ruby" "api"]))))))
       (is (= 3 (count (received t ["ruby" "api"] "textDocument/didOpen"))) "once each"))))
+
+(deftest changing-a-file
+  (let [respond (fn [[server-type] {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {"textDocumentSync" (if (= "ruby" server-type)
+                                                                            {"openClose" true "change" 2}
+                                                                            1)}})]))
+        t (start :respond respond)
+        changes (fn [k] (map #(get-in % ["params" "contentChanges"]) (received t k "textDocument/didChange")))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (change! t "api/a.rb" 2 "x = 1\n")
+    (change! t "api/a.rb" 3 "x = 2")
+    (testing "sends a backend that syncs incrementally a change of the whole of the previous text"
+      (is (eventually #(= [[{"range" {"start" {"line" 0 "character" 0} "end" {"line" 0 "character" 0}} "text" "x = 1\n"}]
+                           [{"range" {"start" {"line" 0 "character" 0} "end" {"line" 1 "character" 0}} "text" "x = 2"}]]
+                          (changes ["ruby" "api"])))))
+    (testing "sends a backend that syncs in full the whole text"
+      (is (eventually #(= [[{"text" "x = 1\n"}] [{"text" "x = 2"}]]
+                          (changes ["lint" "."])))))))
 
 (deftest telling-the-user-about-a-backend-at-most-once-a-minute
   (let [t (start :server-types #{"ruby"})

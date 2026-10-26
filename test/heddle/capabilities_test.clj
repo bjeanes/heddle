@@ -21,6 +21,14 @@
       (is (not (contains? caps "semanticTokensProvider")))
       (is (not (contains? caps "documentOnTypeFormattingProvider"))))))
 
+(deftest sync-kind
+  (testing "is a backend's sync kind, given as a number or in options"
+    (is (= 2 (capabilities/sync-kind {"textDocumentSync" 2})))
+    (is (= 1 (capabilities/sync-kind {"textDocumentSync" {"openClose" true "change" 1}}))))
+  (testing "is none if the backend doesn't say"
+    (is (= 0 (capabilities/sync-kind {})))
+    (is (= 0 (capabilities/sync-kind {"textDocumentSync" {"openClose" true}})))))
+
 (deftest initialize-result-with-backends-started
   (let [caps #(get (capabilities/initialize-result registers-hover %) "capabilities")
         legend (fn [& types] {"tokenTypes" (vec types) "tokenModifiers" []})]

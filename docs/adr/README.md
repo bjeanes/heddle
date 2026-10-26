@@ -14,7 +14,7 @@ record says so instead of guessing.
 | [0002](0002-build-a-standalone-proxy.md) | Build a standalone proxy | Accepted |
 | [0003](0003-separate-server-types-from-scopes.md) | Separate server types from scopes | Accepted |
 | [0004](0004-define-runners-as-command-templates.md) | Define runners as command templates | Accepted |
-| [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted; amended by 0006 |
+| [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted; amended by 0006 and 0017 |
 | [0006](0006-start-backends-lazily-with-eager-as-a-flag.md) | Start backends lazily, with `--eager` as a flag | Accepted |
 | [0007](0007-declare-paths-and-fetch-the-rest.md) | Declare paths, and fetch everything else | Accepted |
 | [0008](0008-make-the-first-word-a-subcommand.md) | Make the first word a subcommand, defaulting to `serve` | Accepted |
@@ -26,3 +26,4 @@ record says so instead of guessing.
 | [0014](0014-ask-one-backend-or-combine-by-priority.md) | Ask one backend or combine them, by priority | Accepted |
 | [0015](0015-reach-claude-code-through-an-lsp-plugin.md) | Reach Claude Code through an LSP plugin | Accepted |
 | [0016](0016-trace-messages-as-json-lines.md) | Trace messages as JSON Lines, outside the proxy | Accepted |
+| [0017](0017-send-changes-in-each-backends-sync-kind.md) | Send each backend changes in the form its sync kind asks for | Accepted |
