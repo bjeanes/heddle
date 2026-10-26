@@ -27,3 +27,4 @@ record says so instead of guessing.
 | [0015](0015-reach-claude-code-through-an-lsp-plugin.md) | Reach Claude Code through an LSP plugin | Accepted |
 | [0016](0016-trace-messages-as-json-lines.md) | Trace messages as JSON Lines, outside the proxy | Accepted |
 | [0017](0017-send-changes-in-each-backends-sync-kind.md) | Send each backend changes in the form its sync kind asks for | Accepted |
+| [0018](0018-cache-fetched-files-by-slot-outside-the-repo.md) | Cache fetched files by slot, outside the repo | Accepted |

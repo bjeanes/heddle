@@ -25,7 +25,7 @@
       (is (= "/r/services/api" (:dir s)))
       (is (= "/app" (:root s)))
       (is (= {"services/api" "/app"} (:paths s)))
-      (is (re-matches #"/cache/heddle/r-[0-9a-f]{8}/ruby-lsp/services%2Fapi" (:cache s))))
+      (is (= "/cache/ruby-lsp/services/api/=" (:cache s))))
     (testing "keep only the runner's templates"
       (is (= #{"start" "read"} (set (keys (:templates s))))))
     (testing "say which files the server type handles"
@@ -95,19 +95,24 @@ s = { runner = 'docker-run', image = 'i', command = 's' }
              (command c ["s" "a"] "start"))))))
 
 (deftest cache-dirs
-  (let [dir (spec/cache-dir "/cache" "/code/shop" ["ruby" "services/api"])]
-    (testing "are keyed by repo, server type and scope, under the cache root"
-      (is (re-matches #"/cache/heddle/shop-[0-9a-f]{8}/ruby/services%2Fapi" dir))
-      (is (= dir (spec/cache-dir "/cache/" "/code/shop" ["ruby" "services/api"]))))
-    (testing "are the same every time"
-      (is (= dir (spec/cache-dir "/cache" "/code/shop" ["ruby" "services/api"]))))
-    (testing "give the root scope a segment of its own"
-      (is (str/ends-with? (spec/cache-dir "/cache" "/code/shop" ["ruby" "."]) "/ruby/%2E")))
-    (testing "differ for each repo, server type and scope"
-      (is (= 5 (count (distinct [dir
-                                 (spec/cache-dir "/cache" "/other/shop" ["ruby" "services/api"])
-                                 (spec/cache-dir "/cache" "/code/shop" ["rubocop" "services/api"])
-                                 (spec/cache-dir "/cache" "/code/shop" ["ruby" "services"])
-                                 (spec/cache-dir "/cache" "/code/shop" ["ruby" "."])])))))
+  (let [dir (spec/cache-dir "/cache" ["ruby" "services/api"])]
+    (testing "are keyed by server type and scope, under the repo's cache"
+      (is (= "/cache/ruby/services/api/=" dir))
+      (is (= dir (spec/cache-dir "/cache/" ["ruby" "services/api"]))))
+    (testing "give the root scope no directories"
+      (is (= "/cache/ruby/=" (spec/cache-dir "/cache" ["ruby" "."]))))
+    (testing "differ for each server type and scope"
+      (is (= 4 (count (distinct [dir
+                                 (spec/cache-dir "/cache" ["rubocop" "services/api"])
+                                 (spec/cache-dir "/cache" ["ruby" "services"])
+                                 (spec/cache-dir "/cache" ["ruby" "."])])))))
     (testing "don't nest one scope inside another"
-      (is (not (str/starts-with? dir (str (spec/cache-dir "/cache" "/code/shop" ["ruby" "services"]) "/")))))))
+      (is (not (str/starts-with? dir (str (spec/cache-dir "/cache" ["ruby" "services"]) "/")))))
+    (testing "encode a `=` in a scope, which would otherwise end it early"
+      (is (= "/cache/ruby/a/=3D/b/=" (spec/cache-dir "/cache" ["ruby" "a/=/b"]))))
+    (testing "keep a server type to one segment of its own"
+      (is (= "/cache/a=2Fb=3D/=" (spec/cache-dir "/cache" ["a/b=" "."])))
+      (is (= "/cache/=../=" (spec/cache-dir "/cache" [".." "."])))
+      (is (= "/cache/=/services/=" (spec/cache-dir "/cache" ["" "services"]))))
+    (testing "leave other characters as they are"
+      (is (= "/cache/rubý/my app%/=" (spec/cache-dir "/cache" ["rubý" "my app%"]))))))

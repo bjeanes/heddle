@@ -577,15 +577,31 @@ VS Code and MCP bridges, give the proxy no hook like that. Instead, when a
 backend sends back a location in a fetched file, the proxy runs `read` for it
 _before_ forwarding the reply. The client can then open it like any other file.
 
-The cache directory is `<root>/heddle/<repo>/<server type>/<scope>`.
-`<root>` is the system's temp directory unless the config's `cache` table
-chooses another. Two backends can have
-different files at the same server path. So, each server type and scope gets a
-directory of its own. Each is percent-encoded into a single path segment, with
-the root scope `.` as `%2E`. Nesting the scopes instead would put
-`services/api`'s copy of `/x.rb` where `services` keeps its `/api/x.rb`. Since
-two repos can also share a name, `<repo>` is the repo directory's name followed
-by a dash and the CRC-32 of its full path in hex.
+The cache directory is `<root>/heddle/<repo>/<server type>/<scope>/=`. A
+fetched file's copy is at its server path under that. For example, `ruby-lsp` in
+`services/api` keeps `/usr/lib/ruby/set.rb` at
+`<root>/heddle/<repo>/ruby-lsp/services/api/=/usr/lib/ruby/set.rb`. `<root>`
+is the system's temp directory unless the config's `cache` table chooses
+another. A `path` in that table replaces `<root>/heddle/<repo>` instead (see
+below).
+
+Two backends can have different files at the same server path. So, each server
+type and scope gets a directory of its own. The scope's directories are nested
+as they are in the repo. The root scope `.` has none. Without the `=` segment
+after them, `services/api`'s copy of `/x.rb` would sit where `services` keeps
+its `/api/x.rb`. With it, the scope ends at the first `=`.
+
+The config already rules out empty, `.` and `..` directories in a scope. So, a
+scope directory only needs escaping if it contains a `=`, which becomes `=3D`.
+No scope directory is then `=` itself. However, a server type's name is any
+TOML key. It could contain a `/`, be `..` or be empty. So, a server type also
+has each `/` escaped as `=2F`. If it's empty or only dots, it gets a leading
+`=` instead. The escape uses `=` because a client sees a cached file as a
+`file:` URI. If `a/b` were percent-encoded as `a%2Fb`, the URI would encode it
+again as `a%252Fb`. A client that decoded it twice would open the wrong path.
+
+Since two repos can also share a name, `<repo>` is the repo directory's name
+followed by a dash and the CRC-32 of its full path in hex.
 
 None of this depends on the backend ID. A restarted backend reuses the
 directory of the one it replaced, rather than leaving a new one behind each
@@ -596,11 +612,19 @@ at a new directory for each shell. An editor started from one would then use a
 new cache each time and leave the old ones behind. So, `cache` can follow the
 XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
-directory, which is the repo root. The layout under the root is the same
-whichever way it's chosen. When the root is inside the repo,
-`heddle/<repo>` adds two levels of directories that aren't needed. That
-being said, several checkouts of the repo can share an absolute root. `<repo>`
-keeps their copies apart.
+directory, which is the repo root.
+
+The temp directory, `~/.cache` and a directory named by an environment
+variable may each hold the caches of several repos. An environment variable
+counts as shared because it's set outside the repo, often once for every
+shell. It then names the same directory whichever repo the editor opens.
+`heddle/<repo>` keeps those repos' copies apart. However, only this repo's
+config names a `path`. Since nothing else shares it, the proxy uses it as
+given. `heddle/<repo>` would only add two levels of directories there.
+
+Several checkouts of the repo can still share an absolute `path`. If their
+servers see different versions of a file, one checkout's copy can replace
+another's until a backend fetches it again.
 
 With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
 path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set
