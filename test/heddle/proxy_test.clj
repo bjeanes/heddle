@@ -993,6 +993,18 @@ read = ['cat', '{read:file}']
       (deliver answer true)
       (is (= (lsp/response 9 nil) (from-proxy t))))))
 
+(deftest shutting-down-a-backend-that-never-answers
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {}})]))
+        t (start :respond respond :server-types #{"ruby"})
+        ;; each reading of the clock is the whole shutdown timeout later
+        t (update t :proxy assoc :clock #(swap! (:now t) + 10000))]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (lsp/request 9 "shutdown" nil))
+    (is (= (lsp/response 9 nil) (from-proxy t)) "answers once the proxy's clock passes the deadline")))
+
 (deftest exiting-without-shutting-down
   (let [t (start)]
     (client! t (lsp/notification "exit" nil))

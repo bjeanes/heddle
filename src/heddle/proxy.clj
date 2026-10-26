@@ -835,10 +835,10 @@
   (swap! (:state proxy) assoc :phase :shutting-down)
   (let [backends (running-backends proxy)
         answers (mapv backend/shutdown! backends)
-        deadline (+ (System/currentTimeMillis) shutdown-timeout-ms)]
+        deadline (+ (now-ms proxy) shutdown-timeout-ms)]
     (future
       (doseq [[b answered] (map vector backends answers)
-              :let [ms-left (max 0 (- deadline (System/currentTimeMillis)))]]
+              :let [ms-left (max 0 (- deadline (now-ms proxy)))]]
         (when (= ::timeout (deref answered ms-left ::timeout))
           (log/info (:backend-id b) "didn't answer shutdown in time")))
       (send-client! proxy (lsp/response id nil)))))
