@@ -7,104 +7,40 @@
   started, with one registration for each feature. The rest are announced in
   the proxy's own `initialize` reply, as are the features of any backends
   started before it."
-  (:require [clojure.string :as str])
+  (:require [clojure.string :as str]
+            [heddle.methods :as methods])
   (:import (java.net URI)))
 
-(def ^:private document-features
-  "Each feature's request method, the server capability that offers it, its
-  key in the client's `textDocument` capabilities, and what to announce for it
-  when the client can't register it later. That last is nil where only a
-  backend could supply the feature's options."
-  (mapv
-   (fn [[method provider client static]]
-     {:method method :provider provider :client ["textDocument" client] :static static})
-   [["textDocument/hover" "hoverProvider" "hover" true]
-    ["textDocument/completion" "completionProvider" "completion" {}]
-    ["textDocument/signatureHelp" "signatureHelpProvider" "signatureHelp" {}]
-    ["textDocument/declaration" "declarationProvider" "declaration" true]
-    ["textDocument/definition" "definitionProvider" "definition" true]
-    ["textDocument/typeDefinition" "typeDefinitionProvider" "typeDefinition" true]
-    ["textDocument/implementation" "implementationProvider" "implementation" true]
-    ["textDocument/references" "referencesProvider" "references" true]
-    ["textDocument/documentHighlight" "documentHighlightProvider" "documentHighlight" true]
-    ["textDocument/documentSymbol" "documentSymbolProvider" "documentSymbol" true]
-    ["textDocument/codeAction" "codeActionProvider" "codeAction" true]
-    ["textDocument/codeLens" "codeLensProvider" "codeLens" {}]
-    ["textDocument/documentLink" "documentLinkProvider" "documentLink" {}]
-    ["textDocument/documentColor" "colorProvider" "colorProvider" true]
-    ["textDocument/formatting" "documentFormattingProvider" "formatting" true]
-    ["textDocument/rangeFormatting" "documentRangeFormattingProvider" "rangeFormatting" true]
-    ["textDocument/onTypeFormatting" "documentOnTypeFormattingProvider" "onTypeFormatting" nil]
-    ["textDocument/rename" "renameProvider" "rename" true]
-    ["textDocument/foldingRange" "foldingRangeProvider" "foldingRange" true]
-    ["textDocument/selectionRange" "selectionRangeProvider" "selectionRange" true]
-    ["textDocument/prepareCallHierarchy" "callHierarchyProvider" "callHierarchy" true]
-    ["textDocument/semanticTokens" "semanticTokensProvider" "semanticTokens" nil]
-    ["textDocument/linkedEditingRange" "linkedEditingRangeProvider" "linkedEditingRange" true]
-    ["textDocument/moniker" "monikerProvider" "moniker" true]
-    ["textDocument/prepareTypeHierarchy" "typeHierarchyProvider" "typeHierarchy" true]
-    ["textDocument/inlineValue" "inlineValueProvider" "inlineValue" true]
-    ["textDocument/inlayHint" "inlayHintProvider" "inlayHint" true]
-    ["textDocument/diagnostic" "diagnosticProvider" "diagnostic"
-     {"interFileDependencies" false "workspaceDiagnostics" false}]]))
-
-(def ^:private execute-command
-  "Running a command, which isn't about any one file. Some clients only run
-  commands that a server has listed in its options."
-  {:method "workspace/executeCommand"
-   :provider "executeCommandProvider"
-   :client ["workspace" "executeCommand"]
-   :static {"commands" []}})
+(defn- feature-of
+  "The feature offered under the request `method`, or nil if no server
+  capability offers one under it."
+  [method]
+  (let [description (get methods/table method)]
+    (when (:provider description)
+      (assoc description :method method))))
 
 (def ^:private features
-  (conj document-features execute-command))
+  "The features that the client may accept registrations for, in a stable
+  order."
+  (sort-by :method (for [[method description] methods/table
+                         :when (:client description)]
+                     (feature-of method))))
 
 (def ^:private workspace-symbol
   "Workspace symbol search, which the proxy announces at startup whatever the
-  client supports. It isn't about any one file, and the proxy asks every
-  running backend itself, answering with nothing before any has started."
-  {:method "workspace/symbol"
-   :provider "workspaceSymbolProvider"
-   :static {"resolveProvider" true}})
+  client supports. It isn't about any one file. The proxy asks every running
+  backend itself, answering with nothing before any has started."
+  (feature-of "workspace/symbol"))
 
 (defn- document-feature? [feature]
   (= "textDocument" (first (:client feature))))
-
-(def ^:private resolve-methods
-  "Requests that resolve an item, and the requests whose answers hold the
-  items. A backend resolves them if its options for the feature say so."
-  {"completionItem/resolve" "textDocument/completion"
-   "codeAction/resolve" "textDocument/codeAction"
-   "codeLens/resolve" "textDocument/codeLens"
-   "documentLink/resolve" "textDocument/documentLink"
-   "inlayHint/resolve" "textDocument/inlayHint"
-   "workspaceSymbol/resolve" "workspace/symbol"})
-
-(def ^:private follow-up-methods
-  "Requests about an item, held in their `item` param, from the answer to
-  another request, and those requests."
-  {"callHierarchy/incomingCalls" "textDocument/prepareCallHierarchy"
-   "callHierarchy/outgoingCalls" "textDocument/prepareCallHierarchy"
-   "typeHierarchy/supertypes" "textDocument/prepareTypeHierarchy"
-   "typeHierarchy/subtypes" "textDocument/prepareTypeHierarchy"})
-
-(def ^:private related-methods
-  "Requests that belong to a feature registered under another method."
-  (merge follow-up-methods
-         {"textDocument/semanticTokens/full" "textDocument/semanticTokens"
-          "textDocument/semanticTokens/full/delta" "textDocument/semanticTokens"
-          "textDocument/semanticTokens/range" "textDocument/semanticTokens"
-          "textDocument/colorPresentation" "textDocument/documentColor"
-          "textDocument/prepareRename" "textDocument/rename"}))
-
-(def ^:private by-method
-  (into {} (map (juxt :method identity)) (conj features workspace-symbol)))
 
 (defn feature
   "The feature that the request `method` uses, or nil if it isn't one the proxy
   knows about."
   [method]
-  (get by-method (get related-methods method method)))
+  (let [{related :feature follows :follows} (get methods/table method)]
+    (feature-of (or related follows method))))
 
 (defn offers?
   "Whether a backend with the server capabilities `server-caps` offers
@@ -116,19 +52,20 @@
 (defn resolve-method?
   "Whether the request `method` resolves an item from an earlier answer."
   [method]
-  (contains? resolve-methods method))
+  (contains? (get methods/table method) :resolves))
 
 (defn follow-up-method?
   "Whether the request `method` is about an item, held in its `item` param,
   from an earlier answer."
   [method]
-  (contains? follow-up-methods method))
+  (contains? (get methods/table method) :follows))
 
 (defn resolves?
   "Whether a backend with the server capabilities `server-caps` answers the
-  request `method`, which resolves an item."
+  request `method`, which resolves an item. It does if its options for the
+  feature say so."
   [server-caps method]
-  (let [provider (:provider (get by-method (get resolve-methods method)))]
+  (let [provider (:provider (feature-of (get-in methods/table [method :resolves])))]
     (true? (get-in server-caps [provider "resolveProvider"]))))
 
 (defn- registrable? [client-caps feature]
@@ -184,8 +121,8 @@
 
 (defn- merge-option
   "One backend's value for a registration option combined with another's, from
-  a backend of lower priority. Lists such as trigger characters are combined,
-  and a flag such as `resolveProvider` is set if either sets it. Otherwise the
+  a backend of lower priority. Lists such as trigger characters are combined.
+  A flag such as `resolveProvider` is set if either sets it. Otherwise the
   first value stands."
   [a b]
   (cond
@@ -230,7 +167,7 @@
 
 (defn- narrow-pattern
   "A backend's `pattern` limited to the proxy's `own` relative pattern, or nil
-  if a document filter can't express that. Two globs can't be combined, so
+  if a document filter can't express that. Since two globs can't be combined,
   only a pattern for a whole directory can narrow another."
   [pattern own]
   (let [base (uri-path (get own "baseUri"))]
@@ -267,41 +204,15 @@
                          :when narrowed]
                      narrowed)))))
 
-(def ^:private combined-methods
-  "The requests whose answers can be combined. They go to every backend for the
-  file that offers the feature, or every running backend for workspace
-  symbols. The rest want one answer:
-
-  - hover, signature help and document symbols describe the code in one
-    server's terms, and two servers' descriptions would repeat or contradict
-    each other;
-  - definition, declaration, type definition, implementation and document
-    highlights point at the same code, so a second server would mostly add
-    duplicates;
-  - formatting and rename are edits, and two servers' edits to the same text
-    would conflict;
-  - folding and selection ranges, semantic tokens, colours, linked editing
-    ranges, monikers, inline values and the call and type hierarchies each
-    cover the whole file or symbol, which a client expects from one server.
-
-  Smarter merging of some of these is pinned for later in DESIGN.md."
-  #{"textDocument/completion"
-    "textDocument/codeAction"
-    "textDocument/codeLens"
-    "textDocument/references"
-    "textDocument/documentLink"
-    "textDocument/inlayHint"
-    "textDocument/diagnostic"
-    "workspace/symbol"})
-
 (defn combined?
   "Whether the answers to the request `method` from several backends are
-  combined, as opposed to one backend answering."
+  combined, as opposed to one backend answering. Combined requests go to
+  every backend for the file that offers the feature, or every running
+  backend for workspace symbols."
   [method]
-  (contains? combined-methods method))
+  (contains? (get methods/table method) :combine))
 
 (defn empty-result
   "The result for a request when no backend for its file offers its feature."
   [method]
-  (when (= "textDocument/diagnostic" method)
-    {"kind" "full" "items" []}))
+  (get-in methods/table [method :empty]))

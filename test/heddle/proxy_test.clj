@@ -75,6 +75,11 @@ read = ['cat', '{read:file}']
 (defn- uri [t path]
   (str "file://" (:repo t) "/" path))
 
+(defn- backend-of
+  "The running backend `k`, a [server-type scope]."
+  [t k]
+  (get-in @(:state (:proxy t)) [:registry :backends k :backend]))
+
 (defn- initialize!
   "Initializes the proxy as a client with `capabilities` would, and returns
   the proxy's capabilities."
@@ -122,13 +127,26 @@ read = ['cat', '{read:file}']
        (= {} @(:received t))))
 
 (deftest without-a-usable-config
-  (testing "warns that there's no config, and serves nothing"
+  (testing "warns that there's no config, in a message and on stderr, and serves nothing"
     (let [t (start)
-          cwd (get-in t [:proxy :cwd])]
-      (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+          cwd (get-in t [:proxy :cwd])
+          warning (str "There's no .heddle.toml in /nowhere or " cwd ".\n"
+                       "heddle is serving nothing until there is one and it restarts.")
+          logged (atom [])
+          previous-writer (log/set-writer! #(swap! logged conj %))]
+      (try
+        (client! t (lsp/request 0 "initialize" {"rootUri" "file:///nowhere" "capabilities" {}}))
+        (finally
+          (log/set-writer! previous-writer)))
       (is (contains? (from-proxy t) "result"))
-      (is (= (shown 2 (str "There's no .heddle.toml in /nowhere or " cwd ".\n"
-                           "heddle is serving nothing until there is one and it restarts."))
+      (is (= (shown 2 warning) (from-proxy t)))
+      (is (= [(str "heddle: " warning)] @logged))
+      (is (serves-nothing? t))))
+  (testing "warns that no scope starts a server type, and serves nothing"
+    (let [t (start :config "[servers.ruby]\nlanguages = ['ruby']\n")]
+      (initialize! t {})
+      (is (= (shown 2 (str "No scope in " (:repo t) "/.heddle.toml starts a server type.\n"
+                           "heddle is serving nothing until a scope starts one and it restarts."))
              (from-proxy t)))
       (is (serves-nothing? t))))
   (testing "shows the config's errors, and serves nothing"
@@ -183,6 +201,26 @@ read = ['cat', '{read:file}']
                            "textDocument/didSave" "textDocument/didClose"]
                           (methods-received t ["lint" "."]))))
       (is (= [["lint" "."]] (keys @(:received t)))))))
+
+(defn- change! [t path version text]
+  (client! t (lsp/notification "textDocument/didChange"
+                               {"textDocument" {"uri" (uri t path) "version" version}
+                                "contentChanges" [{"text" text}]})))
+
+(defn- close! [t path]
+  (client! t (lsp/notification "textDocument/didClose" {"textDocument" {"uri" (uri t path)}})))
+
+(deftest closing-a-file
+  (let [t (start :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (close! t "api/a.rb")
+    (change! t "api/a.rb" 2 "")
+    (open! t "api/a.rb" "ruby")
+    (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen" "textDocument/didClose"
+                         "textDocument/didOpen"]
+                        (methods-received t ["ruby" "api"])))
+        "stops the backend hearing about it until it opens again")))
 
 (deftest notifying-a-starting-backend
   (let [started (promise)
@@ -297,6 +335,18 @@ read = ['cat', '{read:file}']
       (is (= [(log "one") (log "two")] [(from-proxy t) (from-proxy t)]))
       (is (nothing-more? t)))))
 
+(deftest failing-to-answer-initialize
+  (let [log (lsp/notification "window/logMessage" {"type" 3 "message" "one"})
+        respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [log (lsp/response id {"capabilities" {"executeCommandProvider" {"commands" 5}}})]))
+        t (start :respond respond :eager true :server-types #{"ruby"})]
+    (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+    (testing "answers with an error, then sends what the backends sent meanwhile"
+      (is (= -32603 (get-in (from-proxy t) ["error" "code"])))
+      (is (= log (from-proxy t)))
+      (is (nothing-more? t)))))
+
 (def ^:private config-with-unused-value
   (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))
 
@@ -340,7 +390,7 @@ read = ['cat', '{read:file}']
       (is (nothing-more? t)))))
 
 (defn- cache-of [t k]
-  (get-in @(:state (:proxy t)) [:backends k :cache]))
+  (:cache (backend-of t k)))
 
 (deftest choosing-the-cache-root
   (testing "a path relative to the config's directory"
@@ -408,7 +458,7 @@ read = ['cat', '{read:file}']
     (testing "go to the first backend that offers the feature, by name when priorities tie"
       (client! t (request-about t "h" "textDocument/hover" "api/a.rb"))
       (let [response (from-proxy t)
-            cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+            cache (:cache (backend-of t ["ruby" "api"]))]
         (testing "with the client's ID on the response, and paths translated both ways"
           (is (= "h" (get response "id")))
           (is (= (str "[Rainbow](file://" cache gem "#L1) for " (uri t "api/a.rb"))
@@ -426,6 +476,22 @@ read = ['cat', '{read:file}']
       (client! t (request-about t 9 "custom/request" "api/a.rb"))
       (is (= (lsp/response 9 nil) (from-proxy t)))
       (is (= 1 (count (received t ["lint" "."] "custom/request")))))))
+
+(deftest opening-a-file-after-starting-backends-eagerly
+  (let [respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"hoverProvider" true}})]
+                    "textDocument/hover" [(lsp/response id {"contents" "Rainbow"})]
+                    nil))
+        t (start :respond respond :eager true :server-types #{"ruby"})]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (testing "tells the running backend about it"
+      (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen"]
+                          (methods-received t ["ruby" "api"])))))
+    (testing "and sends it requests about it"
+      (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 1 {"contents" "Rainbow"}) (from-proxy t))))))
 
 (deftest requests-for-partial-results
   (let [t (start :server-types #{"ruby"})]
@@ -493,7 +559,7 @@ read = ['cat', '{read:file}']
       (is (= (lsp/error-response 3 -32603 "lint broke") (from-proxy t))))))
 
 (defn- backend-id [t k]
-  (get-in @(:state (:proxy t)) [:backends k :backend-id]))
+  (:backend-id (backend-of t k)))
 
 (deftest resolving-items
   (let [respond (fn [[server-type] {:strs [id method params]}]
@@ -531,6 +597,25 @@ read = ['cat', '{read:file}']
         (let [item (assoc-in (get items "lint") ["data" "heddle/backend"] "heddle-gone")]
           (client! t (lsp/request 5 "completionItem/resolve" item))
           (is (= (lsp/response 5 item) (from-proxy t))))))))
+
+(deftest resolving-items-with-data-from-their-list
+  (let [respond (fn [[server-type] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"completionProvider" {"resolveProvider" (= "lint" server-type)}}})]
+                    "textDocument/completion" [(lsp/response id {"isIncomplete" false
+                                                                 "itemDefaults" {"data" {"n" 1}}
+                                                                 "items" [{"label" server-type}]})]
+                    "completionItem/resolve" [(lsp/response id params)]
+                    nil))
+        t (start :respond respond)]
+    (initialize! t {})
+    (open! t "api/a.rb" "ruby")
+    (client! t (request-about t 1 "textDocument/completion" "api/a.rb"))
+    (let [lint (first (filter #(= "lint" (get % "label")) (get-in (from-proxy t) ["result" "items"])))]
+      (client! t (lsp/request 2 "completionItem/resolve" lint))
+      (from-proxy t)
+      (is (= {"label" "lint" "data" {"n" 1}}
+             (get-in (received t ["lint" "."] "completionItem/resolve") [0 "params"]))))))
 
 (deftest following-hierarchies
   (let [respond (fn [[server-type] {:strs [id method params]}]
@@ -630,7 +715,7 @@ read = ['cat', '{read:file}']
       (is (= "." (execute 3))))))
 
 (defn- stop-backend! [t k]
-  ((get-in @(:state (get-in @(:state (:proxy t)) [:backends k])) [:conn :close])))
+  ((get-in @(:state (backend-of t k)) [:conn :close])))
 
 (deftest publishing-diagnostics
   (let [respond (fn [[server-type] {:strs [id method params]}]
@@ -669,7 +754,7 @@ read = ['cat', '{read:file}']
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
     (let [published (from-proxy t)
-          cache (get-in @(:state (:proxy t)) [:backends ["ruby" "api"] :cache])]
+          cache (:cache (backend-of t ["ruby" "api"]))]
       (is (= (str "file://" cache gem)
              (get-in published ["params" "diagnostics" 0 "relatedInformation" 0 "location" "uri"])))
       (is (= "module Rainbow; end\n" (slurp (str cache gem)))
@@ -989,6 +1074,48 @@ read = ['cat', '{read:file}']
       (swap! (:now t) inc)
       (open! t "api/a.rb" "ruby")
       (is (eventually #(= 2 (opens)))))))
+
+(defn- opened-documents
+  "Each document the backend `k` received `didOpen` for, by URI."
+  [t k]
+  (into {} (for [msg (received t k "textDocument/didOpen")
+                 :let [document (get-in msg ["params" "textDocument"])]]
+             [(get document "uri") document])))
+
+(deftest files-opened-before-a-backend-started
+  (testing "are opened in a backend that restarted, as last changed, before anything else"
+    (let [t (start :server-types #{"ruby"})]
+      (start-ruby! t)
+      (change! t "api/a.rb" 2 "changed")
+      (is (eventually #(seq (received t ["ruby" "api"] "textDocument/didChange"))))
+      (stop-backend! t ["ruby" "api"])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (reset! (:received t) {})
+      (swap! (:now t) + 30000)
+      (open! t "api/b.rb" "ruby")
+      (client! t (request-about t 1 "textDocument/hover" "api/a.rb"))
+      (is (= (lsp/response 1 nil) (from-proxy t)))
+      (is (= ["initialize" "initialized" "textDocument/didOpen" "textDocument/didOpen" "textDocument/hover"]
+             (methods-received t ["ruby" "api"])))
+      (is (= {"file:///app/a.rb" {"uri" "file:///app/a.rb" "languageId" "ruby" "version" 2 "text" "changed"}
+              "file:///app/b.rb" {"uri" "file:///app/b.rb" "languageId" "ruby" "version" 1 "text" ""}}
+             (opened-documents t ["ruby" "api"])))))
+  (testing "are opened in a backend that another file starts after it failed"
+    (let [starts (atom 0)
+          respond (fn [_ {:strs [id method]}]
+                    (when (= "initialize" method)
+                      (if (= 1 (swap! starts inc))
+                        [(lsp/error-response id -32603 "no Gemfile")]
+                        [(lsp/response id {"capabilities" {"hoverProvider" true}})])))
+          t (start :server-types #{"ruby"} :respond respond)]
+      (start-ruby! t)
+      (is (= 1 (get-in (from-proxy t) ["params" "type"])))
+      (open! t "api/b.rb" "ruby")
+      (swap! (:now t) + 30000)
+      (open! t "api/c.rb" "ruby")
+      (is (eventually #(= #{"file:///app/a.rb" "file:///app/b.rb" "file:///app/c.rb"}
+                          (set (keys (opened-documents t ["ruby" "api"]))))))
+      (is (= 3 (count (received t ["ruby" "api"] "textDocument/didOpen"))) "once each"))))
 
 (deftest telling-the-user-about-a-backend-at-most-once-a-minute
   (let [t (start :server-types #{"ruby"})

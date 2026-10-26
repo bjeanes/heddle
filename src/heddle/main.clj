@@ -4,15 +4,17 @@
             [heddle.backend :as backend]
             [heddle.config :as config]
             [heddle.json :as json]
-            [heddle.log :as log]
             [heddle.lsp :as lsp]
-            [heddle.proxy :as proxy])
-  (:import (java.io BufferedInputStream)))
+            [heddle.proxy :as proxy]
+            [heddle.starter :as starter])
+  (:import (java.io BufferedInputStream)
+           (java.lang ProcessBuilder$Redirect)))
 
 (def ^:private usage
   "usage: heddle [serve] [--eager] [SERVER-TYPE...]
        heddle languages [DIR [SERVER-TYPE...]]
        heddle check [DIR]
+       heddle init [DIR]
        heddle help
 
 serve, the default, speaks LSP over stdin and stdout. It serves every server
@@ -29,9 +31,12 @@ covers, counting only the server types named, if any.
 check reads the config at the root of DIR and prints its errors and warnings.
 It exits non-zero if the config has errors.
 
+init writes a starter config, all commented out, to the root of DIR. It won't
+replace a config that's already there.
+
 DIR is the current directory unless given.")
 
-(def ^:private commands #{"serve" "languages" "check" "help"})
+(def ^:private commands #{"serve" "languages" "check" "init" "help"})
 
 (defn- option? [arg]
   (str/starts-with? arg "-"))
@@ -102,6 +107,22 @@ DIR is the current directory unless given.")
   [dir]
   (with-config dir (fn [_ source] {:out (str "No errors in " source ".")})))
 
+(defn init
+  "What `heddle init` prints after writing a starter config to the root of the
+  repo at `dir`."
+  [dir]
+  (let [f (io/file dir config/file-name)]
+    (if (.exists f)
+      {:exit 1 :err (str "There's already a " config/file-name " in " dir ". Remove it first to start over.")}
+      (try
+        (spit f starter/toml)
+        {:exit 0
+         :out (str "Wrote a starter config to " f ".\n"
+                   "Uncomment what you need, then run `heddle check`.\n"
+                   "README's \"The config in full\" describes every key.")}
+        (catch Exception e
+          {:exit 1 :err (str "Couldn't write " f ": " (ex-message e))})))))
+
 (defn outcome
   "What a command other than serve prints, as :out and :err, and its :exit
   status."
@@ -111,6 +132,7 @@ DIR is the current directory unless given.")
       :help {:exit 0 :out usage}
       :languages (languages dir server-types)
       :check (check dir)
+      :init (init dir)
       {:exit 2 :err (str "heddle: " error "\n" usage)})))
 
 (defn- report! [{:keys [exit out err]}]
@@ -121,13 +143,40 @@ DIR is the current directory unless given.")
   (flush)
   (System/exit exit))
 
-(defn- handle! [proxy msg]
+(defn stdin-terminal?
+  "Whether a person is typing into heddle, rather than an editor or a pipe
+  feeding it."
+  []
   (try
-    (proxy/handle-client! proxy msg)
-    (catch Exception e
-      (log/info "couldn't handle" (get msg "method" "a response") "-" (ex-message e))
-      (when (and (contains? msg "id") (contains? msg "method"))
-        (lsp/write-message System/out (lsp/error-response (get msg "id") -32603 (ex-message e)))))))
+    (zero? (-> (ProcessBuilder. ["test" "-t" "0"])
+               (.redirectInput ProcessBuilder$Redirect/INHERIT)
+               .start
+               .waitFor))
+    (catch Exception _ false)))
+
+(defn- why-nothing-to-serve
+  "Why serving `server-types` (or every server type, if empty) from the repo at
+  `dir` would serve nothing, or nil if it would serve something."
+  [dir server-types]
+  (let [{:keys [repo config problem]} (proxy/load-config [dir])
+        unknown (config/unknown-server-types config server-types)]
+    (cond
+      problem (second problem)
+      (and (seq server-types) (= (count unknown) (count server-types)))
+      (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))))
+
+(defn nothing-to-serve
+  "What `heddle serve` prints, and its :exit status, when run by hand in `dir`
+  with nothing there to serve, or nil if it should serve as usual. It always
+  serves when stdin isn't a terminal, since the client may name a root with a
+  config at `initialize`."
+  [dir server-types]
+  (when (stdin-terminal?)
+    (when-let [reason (why-nothing-to-serve dir server-types)]
+      {:exit 1
+       :err (str "heddle: " reason "\n"
+                 "heddle serve speaks LSP over stdin and stdout, for an editor to run.\n"
+                 "`heddle init` writes a starter config, and `heddle check` checks one.")})))
 
 (defn- serve! [eager? server-types]
   (let [proxy (proxy/create {:send #(lsp/write-message System/out %)
@@ -139,12 +188,14 @@ DIR is the current directory unless given.")
         in (BufferedInputStream. System/in)]
     (loop []
       (if-let [msg (lsp/read-message in)]
-        (do (handle! proxy msg)
+        (do (proxy/handle-client! proxy msg)
             (recur))
-        (handle! proxy (lsp/notification "exit" nil))))))
+        (proxy/handle-client! proxy (lsp/notification "exit" nil))))))
 
 (defn -main [& args]
   (let [{:keys [command eager? server-types] :as parsed} (parse-args args)]
     (if (= :serve command)
-      (serve! eager? server-types)
+      (if-let [refusal (nothing-to-serve (System/getProperty "user.dir") server-types)]
+        (report! refusal)
+        (serve! eager? server-types))
       (report! (outcome parsed)))))

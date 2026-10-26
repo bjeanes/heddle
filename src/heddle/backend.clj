@@ -15,7 +15,8 @@
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.paths :as paths]
-            [heddle.process :as process])
+            [heddle.process :as process]
+            [heddle.requests :as requests])
   (:import (java.io BufferedInputStream InputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.util UUID)
@@ -90,7 +91,7 @@
 
 (defn backend
   "A backend for `server-type` in `scope`, not yet started. `repo` is the repo
-  root as a client path, and `cache-root` is where fetched files are cached.
+  root as a client path. `cache-root` is where fetched files are cached.
   `timeouts` overrides any of `default-timeouts`. The backend can be used as a
   context for heddle.translate, and with heddle.fetched."
   ([config server-type scope repo cache-root]
@@ -108,7 +109,7 @@
            :fetched (atom #{})
            :root (config/server-scope config server-type scope repo)
            :state (atom {:status :starting :queue []})
-           :requests (atom {:last-id 0 :open {}})})))
+           :requests (atom requests/empty-table)})))
 
 (defn status
   "One of :starting, :ready, :failed or :exited."
@@ -155,12 +156,7 @@
   ([backend method params tag on-response]
    (let [{:keys [last-id stopped]}
          (swap! (:requests backend)
-                (fn [{:keys [last-id] :as requests}]
-                  (if (:stopped requests)
-                    requests
-                    (-> requests
-                        (assoc :last-id (inc last-id))
-                        (assoc-in [:open (inc last-id)] {:tag tag :on-response on-response})))))]
+                #(cond-> % (not (:stopped %)) (requests/add tag on-response)))]
      (if stopped
        (on-response nil)
        (send! backend (lsp/request last-id method params)))
@@ -169,13 +165,11 @@
 (defn tagged-request
   "The ID of the open request tagged with `tag`, or nil if there isn't one."
   [backend tag]
-  (first (for [[id request] (:open @(:requests backend))
-               :when (= tag (:tag request))]
-           id)))
+  (first (requests/tagged @(:requests backend) tag)))
 
 (defn- take-callback! [backend id]
-  (let [[old] (swap-vals! (:requests backend) update :open dissoc id)]
-    (get-in old [:open id :on-response])))
+  (let [[old] (swap-vals! (:requests backend) requests/answered id)]
+    (requests/on-response old id)))
 
 (defn- stopped! [backend]
   (swap! (:state backend) #(cond-> % (= :ready (:status %)) (assoc :status :exited)))
@@ -217,7 +211,7 @@
 (defn- settle!
   "Moves the backend to `status`, then runs everything queued, including
   anything queued meanwhile. The backend keeps queueing until it takes an
-  empty queue, so nothing can run ahead of what's already queued."
+  empty queue. That way, nothing can run ahead of what's already queued."
   [backend status]
   (swap! (:state backend) assoc :status status :draining true)
   (loop []
@@ -286,11 +280,14 @@
 
 (defn exit!
   "Tells the backend to exit, closes its input and waits up to `ms` for it to
-  stop. Returns its exit code, or nil if it hasn't stopped. Since some backends
-  exit as soon as they've answered `shutdown`, failing to tell one to exit
-  isn't logged."
+  stop, then kills it if it hasn't. Returns its exit code, or nil if it had to
+  be killed. Since some backends exit as soon as they've answered `shutdown`,
+  failing to tell one to exit isn't logged."
   [backend ms]
-  (when-let [{:keys [send close wait]} (:conn @(:state backend))]
+  (when-let [{:keys [send close kill wait]} (:conn @(:state backend))]
     (try (send (lsp/notification "exit" nil)) (catch Exception _))
     (try (close) (catch Exception _))
-    (wait ms)))
+    (or (wait ms)
+        (do (log/info (:backend-id backend) "hasn't exited after" (process/duration ms) "and is being killed")
+            (try (kill) (catch Exception e (log/info "killing" (:backend-id backend) "failed:" (ex-message e))))
+            nil))))

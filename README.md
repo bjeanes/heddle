@@ -1,18 +1,53 @@
 # heddle
 
-`heddle` is a language server proxy for monorepos whose services each
-run in their own container. To your editor, or to an agent's MCP bridge, it
-is one ordinary language server. Behind that, it reads a config checked into
-the repo and starts the right language servers for each part of the repo,
-wherever they need to run, such as inside each service's Compose container.
+Editors and agents expect to start a project's language servers themselves,
+on the host, one per language. Plenty of projects don't fit that. Their
+dependencies might only be installed in a container, or two parts of the repo
+might need different versions of the same server.
+
+`heddle` is a central place to define a project's language servers, in a
+config checked into the repo, for any editor or agent to use. To your editor,
+or to an agent's MCP bridge, heddle is one ordinary language server. Behind
+that, it starts the right servers for each part of the repo, wherever they
+need to run, such as on the host or inside each service's Compose container.
 It translates paths in both directions. When a server points at a file that
-only exists in its container, such as an installed gem, the proxy copies the
-file out so you can open it.
+only exists where it runs, such as an installed gem, heddle copies the file
+out so you can open it.
+
+A heddle is the part of a loom that lifts _selected_ warp threads for the weft
+to pass between, much as heddle picks out the servers that match each file.
 
 [KICKOFF.md](KICKOFF.md) covers why it exists and
 [DESIGN.md](DESIGN.md) covers how it works.
 [docs/adr](docs/adr/README.md) records the decisions behind it, and what else
 was considered.
+
+## What it's for
+
+- **A multi-service monorepo.** Each service's servers run in that service's
+  own container, with the language and gem versions it actually uses. Two Ruby
+  services on different Ruby versions each get a ruby-lsp of their own.
+- **A single polyglot app**, such as Rails with TypeScript, Tailwind and
+  ESLint. Your editor configures one server, heddle, instead of four. It sends
+  each file to every server that handles it, and merges their diagnostics and
+  code actions into one answer.
+- **One config for the whole team.** The servers are defined once, in the
+  repo. Whoever opens it gets the same servers, whichever editor they use.
+  (VS Code still needs an extension to start it, which doesn't exist yet.)
+- **Agents.** MCP bridges such as mcp-language-server start one server for
+  one workspace. heddle is how an agent gets every language in the repo
+  through that one server. Since `heddle serve --eager` starts every server up
+  front, workspace symbol search works from the agent's first request.
+- **A containerised or remote toolchain, even for one service.** The app runs
+  in Docker, in a Nix shell or over SSH, while your editor stays on the host.
+  Docker and Compose have built-in runners. For anything else, you write a
+  runner that wraps the command, such as `nix develop --command` or `ssh`.
+  Since heddle maps paths between the two sides and fetches files that only
+  exist on the server's side, go-to-definition keeps working inside your
+  installed packages.
+- **Pinned versions.** Each server runs from the project's own bundle or
+  environment. You get the versions the project pins, instead of whatever
+  happens to be installed globally.
 
 ## Status
 
@@ -22,14 +57,38 @@ driver in `dev/`. Expect rough edges.
 
 ## Installing it
 
-Each GitHub release has a binary for macOS arm64, x86_64 Linux and arm64
-Linux. The `edge` prerelease is rebuilt from every push to `main`. Its files
-are named for the commit as `git describe` gives it, such as
-`heddle-v0.1.0-12-gabc1234-linux-amd64.tar.gz`.
+Each [GitHub release](https://github.com/bjeanes/heddle/releases) has a
+binary for macOS arm64 (`darwin-arm64`), x86_64 Linux (`linux-amd64`) and
+arm64 Linux (`linux-arm64`). So far, the only release is the
+[`edge`](https://github.com/bjeanes/heddle/releases/tag/edge) prerelease,
+which is rebuilt from every push to `main`.
 
-The macOS binary isn't signed. After downloading it, clear macOS's quarantine
-flag with `xattr -d com.apple.quarantine heddle`. Otherwise, macOS will
-refuse to run it.
+Use `curl` rather than your browser if you're on macOS. The macOS binary isn't
+signed, and browsers mark what they download as quarantined. macOS then
+refuses to run it, saying that Apple could not verify heddle is free of
+malware. curl doesn't set that flag. If you've already downloaded it through a
+browser, clear the flag with `xattr -d com.apple.quarantine heddle`.
+
+The `edge` archives are named for the commit, as `git describe` gives it, such
+as `heddle-e448ed6-darwin-arm64.tar.gz`. Since the name changes with every
+build, there's no fixed URL to download. Instead, this asks GitHub's API for
+the release's files, picks out the one for your platform, and unpacks the
+`heddle` binary into the current directory. Set `platform` to `darwin-arm64`,
+`linux-amd64` or `linux-arm64` first:
+
+```sh
+platform=darwin-arm64
+curl -fsSL https://api.github.com/repos/bjeanes/heddle/releases/tags/edge \
+  | grep -o "https://[^\"]*-$platform\.tar\.gz" \
+  | xargs curl -fL \
+  | tar -xz
+```
+
+A tagged release names its archives for the version, so you can write the link
+out yourself, as in
+`https://github.com/bjeanes/heddle/releases/download/v0.1.0/heddle-v0.1.0-darwin-arm64.tar.gz`.
+For any release, you can also copy the archive's link from the release page and
+run `curl -fL <link> | tar -xz`.
 
 ## Building it
 
@@ -43,6 +102,11 @@ jolt build -m heddle.main -o out/heddle
 
 That writes a single binary to `out/heddle`. Put it on your `PATH`,
 or point your editor at it directly.
+
+To build it and install it as `~/bin/heddle` in one go, run `install-heddle`
+from the repo root. Since the command comes with the dev shell, run it inside
+`nix develop`, or with direnv loading the shell for you. Give it a directory
+to install somewhere else, as in `install-heddle ~/.local/bin`.
 
 ## Configuring a repo
 
@@ -79,6 +143,7 @@ argument and prints which languages the config covers, as JSON such as
 heddle [serve] [--eager] [SERVER-TYPE...]
 heddle languages [DIR [SERVER-TYPE...]]
 heddle check [DIR]
+heddle init [DIR]
 heddle help
 ```
 
@@ -90,6 +155,19 @@ the `serve`, a name would be taken for a command. Given server types after its
 directory, `languages` only prints the languages of those. If one of them isn't
 in the config, `languages` fails, whereas `serve` warns once the editor
 connects and serves the rest.
+
+If there's no `.heddle.toml`, it's invalid, or no scope in it starts a server
+type, `serve` still answers the editor, shows it a message saying what's wrong,
+and serves nothing. Run by hand at a terminal, though, it prints the problem
+to stderr and exits 1 instead of waiting on stdin. It does the same there if
+none of the server types named after `serve` is in the config.
+
+`heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
+through a server type, a scope on the host, a scope in a Compose service, a
+runner of your own, and the cache, all commented out. Its notes start with
+`## ` and its examples with `# `. Uncomment what you need, then run
+`heddle check`. If there's already a config there, `init` leaves it alone and
+exits 1.
 
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
@@ -443,10 +521,10 @@ likely to run into are:
 - Unless you pass `--eager`, backends start when you first open one of their
   files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
-  files. The proxy doesn't send it the files that were already open, which
-  you'll need to reopen.
+  files, and no sooner than 30 s after it stopped.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
-- There's no VS Code extension or published release yet.
+- There's no VS Code extension yet. The only release is `edge`, built from
+  `main`.
 
 [1]: https://github.com/isaacphi/mcp-language-server

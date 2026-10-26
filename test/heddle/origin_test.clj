@@ -16,6 +16,12 @@
             {"title" "Run" "command" "lint:run"}]
            (origin/qualify-commands "lint" [{"title" "Fix" "command" {"title" "Fix" "command" "fix" "arguments" ["x"]}}
                                             {"title" "Run" "command" "run"}]))))
+  (testing "qualifies a list of command IDs where the caller says it is"
+    (is (= {"executeCommandProvider" {"commands" ["lint:fix"]}}
+           (origin/qualify-command-ids "lint" {"executeCommandProvider" {"commands" ["fix"]}}
+                                       ["executeCommandProvider" "commands"])))
+    (is (= {"hoverProvider" true}
+           (origin/qualify-command-ids "lint" {"hoverProvider" true} ["executeCommandProvider" "commands"]))))
   (testing "finds the server type a command belongs to"
     (is (= ["lint" "fix"] (origin/command-origin ["ruby" "lint"] "lint:fix")))
     (is (= ["a:b" "c"] (origin/command-origin ["a" "a:b"] "a:b:c")) "by the longest prefix")
@@ -27,11 +33,11 @@
             {"title" "run" "command" "x.run"}]
            (origin/mark-result "textDocument/codeAction" "b1"
                                [{"title" "fix"} {"title" "run" "command" "x.run"}]))))
-  (testing "marks completion items with the data their list's defaults give them"
+  (testing "marks the items in a completion list"
     (is (= {"isIncomplete" false
             "items" [{"label" "a" "data" {"heddle/backend" "b1" "data" 7}}]}
            (origin/mark-result "textDocument/completion" "b1"
-                               {"isIncomplete" false "itemDefaults" {"data" 7} "items" [{"label" "a"}]}))))
+                               {"isIncomplete" false "items" [{"label" "a" "data" 7}]}))))
   (testing "marks the hierarchy items in calls, so they can be followed further"
     (is (= [{"from" {"name" "a" "data" {"heddle/backend" "b1"}} "fromRanges" []}]
            (origin/mark-result "callHierarchy/incomingCalls" "b1" [{"from" {"name" "a"} "fromRanges" []}])))

@@ -73,6 +73,12 @@ serves.
 warnings, exiting non-zero if there are errors. That way, someone editing the
 config can see its problems without starting an editor.
 
+`heddle init [DIR]` writes a starter config to the root of DIR, and refuses
+to replace one that's already there. Everything in it is commented out, so it
+loads as written, with no server types. It shows a server type, a scope for
+each built-in runner, the cache, and the built-in runners' own definitions,
+which come from the same file the proxy loads them from.
+
 `heddle help`, `--help` or `-h` prints the usage to stdout and exits 0.
 A command line it can't parse is a usage error instead. It prints the error and
 the usage to stderr, and exits 2.
@@ -402,8 +408,19 @@ Messages are larger as a result. Applying incremental edits correctly means
 converting UTF-16 offsets into the implementation language's own strings. That
 can come later if message size turns out to matter.
 
-A backend starts on the first `didOpen` for one of its files, which means no
-other file of its can already be open. There is nothing to replay to it.
+A backend can start after some of its files opened, if it restarted or was
+waiting to start again after failing (see "Failures"). Since the client sends a
+file's full contents on every change, the proxy keeps the latest contents and
+version of each open file. When a backend starts, the proxy sends it a
+`didOpen` for each open file it handles, before anything else. So, a backend
+that starts late still sees every file it handles as the client last changed
+it.
+
+The proxy keeps track of which files each backend has been sent `didOpen` for.
+It sends each backend one `didOpen` per file, even for the file whose
+`didOpen` started it. It sends `didChange`, `didSave` and `didClose` only to
+backends that have the file open, and asks only them about the file. A
+restarted backend counts as a new one.
 
 ### Requests about one file
 
@@ -585,20 +602,40 @@ feature that ruby-lsp doesn't offer into the linter's error.
 If a running backend exits, the proxy reports it the same way, as a warning,
 and withdraws its diagnostics. A backend that failed either way starts again
 on the next `didOpen` for one of its files, but no sooner than 30 s after it
-failed. The message says so. Files that were already open aren't replayed to
-the new backend. That is the same with `--eager`. Only the first start is
-eager, and a backend that failed then starts again on a `didOpen` like any
-other.
+failed. The message says so. The proxy sends the new backend the files that
+were already open (see "Open files"). That is the same with `--eager`. Only the
+first start is eager, and a backend that failed then starts again on a
+`didOpen` like any other.
 
 A backend that keeps failing would otherwise show the user the same message
 every 30 s. The proxy shows at most one message a minute for each server type
 and scope, and logs the rest.
 
-If the config is missing or invalid, the proxy still answers `initialize`, then
-shows a message saying so, with the config's errors. It then serves nothing
-until it restarts, answering every request with an empty result. Failing
-`initialize` instead would leave many clients retrying the proxy or giving up
-on it, with the reason only in a log.
+If the config is missing, invalid, or has no scope that starts a server type,
+the proxy still answers `initialize`, then shows a message saying so, with the
+config's errors. It also logs the message to stderr, as it does every message
+it shows. It then serves nothing until it restarts, answering every request
+with an empty result. Failing `initialize` instead would leave many clients
+retrying the proxy or giving up on it, with the reason only in a log.
+
+That reasoning only holds for a client, though. A person who runs `heddle` by
+hand in a directory without a usable config would otherwise see nothing at
+all, since the proxy sits waiting for `initialize` on stdin. So, if stdin is a
+terminal, `serve` checks the config in the directory it was started in before
+reading anything. If there's nothing to serve, including when none of the
+server types named after `serve` is in the config, it prints why to stderr,
+with a pointer to `heddle init` and `heddle check`, and exits 1, as `check`
+does without a config. Since an editor or a pipe never gives the proxy a
+terminal for stdin, clients see no change.
+
+It has to be the starting directory, since there's no client to name a root.
+That is also why the proxy doesn't check it at startup otherwise. The client's
+root may hold a config that the starting directory lacks.
+
+To find out whether stdin is a terminal, the proxy runs `test -t 0` with its
+own stdin. If `test` can't be run, the proxy assumes it isn't a terminal. On
+the JVM, `System/console` also needs stdout to be a terminal, and I haven't
+confirmed that Jolt's detects one at all.
 
 A server type's boot table might set a `service` for the `compose` runner. A
 scope that switches that server type to `host` then has a value that its
@@ -661,9 +698,6 @@ These may become worth doing once we've used the prototype.
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the
   repetition starts to bite.
-- **Replaying open files to a restarted backend.** Since the client sends a
-  file's full contents on every change, the proxy only needs to keep the latest
-  one.
 - **Incremental sync**, if full contents on every change turns out to be too
   slow.
 - **Smarter merging** of answers from several servers.

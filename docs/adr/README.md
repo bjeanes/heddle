@@ -20,3 +20,4 @@ record says so instead of guessing.
 | [0008](0008-make-the-first-word-a-subcommand.md) | Make the first word a subcommand, defaulting to `serve` | Accepted |
 | [0009](0009-ship-a-neovim-module.md) | Ship a Neovim module | Accepted |
 | [0010](0010-name-the-project-heddle.md) | Name the project heddle | Accepted |
+| [0011](0011-report-failures-and-retry-after-30-s.md) | Report failures, and retry no sooner than 30 s | Accepted |

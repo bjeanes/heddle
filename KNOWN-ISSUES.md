@@ -38,9 +38,6 @@ them, under "Pinned for later".
   Until then, workspace symbol search and references don't cover it, and
   clients that only use what a server announces at startup won't use its
   features. `--eager` starts every server; there's no way to choose some.
-- **A restarted server doesn't get the files that were already open.** You'll
-  need to reopen them. Until you do, the proxy still sends that server your
-  edits to them, which it may report as errors.
 - **A server that failed starts again only when you open one of its files**,
   and no sooner than 30 s after it failed.
 - **With `--eager`, a server that takes longer than 30 s can't add to what was
@@ -49,8 +46,6 @@ them, under "Pinned for later".
   legend.
 - **Containers started by a runner's `prepare` keep running.** There's no
   teardown step yet, so you'll need to stop them yourself.
-- **A server that ignores `exit` is left running** once the proxy has waited
-  2 s for it.
 - **The config is read once.** After editing it, restart the proxy (or your
   editor's client).
 
@@ -77,9 +72,12 @@ them, under "Pinned for later".
 
 ## Building and platforms
 
-- **Nothing has been published as a release yet.** For now, you build it
-  yourself with the Nix dev shell, which provides Jolt for aarch64 macOS and
-  x86_64 Linux only.
+- **There's no tagged release yet**, only the `edge` prerelease, built from
+  every push to `main`.
+- **The macOS binary isn't signed or notarised.** macOS refuses to run it if a
+  browser downloaded it. See [Installing it](README.md#installing-it).
+- **Building it yourself needs the Nix dev shell**, which provides Jolt for
+  aarch64 macOS and x86_64 Linux only.
 - **Linux binaries need glibc 2.28 or newer**, which rules out musl-based
   systems such as Alpine.
 - **Windows hosts and remote Docker contexts aren't supported.**
