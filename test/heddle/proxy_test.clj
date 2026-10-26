@@ -1069,6 +1069,87 @@ read = ['cat', '{read:file}']
       (is (= 2 (get-in (from-proxy t) ["params" "type"])))
       (is (nothing-more? t)))))
 
+(defn- registers-commands
+  "Fake backends that register `commands` themselves once a file opens, and
+  unregister them once it changes."
+  [commands]
+  (let [registration {"id" "commands" "method" "workspace/executeCommand"}]
+    (fn [_ {:strs [id method]}]
+      (case method
+        "initialize" [(lsp/response id {"capabilities" {"executeCommandProvider" {"commands" ["fix"]}}})]
+        "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
+                                             {"registrations" [(assoc registration "registerOptions" {"commands" commands})]})]
+        "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [registration]})]
+        nil))))
+
+(defn- answered? [t k id]
+  (eventually #(some #{(lsp/response id nil)} (get @(:received t) k))))
+
+(deftest merging-commands-that-backends-register
+  (let [t (start :respond (registers-commands ["foo"]) :server-types #{"ruby"} :config ruby-in-two-scopes)
+        commands-registration (fn [commands]
+                                {"registrations" [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"
+                                                   "registerOptions" {"commands" commands}}]})
+        unregistered {"unregisterations" [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"}]}]
+    (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (= (commands-registration ["ruby:fix"]) (get (from-proxy t) "params")))
+    (testing "into the proxy's own registration, answering the backend"
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix" "ruby:foo"]) (get (from-proxy t) "params")))
+      (is (answered? t ["ruby" "api"] 1)))
+    (testing "leaving out those the backend unregisters"
+      (change! t "api/a.rb" 2 "")
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix"]) (get (from-proxy t) "params")))
+      (is (answered? t ["ruby" "api"] 2))
+      (open! t "api/b.rb" "ruby")
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= (commands-registration ["ruby:fix" "ruby:foo"]) (get (from-proxy t) "params"))))
+    (testing "so the client sees a command once, however many backends register it"
+      (open! t "b.rb" "ruby")
+      (is (answered? t ["ruby" "."] 1))
+      (is (nothing-more? t)))
+    (testing "and keeps it while any backend that registered it is running"
+      (stop-backend! t ["ruby" "."])
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))
+    (testing "until the last one stops"
+      (stop-backend! t ["ruby" "api"])
+      (is (= unregistered (get (from-proxy t) "params")))
+      (is (= 2 (get-in (from-proxy t) ["params" "type"])))
+      (is (nothing-more? t)))))
+
+(deftest merging-commands-that-backends-register-after-announcing-commands
+  (let [t (start :respond (registers-commands ["fix" "foo"]) :eager true)]
+    (is (= {"commands" ["lint:fix" "ruby:fix"]}
+           (get (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}}) "executeCommandProvider")))
+    (open! t "Gemfile" "plaintext")
+    (is (= [{"id" "workspace/executeCommand" "method" "workspace/executeCommand"
+             "registerOptions" {"commands" ["lint:foo"]}}]
+           (get-in (from-proxy t) ["params" "registrations"]))
+        "registers only the commands the answer to initialize didn't list")
+    (is (nothing-more? t))))
+
+(deftest passing-on-the-rest-of-a-request-that-registers-commands
+  (let [respond (fn [_ {:strs [id method]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {}})]
+                    "textDocument/didOpen" [(lsp/request 1 "client/registerCapability"
+                                                         {"registrations" [{"id" "commands" "method" "workspace/executeCommand"
+                                                                            "registerOptions" {"commands" ["foo"]}}
+                                                                           {"id" "watch" "method" "workspace/didChangeWatchedFiles"}]})]
+                    nil))
+        t (start :respond respond :server-types #{"ruby"})]
+    (initialize! t {"workspace" {"executeCommand" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (let [merged (from-proxy t)
+          passed (from-proxy t)]
+      (is (= [["workspace/executeCommand"] ["workspace/didChangeWatchedFiles"]]
+             (map registered-methods [merged passed])))
+      (client! t (lsp/response (get passed "id") nil))
+      (is (answered? t ["ruby" "api"] 1) "with the client's answer to the backend"))))
+
 (deftest cancelling-a-request
   (let [respond (fn [_ {:strs [id method]}]
                   (when (= "initialize" method)

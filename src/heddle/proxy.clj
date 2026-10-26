@@ -30,6 +30,10 @@
 (def ^:private shutdown-timeout-ms 10000) ; for every backend to answer `shutdown`
 (def ^:private exit-timeout-ms 2000) ; for a backend to exit before it's killed
 
+(def ^:private merged-method "workspace/executeCommand") ; whose registrations from backends join the proxy's own
+(def ^:private registration-lists {"client/registerCapability" "registrations"
+                                   "client/unregisterCapability" "unregisterations"})
+
 (defn create
   "A proxy for one client. `opts` has:
 
@@ -59,6 +63,7 @@
                        ;; what the client has open, and what it has been told
                        :client {:documents {}
                                 :announced #{}
+                                :announced-commands #{}
                                 :registered {}
                                 ;; what each backend registered itself, by
                                 ;; backend ID then qualified registration ID
@@ -143,8 +148,11 @@
            :session {:repo repo :config config :specs specs :client-params params})
     (when eager?
       (start-every-backend! proxy))
-    (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))]
-      (swap! (:state proxy) assoc-in [:client :announced] (capabilities/announced-methods (get result "capabilities")))
+    (let [result (capabilities/initialize-result (get params "capabilities") (ready-backends proxy))
+          caps (get result "capabilities")]
+      (swap! (:state proxy) update :client assoc
+             :announced (capabilities/announced-methods caps)
+             :announced-commands (set (get-in caps ["executeCommandProvider" "commands"])))
       {:result result
        :messages (concat (when-let [[type reason until] problem]
                            [[type (str reason "\nheddle is serving nothing until " until " and it restarts.")]])
@@ -191,11 +199,19 @@
   (let [{:keys [session registry]} @(:state proxy)]
     (routing/prioritised (:config session) (:backends registry))))
 
+(defn- merged? [registration]
+  (= merged-method (get registration "method")))
+
 (defn- server-capabilities
-  "The server capabilities of the backend `b`, with its commands qualified
-  with its server type."
-  [b]
-  (origin/qualify-command-ids (backend/server-type b) (backend/capabilities b) ["executeCommandProvider" "commands"]))
+  "The server capabilities of the backend `b`, with the commands it registered
+  itself added to those it announced, all qualified with its server type."
+  [proxy b]
+  (let [registered (for [r (vals (get-in @(:state proxy) [:client :registered-by (:backend-id b)]))
+                         :when (merged? r)
+                         command (get-in r ["registerOptions" "commands"])]
+                     command)]
+    (cond-> (origin/qualify-command-ids (backend/server-type b) (backend/capabilities b) ["executeCommandProvider" "commands"])
+      (seq registered) (update-in ["executeCommandProvider" "commands"] #(vec (distinct (concat % registered)))))))
 
 (defn- ready-backends
   "The server capabilities and document selector of each live backend that
@@ -203,7 +219,7 @@
   [proxy]
   (for [b (live-backends proxy)
         :when (backend/ready? b)]
-    [(server-capabilities b) (document-selector b)]))
+    [(server-capabilities proxy b) (document-selector b)]))
 
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
@@ -214,6 +230,16 @@
                      (when error
                        (log/info "the client refused" method "-" (get error "message"))))))
 
+(defn- unannounced
+  "The registration `r` without what the answer to `initialize` announced, or
+  nil if that was all of it. Commands can be announced in part, since a
+  backend can offer more of them later."
+  [{:keys [announced announced-commands]} r]
+  (let [commands (vec (remove announced-commands (get-in r ["registerOptions" "commands"])))]
+    (cond
+      (not (contains? announced (get r "method"))) r
+      (and (merged? r) (seq commands)) (assoc-in r ["registerOptions" "commands"] commands))))
+
 (defn- register!
   "Registers each feature that any ready backend offers, with one registration
   covering all of their files. Some clients, such as VS Code, ask every
@@ -221,17 +247,18 @@
   bring the proxy each request several times. When a registration has to
   change, the proxy unregisters it and registers it again. When no ready
   backend offers the feature any more, the proxy unregisters it. Features
-  announced in the answer to `initialize` aren't registered. Nothing is
-  registered until that answer has been sent."
+  announced in the answer to `initialize` aren't registered, apart from
+  commands it didn't list. Nothing is registered until that answer has been
+  sent."
   [proxy]
   (channel/serially (:channel proxy)
     (fn []
       (let [{:keys [session client]} @(:state proxy)
-            {:keys [registered announced]} client
+            {:keys [registered]} client
             wanted (when-not (channel/held? (:channel proxy))
-                     (remove #(contains? announced (get % "method"))
-                             (capabilities/registrations (get-in session [:client-params "capabilities"])
-                                                         (ready-backends proxy))))
+                     (keep #(unannounced client %)
+                           (capabilities/registrations (get-in session [:client-params "capabilities"])
+                                                       (ready-backends proxy))))
             wanted-by-method (into {} (map (juxt #(get % "method") identity)) wanted)
             withdrawn (remove #(contains? wanted-by-method (get % "method")) (vals registered))
             changed (remove #(= % (get registered (get % "method"))) wanted)
@@ -321,10 +348,11 @@
 
 (defn- withdraw-registrations!
   "Unregisters what the backend `b`, which has stopped, registered itself and
-  hasn't unregistered."
+  hasn't unregistered. That leaves out its commands, which the client only
+  knows through the proxy's own registration. `register!` replaces that."
   [proxy b]
   (let [[old] (swap-vals! (:state proxy) update-in [:client :registered-by] dissoc (:backend-id b))
-        registrations (vals (get-in old [:client :registered-by (:backend-id b)]))]
+        registrations (remove merged? (vals (get-in old [:client :registered-by (:backend-id b)])))]
     (when (seq registrations)
       (ask-client! proxy "client/unregisterCapability"
                    {"unregisterations" (mapv #(select-keys % ["id" "method"]) registrations)}))))
@@ -421,6 +449,17 @@
 
       nil)))
 
+(defn- passed-on
+  "The `params` of the backend's request `method` for the client, without the
+  registrations that `register!` merges into the proxy's own. Returns nil if
+  there were only those."
+  [method params]
+  (if-let [k (get registration-lists method)]
+    (let [passed (vec (remove merged? (get params k)))]
+      (when (seq passed)
+        (assoc params k passed)))
+    params))
+
 (defn- from-backend! [proxy b {:strs [id method params] :as msg}]
   (cond
     (nil? msg)
@@ -428,12 +467,17 @@
 
     (contains? msg "id")
     (let [params (cond->> (fetched/to-client! b (request-params proxy b method params))
-                   (= "client/registerCapability" method) (limit-selectors b))]
+                   (= "client/registerCapability" method) (limit-selectors b))
+          passed (passed-on method params)]
       (note-registrations! proxy b method params)
-      (request-client! proxy method params
-                       [(:backend-id b) id]
-                       (fn [response]
-                         (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id)))))
+      (when-not (= passed params)
+        (register! proxy))
+      (if passed
+        (request-client! proxy method passed
+                         [(:backend-id b) id]
+                         (fn [response]
+                           (backend/send! b (assoc (translate/to-server (:spec b) (dissoc response "id")) "id" id))))
+        (backend/send! b (lsp/response id nil))))
 
     (= "$/cancelRequest" method)
     (cancel-client-request! proxy [(:backend-id b) (get params "id")])

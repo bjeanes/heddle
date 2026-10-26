@@ -355,7 +355,8 @@ those backends offer, with their options combined the same way as a
 registration's, including their commands with the server-type prefixes
 described below. Since the announcement has no document selector, it covers
 every file, and the proxy answers for files with no backend offering the
-feature as above. A feature announced in the answer is never registered later.
+feature as above. A feature announced in the answer is never registered later,
+apart from any commands the answer didn't list.
 Semantic tokens are only announced if every backend numbers them with the same
 legend, since the client decodes every file's tokens with the one legend it was
 given. Otherwise the proxy leaves them to registration as usual.
@@ -478,6 +479,12 @@ also keeps two servers' commands from colliding. A command doesn't say which
 scope it came from, though. When more than one backend of that server type is
 running, the proxy picks the one whose scope contains a file the command's
 arguments refer to, and otherwise the first by scope.
+
+Backends of one server type in different scopes often register the same
+commands themselves. VS Code refuses a command ID that is registered twice.
+So, the proxy adds the commands a backend registers to its own registration of
+`workspace/executeCommand`, instead of passing that registration on. The client
+then sees each command once, for as long as any running backend offers it.
 
 ### Requests about no particular file
 
