@@ -11,6 +11,7 @@
             [heddle.lsp-test]
             [heddle.main-test]
             [heddle.merge-test]
+            [heddle.methods-test]
             [heddle.normalise-test]
             [heddle.origin-test]
             [heddle.paths-test]

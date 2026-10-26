@@ -1,6 +1,7 @@
 (ns heddle.merge
   "Combines the answers several backends give to one request. See \"Requests
-  about one file\" in DESIGN.md.")
+  about one file\" in DESIGN.md."
+  (:require [heddle.methods :as methods]))
 
 (defn- completions [lists]
   {"isIncomplete" (boolean (some #(get % "isIncomplete") lists))
@@ -41,8 +42,8 @@
   [method answers]
   (let [results (keep second answers)]
     (when (seq results)
-      (case method
-        "textDocument/completion" (completions results)
-        "textDocument/codeAction" (code-actions answers)
-        "textDocument/diagnostic" (diagnostic-reports results)
-        (vec (apply concat results))))))
+      (case (get-in methods/table [method :combine])
+        :completions (completions results)
+        :code-actions (code-actions answers)
+        :diagnostic-reports (diagnostic-reports results)
+        :concat (vec (apply concat results))))))

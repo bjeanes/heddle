@@ -1,7 +1,8 @@
 (ns heddle.normalise
   "Puts a backend's answer in the one shape the proxy handles for its request,
   before the proxy marks it or combines it with others. See \"Requests about
-  one file\" in DESIGN.md.")
+  one file\" in DESIGN.md."
+  (:require [heddle.methods :as methods]))
 
 (defn- with-defaults
   "A completion item with the `itemDefaults` of its list applied, since a
@@ -27,6 +28,6 @@
   "The result of the request `method` from one backend, in the shape the proxy
   handles."
   [method result]
-  (case method
-    "textDocument/completion" (some-> result completion-list)
+  (case (get-in methods/table [method :normalise])
+    :completion-list (some-> result completion-list)
     result))

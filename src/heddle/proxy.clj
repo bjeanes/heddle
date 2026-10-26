@@ -13,6 +13,7 @@
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.merge :as merge]
+            [heddle.methods :as methods]
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
@@ -607,18 +608,12 @@
 
 ;; Requests
 
-(def ^:private methods-with-commands
-  #{"textDocument/completion" "completionItem/resolve"
-    "textDocument/codeAction" "codeAction/resolve"
-    "textDocument/codeLens" "codeLens/resolve"
-    "textDocument/inlayHint" "inlayHint/resolve"})
-
 (defn- result-for-client
   "The result of the request `method` from the backend `b`, ready for the
   client."
   [b method result]
   (let [result (cond->> (to-client! b (normalise/result method result))
-                 (contains? methods-with-commands method) (origin/qualify-commands (:server-type b)))]
+                 (get-in methods/table [method :commands?]) (origin/qualify-commands (:server-type b)))]
     (origin/mark-result method (:backend-id b) result)))
 
 (defn- forward-request! [proxy b {:strs [id method params]}]

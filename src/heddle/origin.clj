@@ -2,7 +2,8 @@
   "Marks the items and commands in backends' answers, so that requests
   following up on one reach the backend that made it. See \"Requests about
   one file\" in DESIGN.md."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [heddle.methods :as methods]))
 
 (defn qualify-command
   "A command ID that a backend of `server-type` chose, made unique among all
@@ -54,36 +55,27 @@
          (assoc item "data" (get wrapper "data"))
          (dissoc item "data"))])))
 
-(defn- command? [v]
+(defn- command?
+  "Whether `v` is a bare command, as a code action request may answer with.
+  Since a bare command can't be resolved, it's left unmarked."
+  [v]
   (string? (get v "command")))
+
+(defn- update-items
+  "`v` with `f` applied to each item at `path`, as heddle.methods describes
+  it."
+  [v path f]
+  (cond
+    (nil? v) nil
+    (empty? path) (f v)
+    (= :each (first path)) (mapv #(update-items % (rest path) f) v)
+    :else (update v (first path) update-items (rest path) f)))
 
 (defn mark-result
   "The result of the request `method` from the backend `backend-id`, after
   heddle.normalise, with every item in it that a client can resolve or follow
   up on later marked."
   [method backend-id result]
-  (let [mark-all (fn [items] (mapv #(mark backend-id %) items))
-        mark-calls (fn [k calls] (mapv #(update % k (partial mark backend-id)) calls))]
-    (case method
-      "textDocument/completion"
-      (some-> result (update "items" mark-all))
-
-      ("textDocument/codeLens" "textDocument/documentLink" "textDocument/inlayHint" "workspace/symbol"
-       "textDocument/prepareCallHierarchy" "textDocument/prepareTypeHierarchy"
-       "typeHierarchy/supertypes" "typeHierarchy/subtypes")
-      (some-> result mark-all)
-
-      "callHierarchy/incomingCalls"
-      (some->> result (mark-calls "from"))
-
-      "callHierarchy/outgoingCalls"
-      (some->> result (mark-calls "to"))
-
-      "textDocument/codeAction"
-      (some->> result (mapv #(if (command? %) % (mark backend-id %))))
-
-      ("completionItem/resolve" "codeAction/resolve" "codeLens/resolve"
-       "documentLink/resolve" "inlayHint/resolve" "workspaceSymbol/resolve")
-      (some->> result (mark backend-id))
-
-      result)))
+  (if-let [path (get-in methods/table [method :items])]
+    (update-items result path #(if (command? %) % (mark backend-id %)))
+    result))
