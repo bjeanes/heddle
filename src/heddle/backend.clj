@@ -11,12 +11,12 @@
   connector. Tests use fake backends in the same process instead."
   (:require [clojure.java.io :as io]
             [heddle.config :as config]
-            [heddle.fetched :as fetched]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.paths :as paths]
             [heddle.process :as process]
-            [heddle.requests :as requests])
+            [heddle.requests :as requests]
+            [heddle.spec :as spec])
   (:import (java.io BufferedInputStream InputStream)
            (java.lang ProcessBuilder$Redirect)
            (java.util UUID)
@@ -105,7 +105,7 @@
            :repo repo
            :backend-id (new-id)
            :paths (get (config/boot-config config server-type scope) "paths")
-           :cache (fetched/cache-dir cache-root repo server-type scope)
+           :cache (spec/cache-dir cache-root repo [server-type scope])
            :fetched (atom #{})
            :root (config/server-scope config server-type scope repo)
            :state (atom {:status :starting :queue []})

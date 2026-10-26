@@ -7,28 +7,7 @@
             [heddle.paths :as paths]
             [heddle.process :as process])
   (:import (java.io File)
-           (java.net URLEncoder)
-           (java.util UUID)
-           (java.util.zip CRC32)))
-
-(defn- repo-key
-  "The repo's directory name and a hash of its path, which tells apart repos
-  with the same name."
-  [repo]
-  (let [file (.getAbsoluteFile (io/file repo))
-        crc (CRC32.)]
-    (.update crc (.getBytes (str file) "UTF-8"))
-    (str (.getName file) "-" (format "%08x" (.getValue crc)))))
-
-(defn- segment
-  "`s` percent-encoded as one path segment. Since `.` and `..` can't name a
-  directory of their own, their dots are encoded too, which URLEncoder doesn't
-  do. The root scope `.` becomes `%2E`."
-  [s]
-  (let [encoded (URLEncoder/encode ^String s "UTF-8")]
-    (if (re-matches #"\.+" encoded)
-      (str/replace encoded "." "%2E")
-      encoded)))
+           (java.util UUID)))
 
 (defn- unusable
   "Why `value`, read from an environment variable, can't be the cache root, or
@@ -72,14 +51,6 @@
           {:root value}))
 
       :else {:root tmpdir})))
-
-(defn cache-dir
-  "The directory under the cache's `root` holding fetched files for
-  `server-type` in `scope`, as a client path. Every backend for them uses the
-  same one, in any process."
-  [root repo server-type scope]
-  (str (str/replace root #"/+$" "")
-       "/heddle/" (repo-key repo) "/" (segment server-type) "/" (segment scope)))
 
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only

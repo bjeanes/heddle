@@ -7,7 +7,8 @@
             [clojure.string :as str]
             [heddle.glob :as glob]
             [heddle.paths :as paths]
-            [heddle.runner :as runner]))
+            [heddle.runner :as runner]
+            [heddle.spec :as spec]))
 
 (def file-name ".heddle.toml")
 
@@ -110,46 +111,13 @@
              e (runner/runner-errors runner)]
          (str "runner " (pr-str name) ": " e))))))
 
-(declare boot-config)
-
-(defn- paths-errors [paths]
-  (cond
-    (nil? paths) nil
-    (not (map? paths)) ["paths must be a table"]
-    :else (for [[dir server] paths
-                :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"
-                                    (not (paths/absolute-dir? server)) "must map to an absolute directory")]
-                :when problem]
-            (str "paths entry " (pr-str dir) " " problem))))
-
-(def ^:private stand-ins
-  "Runtime values for checking templates before any backend is running."
-  {:repo "/repo" :backend-id "id" :file "/file"})
-
-(defn- boot-errors [config scope server-type]
-  (let [boot (boot-config config server-type scope)
-        runner-name (get boot "runner")
-        runner (get-in config ["runners" runner-name])
-        path-errors (paths-errors (get boot "paths"))]
-    (cond
-      (nil? runner-name) ["names no runner"]
-      (not (string? runner-name)) ["runner must be a string"]
-      (nil? runner) [(str "unknown runner " (pr-str runner-name))]
-      (seq path-errors) path-errors
-      :else
-      (let [ctx (runner/context runner boot scope stand-ins)]
-        (if-not (:server-scope ctx)
-          [runner/uncovered-scope]
-          (for [t runner/templates
-                :when (contains? runner t)
-                e (second (runner/expand* runner t ctx))]
-            (str "runner " (pr-str runner-name) ", " t ": " e)))))))
+(defn- about-slot [[server-type scope] message]
+  (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " message))
 
 (defn- scope-runner-errors [config]
-  (for [[scope entries] (get config "scopes")
-        server-type (keys entries)
-        e (boot-errors config scope server-type)]
-    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": " e)))
+  (for [slot (spec/slots config)
+        e (spec/errors config slot)]
+    (about-slot slot e)))
 
 (defn- checked [config source find-errors]
   (let [errors (find-errors config)]
@@ -180,13 +148,9 @@
   aren't errors, since a server type's boot table can set a value for one
   runner that a scope then swaps for another."
   [config]
-  (for [[scope entries] (get config "scopes")
-        server-type (keys entries)
-        :let [boot (boot-config config server-type scope)
-              runner-name (get boot "runner")]
-        k (runner/unused-values (get-in config ["runners" runner-name]) boot)]
-    (str "scope " (pr-str scope) ", server type " (pr-str server-type) ": "
-         (pr-str k) " isn't used by runner " (pr-str runner-name))))
+  (for [slot (spec/slots config)
+        w (spec/warnings config slot)]
+    (about-slot slot w)))
 
 (defn warnings-message
   "The `warnings` for the config file at `source`, as one message."

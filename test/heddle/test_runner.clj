@@ -21,6 +21,7 @@
             [heddle.readme-test]
             [heddle.requests-test]
             [heddle.runner-test]
+            [heddle.spec-test]
             [heddle.starter-test]
             [heddle.translate-test]))
 
