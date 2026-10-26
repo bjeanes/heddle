@@ -6,6 +6,7 @@
             [heddle.json :as json]
             [heddle.lsp :as lsp]
             [heddle.proxy :as proxy]
+            [heddle.session :as session]
             [heddle.starter :as starter])
   (:import (java.io BufferedInputStream)
            (java.lang ProcessBuilder$Redirect)))
@@ -158,7 +159,7 @@ DIR is the current directory unless given.")
   "Why serving `server-types` (or every server type, if empty) from the repo at
   `dir` would serve nothing, or nil if it would serve something."
   [dir server-types]
-  (let [{:keys [repo config problem]} (proxy/load-config [dir])
+  (let [{:keys [repo config problem]} (session/load-config [dir])
         unknown (config/unknown-server-types config server-types)]
     (cond
       problem (second problem)
