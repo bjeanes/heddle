@@ -19,8 +19,7 @@
             [heddle.origin :as origin]
             [heddle.paths :as paths]
             [heddle.spec :as spec]
-            [heddle.translate :as translate])
-  (:import (java.net URI)))
+            [heddle.translate :as translate]))
 
 (defn create
   "A proxy for one client. `opts` has:
@@ -78,17 +77,6 @@
 (defn- send-client! [proxy msg]
   (channel/send! (:channel proxy) msg))
 
-(defn- uri->path [uri]
-  (try
-    (let [uri (URI. uri)]
-      (when (= "file" (.getScheme uri))
-        (let [path (str/replace (.getPath (.normalize uri)) #"/+$" "")]
-          (if (= "" path) "/" path))))
-    (catch Exception _ nil)))
-
-(defn- path->uri [path]
-  (str (URI. "file" "" path nil)))
-
 (defn- request-client!
   "Sends a request to the client with an ID of the proxy's own, and calls
   `on-response` with the client's response. `origin` is the backend and ID of
@@ -121,7 +109,7 @@
   "Where to look for a config: the workspace roots the client named in
   `initialize`, then `cwd`."
   [params cwd]
-  (distinct (concat (keep uri->path (cons (get params "rootUri")
+  (distinct (concat (keep paths/uri->path (cons (get params "rootUri")
                                           (map #(get % "uri") (get params "workspaceFolders"))))
                     [cwd])))
 
@@ -225,7 +213,7 @@
   fetched files, and those matching its globs."
   [b]
   (let [{:keys! [languages globs repo dir cache]} (:spec b)
-        relative (fn [base pattern] {"baseUri" (path->uri base) "pattern" pattern})]
+        relative (fn [base pattern] {"baseUri" (paths/path->uri base) "pattern" pattern})]
     (vec (concat (for [language languages
                        base [dir cache]]
                    {"language" language "pattern" (relative base "**/*")})
@@ -291,7 +279,7 @@
 
 (defn- init-params [b client-params]
   (let [{:keys! [root dir]} (:spec b)
-        root-uri (path->uri root)]
+        root-uri (paths/path->uri root)]
     (into {}
           (remove (comp nil? val))
           {"processId" (.pid (ProcessHandle/current))
@@ -516,7 +504,7 @@
   [proxy uri language]
   (let [{:keys [session registry]} @(:state proxy)
         {:keys [config repo specs]} session
-        path (uri->path uri)]
+        path (paths/uri->path uri)]
     (if-let [k (fetched-by (:backends registry) path)]
       [k]
       (when-let [path (repo-relative repo path)]
@@ -619,7 +607,7 @@
   (let [repo (get-in @(:state proxy) [:session :repo])
         within? (fn [b change]
                   (let [[_ scope] (slot b)]
-                    (some->> (uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
+                    (some->> (paths/uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
     (doseq [b (running-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]
@@ -789,7 +777,7 @@
   (let [repo (get-in @(:state proxy) [:session :repo])
         scope (comp second slot)
         running (sort-by scope (filter #(= server-type (server-type-of %)) (running-backends proxy)))
-        files (keep #(repo-relative repo (uri->path %))
+        files (keep #(repo-relative repo (paths/uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
         containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) running)]
     (or (last (sort-by (comp count scope) containing))

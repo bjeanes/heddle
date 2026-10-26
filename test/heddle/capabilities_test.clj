@@ -108,6 +108,11 @@
     (testing "a relative glob is moved under the scope"
       (is (= [{"language" "ruby" "scheme" "file" "pattern" {"baseUri" "file:///r/api" "pattern" "**/*.rb"}}]
              (capabilities/limit-selector [{"scheme" "file" "pattern" "**/*.rb"}] own))))
+    (testing "a relative pattern is kept only inside the scope, once normalised"
+      (let [inside {"pattern" {"baseUri" "file:///r/api/lib/" "pattern" "*.rb"}}
+            outside {"pattern" {"baseUri" "file:///r/api/../web" "pattern" "*.rb"}}]
+        (is (= [(assoc inside "language" "ruby")]
+               (capabilities/limit-selector [inside outside] [scope])))))
     (testing "an absolute glob is kept only inside the scope"
       (is (= [{"language" "ruby" "pattern" "/r/api/lib/**"}]
              (capabilities/limit-selector [{"pattern" "/r/api/lib/**"} {"pattern" "/r/web/**"}] own))))))
