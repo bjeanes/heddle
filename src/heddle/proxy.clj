@@ -18,6 +18,7 @@
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
+            [heddle.routing :as routing]
             [heddle.spec :as spec]
             [heddle.translate :as translate]))
 
@@ -230,10 +231,8 @@
   "Every live backend, which is one that is starting or ready, in priority
   order."
   [proxy]
-  (let [{:keys [session registry]} @(:state proxy)
-        backends (:backends registry)
-        rank (zipmap (config/by-priority (:config session) (set (map first (keys backends)))) (range))]
-    (map (comp :backend backends) (sort-by (fn [[server-type scope]] [(rank server-type) scope]) (keys backends)))))
+  (let [{:keys [session registry]} @(:state proxy)]
+    (routing/prioritised (:config session) (:backends registry))))
 
 (defn- server-capabilities
   "The server capabilities of the backend `b`, with its commands qualified
@@ -491,31 +490,9 @@
 
 ;; Documents
 
-(defn- repo-relative [repo path]
-  (when (and path (str/starts-with? path (str repo "/")))
-    (subs path (inc (count repo)))))
-
-(defn- fetched-by
-  "The backend that `path` is a fetched copy for, if any."
-  [backends path]
-  (first (for [[k {b :backend}] backends
-               :when (and path (str/starts-with? path (str (get-in b [:spec :cache]) "/")))]
-           k)))
-
-(defn- handlers
-  "The [server-type scope] of each backend that handles the file at `uri` when
-  it's opened as `language`, in priority order."
-  [proxy uri language]
-  (let [{:keys [session registry]} @(:state proxy)
-        {:keys [config repo specs]} session
-        path (paths/uri->path uri)]
-    (if-let [k (fetched-by (:backends registry) path)]
-      [k]
-      (when-let [path (repo-relative repo path)]
-        (for [server-type (config/by-priority config (config/server-types config path language))
-              :let [k [server-type (config/scope-for config server-type path)]]
-              :when (contains? specs k)]
-          k)))))
+(defn- handlers [proxy uri language]
+  (let [{:keys [session registry]} @(:state proxy)]
+    (routing/handlers session (:backends registry) uri language)))
 
 (defn- opened?
   "Whether the backend `b` has been sent `didOpen` for the file at `uri`."
@@ -611,7 +588,7 @@
   (let [repo (get-in @(:state proxy) [:session :repo])
         within? (fn [b change]
                   (let [[_ scope] (backend/slot b)]
-                    (some->> (paths/uri->path (get change "uri")) (repo-relative repo) (paths/within? scope))))]
+                    (some->> (paths/uri->path (get change "uri")) (routing/repo-relative repo) (paths/within? scope))))]
     (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]
@@ -781,20 +758,6 @@
       (forward-request! proxy b (assoc-in msg ["params" "item"] item))
       (send-client! proxy (lsp/response id nil)))))
 
-(defn- command-backend
-  "The live backend of `server-type` to run a command with `arguments`.
-  Where there are several, the one with the deepest scope that contains a
-  file the arguments refer to, or else the first by scope."
-  [proxy server-type arguments]
-  (let [repo (get-in @(:state proxy) [:session :repo])
-        scope (comp second backend/slot)
-        live (sort-by scope (filter #(= server-type (backend/server-type %)) (live-backends proxy)))
-        files (keep #(repo-relative repo (paths/uri->path %))
-                    (filter string? (tree-seq coll? seq arguments)))
-        containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) live)]
-    (or (last (sort-by (comp count scope) containing))
-        (first live))))
-
 (defn- none-ready-response
   "The answer to the request `id` for a command of `server-type`, which has no
   ready backend to run it."
@@ -812,7 +775,9 @@
   [proxy {:strs [id params] :as msg}]
   (let [server-types (keys (get-in @(:state proxy) [:session :config "servers"]))
         [server-type command] (origin/command-origin server-types (get params "command"))
-        b (when server-type (command-backend proxy server-type (get params "arguments")))
+        b (when server-type
+            (routing/command-backend (get-in @(:state proxy) [:session :repo]) (live-backends proxy)
+                                     server-type (get params "arguments")))
         none-ready #(send-client! proxy (none-ready-response proxy id server-type))]
     (cond
       (nil? server-type)

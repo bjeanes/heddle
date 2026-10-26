@@ -20,6 +20,7 @@
             [heddle.proxy-test]
             [heddle.readme-test]
             [heddle.requests-test]
+            [heddle.routing-test]
             [heddle.runner-test]
             [heddle.spec-test]
             [heddle.starter-test]
