@@ -20,6 +20,39 @@ to pass between, much as heddle picks out the servers that match each file.
 [KICKOFF.md](KICKOFF.md) covers why it exists and
 [DESIGN.md](DESIGN.md) covers how it works.
 
+## What it does
+
+- **Routes each file by what it is and where it is.** A file goes to every
+  server type whose `languages` or `globs` match it, started in the longest
+  [scope](#server-types-and-scopes) that contains the file, such as its
+  service's directory.
+- **Puts several servers on one file.** Requests that want one answer, such as
+  hover, definition and rename, go to the server type with the highest
+  `priority`. heddle combines every server's answers to the rest, such as
+  diagnostics, completions, code actions and references.
+- **Searches workspace symbols across every server** that's running.
+- **Translates paths and fetches files.** When a server points at a file that
+  only exists on its side, such as an installed gem, heddle copies it to
+  [the cache](#the-cache) for you to open.
+- **Runs each command on a backend that offers it**, and lists a command once
+  when several backends register it.
+- **Syncs documents the way each server asks**, with the full text or an
+  incremental edit on each change.
+- **Starts servers when you first open one of their files**, or all up front
+  with [`--eager`](#starting-servers-eagerly).
+- **Restarts a backend that fails or stops** the next time you open one of its
+  files, and no sooner than 30 s after. heddle tells you why and withdraws its
+  diagnostics.
+- **Has runners for the host, Compose, `docker exec` and `docker run`**
+  [built in](#the-built-in-runners). For anything else, such as Nix or SSH,
+  you can [write your own](#runners).
+- **Comes with tooling.** `heddle init` writes a starter config, `heddle check`
+  checks one, and `heddle languages` lists the languages it covers. To see
+  every message, [trace them](#tracing-messages) to a file.
+- **Has clients for Neovim and Claude Code.** The [Neovim module](#neovim)
+  keeps your usual servers from starting for the languages heddle serves. The
+  [Claude Code plugin](#claude-code) puts heddle behind Claude's `LSP` tool.
+
 ## Why you might use it
 
 - **A multi-service monorepo.** Each service's servers run in that service's
