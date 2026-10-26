@@ -18,13 +18,12 @@
             [heddle.normalise :as normalise]
             [heddle.origin :as origin]
             [heddle.paths :as paths]
+            [heddle.registry :as registry]
             [heddle.routing :as routing]
             [heddle.spec :as spec]
             [heddle.translate :as translate]))
 
 (def ^:private eager-timeout-ms 30000) ; with :eager, for every backend to start before answering `initialize`
-(def ^:private retry-interval-ms 30000) ; before a failed backend can start again
-(def ^:private report-interval-ms 60000) ; between messages about one slot's failures
 (def ^:private shutdown-timeout-ms 10000) ; for every backend to answer `shutdown`
 (def ^:private exit-timeout-ms 2000) ; for a backend to exit before it's killed
 
@@ -53,22 +52,13 @@
                        :session nil
                        ;; the backends by [server-type scope], each with the
                        ;; URIs it has been sent `didOpen` for, and those that failed
-                       :registry {:backends {}
-                                  :failures {}
-                                  :reported {}}
+                       :registry registry/empty-registry
                        ;; what the client has open, and what it has been told
                        :client {:documents {}
                                 :announced #{}
                                 :registered {}
                                 :diagnostics {}
                                 :progress {}}})))
-
-(defn- entry
-  "The registry's entry for the backend `b`, while it's live."
-  [state b]
-  (let [e (get-in state [:registry :backends (backend/slot b)])]
-    (when (identical? b (:backend e))
-      e)))
 
 (defn- now-ms [proxy]
   ((or (:clock proxy) #(System/currentTimeMillis))))
@@ -299,26 +289,14 @@
                                     ["general" "positionEncodings"] ["utf-16"])
            "trace" (get client-params "trace")})))
 
-(defn- describe [b]
-  (let [[server-type scope] (backend/slot b)]
-    (str server-type " in " (if (= "." scope) "the repo root" scope))))
-
-(defn- elapsed?
-  "Whether `ms` or more have passed between `since` and `now`, or there's no
-  `since`."
-  [since now ms]
-  (or (nil? since) (<= ms (- now since))))
-
 (defn- report!
-  "Shows the user a message about the backend `b`, unless one was shown for its
-  server type and scope in the last `report-interval-ms`, as a backend that
-  keeps failing would otherwise flood them."
+  "Shows the user a message about the backend `b`, if one is due for its slot
+  (see `registry/report-due?`). Otherwise, it only logs the message."
   [proxy b type message]
   (let [k (backend/slot b)
         now (now-ms proxy)
-        due? #(elapsed? (get-in % [:registry :reported k]) now report-interval-ms)
-        [old] (swap-vals! (:state proxy) #(cond-> % (due? %) (assoc-in [:registry :reported k] now)))]
-    (if (due? old)
+        [{old :registry}] (swap-vals! (:state proxy) update :registry registry/reported k now)]
+    (if (registry/report-due? old k now)
       (show-message! proxy type message)
       (log/info message))))
 
@@ -329,7 +307,7 @@
         timeouts (into {} (filter val) (select-keys proxy (keys backend/default-timeouts)))
         b (backend/backend (get specs k) timeouts)]
     (log/info "starting" server-type "for" (pr-str scope) "as" (:backend-id b))
-    (swap! (:state proxy) assoc-in [:registry :backends k] {:backend b :opened #{}})
+    (swap! (:state proxy) update :registry registry/started b)
     (backend/start! b (:connect proxy) (init-params b client-params) #(from-backend! proxy b %))
     (open-documents-in! proxy b)
     (backend/when-settled b (fn [ready?]
@@ -342,12 +320,12 @@
 
 (defn- backend-for!
   "The backend for `k`, a [server-type scope], started if it isn't live.
-  Returns nil if it failed within the last `retry-interval-ms`."
+  Returns nil if it can't start yet (see `registry/may-start?`)."
   [proxy k]
-  (let [{:keys [backends failures]} (:registry @(:state proxy))]
+  (let [{:keys [backends] :as registry} (:registry @(:state proxy))]
     (cond
       (contains? backends k) (get-in backends [k :backend])
-      (elapsed? (get-in failures [k :at]) (now-ms proxy) retry-interval-ms) (start-backend! proxy k))))
+      (registry/may-start? registry k (now-ms proxy)) (start-backend! proxy k))))
 
 (defn- set-diagnostics
   "`by-file`, which holds each backend's latest diagnostics for each file,
@@ -386,17 +364,9 @@
   why and when under :failures, withdraws its diagnostics and tells the user.
   `what-happened` follows the backend's description in the message."
   [proxy b type what-happened]
-  (let [k (backend/slot b)
-        now (now-ms proxy)
-        message (str (describe b) " " what-happened ". Opening one of its files will start it again, once "
-                     (quot retry-interval-ms 1000) " s have passed.")
-        [old] (swap-vals! (:state proxy)
-                          (fn [state]
-                            (cond-> state
-                              (entry state b)
-                              (-> (update-in [:registry :backends] dissoc k)
-                                  (assoc-in [:registry :failures k] {:message message :at now})))))]
-    (when (entry old b)
+  (let [message (registry/failure-message b what-happened)
+        [old] (swap-vals! (:state proxy) update :registry registry/failed b message (now-ms proxy))]
+    (when (registry/entry (:registry old) b)
       (clear-diagnostics! proxy b)
       (when (= :serving (:phase old))
         (report! proxy b type message)))))
@@ -494,17 +464,12 @@
   (let [{:keys [session registry]} @(:state proxy)]
     (routing/handlers session (:backends registry) uri language)))
 
-(defn- opened?
-  "Whether the backend `b` has been sent `didOpen` for the file at `uri`."
-  [state b uri]
-  (contains? (:opened (entry state b)) uri))
-
 (defn- opened-in
   "The live backends that have been sent `didOpen` for the file at `uri`,
   in priority order."
   [proxy uri]
-  (let [state @(:state proxy)]
-    (filter #(opened? state % uri) (live-backends proxy))))
+  (let [registry (:registry @(:state proxy))]
+    (filter #(registry/opened? registry % uri) (live-backends proxy))))
 
 (defn- live-handlers
   "The live backends that handle the file at `uri`. While the client has
@@ -527,10 +492,8 @@
   one for the file already or has stopped."
   [proxy b params]
   (let [uri (get-in params ["textDocument" "uri"])
-        k (backend/slot b)
-        [old] (swap-vals! (:state proxy)
-                          #(cond-> % (entry % b) (update-in [:registry :backends k :opened] conj uri)))]
-    (when (and (entry old b) (not (opened? old b uri)))
+        [{old :registry}] (swap-vals! (:state proxy) update :registry registry/opened b uri)]
+    (when (and (registry/entry old b) (not (registry/opened? old b uri)))
       (notify-backend! b "textDocument/didOpen" params))))
 
 (defn- open-documents-in!
@@ -565,7 +528,7 @@
 (defn- close [state uri]
   (-> state
       (update-in [:client :documents] dissoc uri)
-      (update-in [:registry :backends] #(into {} (for [[k e] %] [k (update e :opened disj uri)])))))
+      (update :registry registry/closed uri)))
 
 (defn- document-notification! [proxy method params]
   (let [uri (get-in params ["textDocument" "uri"])]
@@ -618,12 +581,6 @@
                                       :else
                                       (lsp/response id (result-for-client b method (get response "result"))))))))
 
-(defn- failures
-  "Why each of the backends `ks`, as [server-type scope], failed, for those
-  in the `registry` that aren't live because they did."
-  [{:keys [backends failures]} ks]
-  (keep #(when-not (contains? backends %) (get-in failures [% :message])) ks))
-
 (defn- failed-response
   "An error answering the request `id`, which an agent sees in its tool's
   result, with why the backends that would have answered it failed."
@@ -639,7 +596,7 @@
         uri (get-in params ["textDocument" "uri"])
         ks (handlers proxy uri (get-in client [:documents uri :language]))
         reasons (when (not-any? #(contains? (:backends registry) %) ks)
-                  (failures registry ks))]
+                  (registry/failures registry ks))]
     (send-client! proxy (if (seq reasons)
                           (failed-response id reasons)
                           (lsp/response id (capabilities/empty-result method))))))
@@ -763,7 +720,7 @@
   ready backend to run it."
   [proxy id server-type]
   (let [registry (:registry @(:state proxy))
-        reasons (failures registry (sort (filter #(= server-type (first %)) (keys (:failures registry)))))]
+        reasons (registry/failures registry (sort (filter #(= server-type (first %)) (keys (:failures registry)))))]
     (if (seq reasons)
       (failed-response id reasons)
       (lsp/error-response id lsp/internal-error (str "no " server-type " backend is running")))))

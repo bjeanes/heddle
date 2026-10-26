@@ -19,6 +19,7 @@
             [heddle.process-test]
             [heddle.proxy-test]
             [heddle.readme-test]
+            [heddle.registry-test]
             [heddle.requests-test]
             [heddle.routing-test]
             [heddle.runner-test]
