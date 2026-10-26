@@ -1,5 +1,14 @@
 {:paths ["src"]
 
+ :deps
+ {clj-toml/clj-toml {:git/url "https://github.com/vmfhrmfoaj/clj-toml"
+                     :git/sha "04071e5604018b7ac4d596edace2e81d47c1eab1"}
+  instaparse/instaparse {:git/url "https://github.com/Engelberg/instaparse.git"
+                         :git/tag "v1.4.10"
+                         :git/sha "abeafbc0651f00e25f9a8ce64c8d41d495c4fe6b"}}
+
  :aliases
  {:test {:extra-paths ["test"]
-         :main-opts ["-m" "monorepo-lsp.test-runner"]}}}
+         :main-opts ["-m" "monorepo-lsp.test-runner"]}
+  :drive {:extra-paths ["dev"]
+          :main-opts ["-m" "monorepo-lsp.dev.drive"]}}}

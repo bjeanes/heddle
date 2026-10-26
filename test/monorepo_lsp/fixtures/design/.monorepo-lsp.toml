@@ -1,0 +1,30 @@
+# The example from DESIGN.md.
+
+[servers.ruby-lsp]
+languages = ["ruby"]
+globs = ["**/Gemfile", "**/*.rake"]
+boot = { command = ["bundle", "exec", "ruby-lsp"] }
+
+[servers.rubocop]
+languages = ["ruby"]
+boot = { command = ["rubocop", "--lsp"] }
+
+[servers.typescript]
+languages = ["typescript", "typescriptreact"]
+boot = { command = ["typescript-language-server", "--stdio"] }
+
+[scopes."services/api"]
+ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/app" } }
+
+[scopes."services/billing"]
+ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billing" = "/app" } }
+
+# This service's Ruby is too old for ruby-lsp. A newer Ruby on the host runs it.
+[scopes."services/legacy"]
+ruby-lsp = { runner = "host", command = ["ruby-lsp"] }
+
+[scopes."services/web"]
+typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src" }, args = ["--volume", "{client:repo}:/src"] }
+
+[scopes."."]
+rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }

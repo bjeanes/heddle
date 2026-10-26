@@ -126,32 +126,74 @@ How the proxy works, from its config model to how it routes messages, is in
 
 ## Implementation language
 
-The implementation language is undecided. The proxy should ship as a single
-static binary for macOS (arm64 and x86_64) and Linux, which means installing it
-is a matter of downloading one file. It has to handle several streams at once
-reliably and rewrite arbitrary JSON. Speed matters little.
+The proxy is written in Jolt[13], a Clojure that runs on Chez Scheme and builds
+self-contained executables. The proxy should ship as a single binary for macOS
+and Linux, which means installing it is a matter of downloading one file. It
+has to handle several streams at once reliably and rewrite arbitrary JSON.
+Speed matters little.
 
-I'd like to try Jolt[13], a Clojure that runs on Chez Scheme and builds
-self-contained executables. It is young (the repo was created in June 2026).
-However, it ships babashka.process, fibers and `core.async`, which should cover
-the stream handling. Before we commit to it, a spike of a day or so should show
-that it can:
+Jolt is young. Its repo was created in June 2026, and it was at v0.8.23 when we
+started. So, before committing to it, we ran a spike against five questions.
+The answer to each was yes, with some caveats:
 
-1. run `docker compose exec --interactive` and pump stdin and stdout
-   concurrently without stalling;
-2. round-trip several MB of JSON through a generic tree rewrite at a reasonable
-   speed. Since Jolt's standard library has no JSON support, that includes
-   finding a library;
-3. build binaries that run on other people's machines. Jolt's prebuilt releases
-   cover only macOS arm64 and Linux x86_64.
+1. **Can it relay stdio through `docker compose exec`?** Yes. The relay sits in
+   front of ruby-lsp in the example Compose project, both on the host and
+   inside the container, and gives the same answers as talking to ruby-lsp
+   directly. Hover and definition take a few milliseconds through it.
+2. **Can it round-trip large JSON quickly enough?** Yes, though not with a
+   library. clojure.data.json doesn't run on Jolt, for reasons covered in
+   `src/monorepo_lsp/json.clj`. Our own codec writes a 3.4 MB message in about
+   0.4 s and reads it in about 0.27 s. That message is far bigger than typical
+   ones, but the writer is the obvious place to optimise.
+3. **Can it build binaries for other machines?** Yes. `jolt build` produced a
+   12 MB binary for macOS arm64 with no extra setup. Cross-compiling for Linux
+   took more work, described below, but produced working x86_64 and arm64
+   binaries from a Mac.
+4. **Can it read TOML?** Yes. clj-toml 1.0 runs unchanged on top of
+   instaparse. However, invalid TOML comes back as a raw parse failure, which
+   we'll need to turn into a readable message. A table declared twice also
+   silently replaces the first. Both are acceptable for now.
+5. **Does UTF-16 cause trouble?** Not much. Jolt's strings are made of code
+   points, while LSP positions count UTF-16 code units. Since the proxy never
+   converts positions (see `DESIGN.md`), this only matters for JSON escapes.
+   Our codec combines an escaped surrogate pair into one code point and writes
+   everything outside ASCII as raw UTF-8.
 
-If any of those is painful, Rust is the fallback. Clojure with GraalVM
-native-image is the alternative if we want to stay in Clojure. clojure-lsp ships
-that way.
+The spike also turned up two rough edges in Jolt itself, both worth raising
+upstream:
+
+- Its Maven dependency resolver ignores `HTTPS_PROXY` and looks up hostnames
+  itself. Behind a proxy, or in a sandbox, Maven dependencies can't be fetched.
+  Git dependencies still work, since Jolt runs `git` for those.
+- JVM code that builds strings from surrogate halves, which is common in
+  parsers, throws on Jolt.
+
+Rust remains the fallback if Jolt turns out to be the wrong choice after all.
+Clojure with GraalVM native-image is the alternative if we want to stay in
+Clojure. clojure-lsp ships that way.
+
+### Cross-compiling
+
+`jolt build --target` can build for another platform, given a "target pack" for
+it. A pack holds the target's Chez Scheme boot files and C kernel, along with
+static zlib and lz4. Building one means building Chez Scheme 10.4.1 from source
+with Jolt's patches, then each target's boot files and kernel. For Linux
+targets, `zig cc` serves as the cross compiler. On an M-series Mac that took
+about 10 minutes, once. After that, each build of the proxy takes about 30
+seconds.
+
+The resulting Linux binaries link glibc 2.28 or newer dynamically, which means
+they don't run on musl-based systems such as Alpine. `zig cc` can target musl
+too, which may allow fully static binaries, but I haven't tried it.
+
+For the spike, I built the packs by hand, outside the repo. The intent is to
+make them reproducible with Nix derivations, so that release binaries for every
+platform can be built from one machine. That can wait until there is something
+to release.
 
 ## Milestones
 
-1. The language spike, as above.
+1. The language spike. This is done, as described above.
 2. One server in one container. `monorepo-lsp ruby-lsp` serves a single scope
    through Compose, with path translation and container-only files. We'll test
    it from Neovim against a real Ruby service.
@@ -163,6 +205,8 @@ that way.
 4. The VS Code extension, plus setup docs and an example repo.
 5. Later on, smarter merging of answers from several servers, and formatters
    offered through `textDocument/formatting`.
+6. Reproducible cross-builds of release binaries, with the target packs built
+   by Nix.
 
 ## Open questions
 
