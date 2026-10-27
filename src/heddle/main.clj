@@ -185,12 +185,12 @@ DIR is the current directory unless given.")
   "Why serving `server-types` (or every server type, if empty) from the repo at
   `dir` would serve nothing, or nil if it would serve something."
   [dir server-types]
-  (let [{:keys [repo config problem]} (session/load-config [dir])
+  (let [{:keys [source config problem]} (session/load-config [dir])
         unknown (config/unknown-server-types config server-types)]
     (cond
       problem (second problem)
       (and (seq server-types) (= (count unknown) (count server-types)))
-      (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))))
+      (config/unknown-server-types-message source unknown))))
 
 (defn nothing-to-serve
   "What `heddle serve` prints, and its :exit status, when run by hand in `dir`

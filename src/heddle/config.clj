@@ -223,11 +223,11 @@
 
 (defn trace-path
   "The file that the config's `trace` table names, or nil if it has none.
-  `repo` is the directory holding the config, which a relative `path` is
+  `dir` is the directory holding the config, which a relative `path` is
   resolved against."
-  [config repo]
+  [config dir]
   (when-let [path (get-in config ["trace" "path"])]
-    (if (str/starts-with? path "/") path (paths/client-path repo path))))
+    (if (str/starts-with? path "/") path (paths/client-path dir path))))
 
 (defn server-types
   "The server types that handle the file at the repo-relative `path`, which the

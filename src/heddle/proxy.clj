@@ -4,8 +4,7 @@
 
   The client's messages are handled in order, on the thread that reads them.
   Each backend's messages are handled on that backend's own thread."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [heddle.backend :as backend]
             [heddle.capabilities :as capabilities]
             [heddle.channel :as channel]
@@ -133,12 +132,12 @@
   "Starts serving the client that sent `initialize` with `params`, from the
   repo and config `loaded`. Returns the :result to answer with, and the
   :messages to show the user afterwards, each as [type message]."
-  [proxy params {:keys [repo config cache-root problem warnings]}]
+  [proxy params {:keys [repo source config cache-root problem warnings]}]
   (let [specs (spec/specs config repo cache-root (:server-types proxy))
         eager? (and (:eager proxy) (not problem))
         unknown (when-not problem (seq (config/unknown-server-types config (sort (:server-types proxy)))))
         unknown-warning (when unknown
-                          (config/unknown-server-types-message (str (io/file repo config/file-name)) unknown))
+                          (config/unknown-server-types-message source unknown))
         warnings (cond-> warnings unknown-warning (conj unknown-warning))]
     (when unknown-warning
       (log/info unknown-warning))

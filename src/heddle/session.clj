@@ -24,20 +24,22 @@
   has one, there's no :repo. The proxy then fails `initialize`. Without a
   config that has some server type, the proxy serves nothing. :problem then
   has the type of a message for the user, what's wrong, and what would have to
-  change. Otherwise, :cache-root is where to cache fetched files, :trace-path
-  is the file to trace messages to, if any, and :warnings has the text of any
-  messages warning about the config."
+  change. Otherwise, :source is the config's file, :cache-root is where to
+  cache fetched files, :trace-path is the file to trace messages to, if any,
+  and :warnings has the text of any messages warning about the config."
   [roots]
   (if-let [repo (first (filter #(.exists (io/file % config/file-name)) roots))]
     (try
-      (let [c (config/read-config repo)
-            source (str (io/file repo config/file-name))
+      (let [source (str (io/file repo config/file-name))
+            dir (.getParent (io/file source))
+            c (config/read-config repo)
             unused (config/warnings c)
-            {:keys [root warning]} (fetched/cache-root c repo #(System/getenv %))]
+            {:keys [root warning]} (fetched/cache-root c dir repo #(System/getenv %))]
         (cond-> {:repo repo
+                 :source source
                  :config c
                  :cache-root root
-                 :trace-path (config/trace-path c repo)
+                 :trace-path (config/trace-path c dir)
                  :warnings (cond-> []
                              (seq unused) (conj (config/warnings-message source unused))
                              warning (conj warning))}

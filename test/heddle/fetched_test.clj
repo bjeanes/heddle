@@ -41,7 +41,7 @@
   "The cache root that a config with `cache` chooses for the repo /code/shop,
   with `env` as the environment."
   [cache env]
-  (fetched/cache-root (config/parse (str "cache = " cache "\n")) "/code/shop" env))
+  (fetched/cache-root (config/parse (str "cache = " cache "\n")) "/code/shop" "/code/shop" env))
 
 (def ^:private tmpdir (System/getProperty "java.io.tmpdir"))
 
@@ -53,9 +53,11 @@
 
 (deftest cache-roots
   (testing "default to the system's temp directory"
-    (is (= {:root (shop-in tmpdir)} (fetched/cache-root (config/parse "") "/code/shop" {}))))
+    (is (= {:root (shop-in tmpdir)} (fetched/cache-root (config/parse "") "/code/shop" "/code/shop" {}))))
   (testing "tell apart repos with the same name in a shared directory"
-    (is (= {:root (shop-in tmpdir "a1955834")} (fetched/cache-root (config/parse "") "/other/shop" {}))))
+    (is (= {:root (shop-in tmpdir "a1955834")} (fetched/cache-root (config/parse "") "/other/shop" "/other/shop" {}))))
+  (testing "tell apart repos that share a config outside them"
+    (is (= {:root (shop-in tmpdir "a1955834")} (fetched/cache-root (config/parse "") "/code/shop" "/other/shop" {}))))
   (testing "can be read from an environment variable"
     (is (= {:root (shop-in "/home/me/.cache")}
            (cache-root "{ env = 'XDG_CACHE_HOME' }" {"XDG_CACHE_HOME" "/home/me/.cache"}))))
@@ -87,7 +89,9 @@
     (is (= {:root "/var/cache"} (cache-root "{ path = '/var/cache' }" {}))))
   (testing "can be a path relative to the config's directory, used as given"
     (is (= {:root "/code/shop/.cache"} (cache-root "{ path = '.cache' }" {})))
-    (is (= {:root "/code/shop"} (cache-root "{ path = '.' }" {})))))
+    (is (= {:root "/code/shop"} (cache-root "{ path = '.' }" {})))
+    (is (= {:root "/etc/heddle/.cache"}
+           (fetched/cache-root (config/parse "cache = { path = '.cache' }") "/etc/heddle" "/code/shop" {})))))
 
 (deftest fetching
   (let [server (temp-dir)
