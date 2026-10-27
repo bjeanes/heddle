@@ -198,13 +198,18 @@
        expand
        (checked source scope-runner-errors))))
 
+(defn read-file
+  "Reads the config in the file `f`, or returns nil if there's no such file."
+  [f]
+  (let [f (io/file f)]
+    (when (.exists f)
+      (parse (slurp f) (str f)))))
+
 (defn read-config
   "Reads the config at the root of the repo at `root`, or returns nil if it has
   none."
   [root]
-  (let [f (io/file root file-name)]
-    (when (.exists f)
-      (parse (slurp f) (str f)))))
+  (read-file (io/file root file-name)))
 
 (defn warnings
   "Values in a valid config's scopes that the scope's runner never uses. These

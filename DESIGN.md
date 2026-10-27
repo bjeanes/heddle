@@ -58,8 +58,17 @@ The proxy finds its config by looking for `.heddle.toml` in the workspace
 root the client sends at startup, falling back to the directory it was started
 in.
 
+`--config FILE`, or `HEDDLE_CONFIG`, reads the config from FILE instead, for a
+config that can't be committed to the repo or is shared between checkouts. The
+repo is still the workspace root, or else the directory heddle was started in,
+whether or not it has a `.heddle.toml`. That keeps scopes and `paths` relative
+to the repo. Only the relative paths of the `cache` and `trace` tables follow
+FILE, since they're documented as relative to the config's directory. If FILE
+doesn't exist, heddle reports that and doesn't fall back to the repo's own
+config.
+
 `heddle languages [DIR [SERVER-TYPE...]]` doesn't start the proxy.
-Instead, it prints the languages that the config at the root of DIR covers, as
+Instead, it prints the languages that the config for DIR covers, as
 JSON such as `{"languages":["ruby"]}`. DIR defaults to the directory it was
 started in. If any server types are named, only those count. If there's no
 config, it's invalid, or it doesn't have a server type that was named, it
@@ -652,17 +661,19 @@ at a new directory for each shell. An editor started from one would then use a
 new cache each time and leave the old ones behind. So, `cache` can follow the
 XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
-directory, which is the repo root.
+directory, which is the repo root unless the config came from `--config`.
 
 The temp directory, `~/.cache` and a directory named by an environment
 variable may each hold the caches of several repos. An environment variable
 counts as shared because it's set outside the repo, often once for every
 shell. It then names the same directory whichever repo the editor opens.
-`heddle/<repo>` keeps those repos' copies apart. However, only this repo's
-config names a `path`. Since nothing else shares it, the proxy uses it as
-given. `heddle/<repo>` would only add two levels of directories there.
+`heddle/<repo>` keeps those repos' copies apart. However, a `path` is usually
+named only by this repo's config. The proxy assumes nothing else shares it and
+uses it as given. `heddle/<repo>` would only add two levels of directories
+there.
 
-Several checkouts of the repo can still share an absolute `path`. If their
+Several checkouts of the repo can still share an absolute `path`. So can repos
+that read the same config through `--config`, whatever its `path`. If their
 servers see different versions of a file, one checkout's copy can replace
 another's until a backend fetches it again.
 

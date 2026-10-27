@@ -34,8 +34,8 @@
 ## 2. Where to run it (optional) -----------------------------------------------
 ##
 ## A scope says how to run a server for the files under one directory, relative
-## to this file (\".\" means the whole repo). For each server it starts, it can
-## name a runner, which is how heddle starts the server there. Without one,
+## to the repo root (\".\" means the whole repo). For each server it starts, it
+## can name a runner, which is how heddle starts the server there. Without one,
 ## heddle runs the server's command directly, on your machine. If two scopes
 ## cover a file, the deeper one wins.
 ##
@@ -109,7 +109,7 @@
 ## across shells that change the temp directory, such as `nix develop`.
 
 # [cache]
-# xdg = true                                   # or env = \"VAR\", or path = \"/absolute/dir\" or \"dir/in/the/repo\"
+# xdg = true                                   # or env = \"VAR\", or path = \"/absolute/dir\" or \"dir/beside/this/file\"
 
 ## 5. Tracing (optional) -------------------------------------------------------
 ##

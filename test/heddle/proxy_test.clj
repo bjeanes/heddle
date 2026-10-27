@@ -45,7 +45,7 @@ read = ['cat', '{read:file}']
   keys of `refuse` fails, as described by the value. Returns the proxy and its
   repo, a queue of what it sends the client, an atom of what each backend
   receives, and an atom of the proxy's clock in milliseconds."
-  [& {:keys [respond refuse server-types eager eager-timeout-ms start-timeout-ms] :as opts}]
+  [& {:keys [respond refuse server-types eager eager-timeout-ms start-timeout-ms config-file] :as opts}]
   (let [repo (temp-dir)
         out (LinkedBlockingQueue.)
         received (atom {})
@@ -64,6 +64,7 @@ read = ['cat', '{read:file}']
                            :eager eager
                            :eager-timeout-ms eager-timeout-ms
                            :start-timeout-ms start-timeout-ms
+                           :config-file config-file
                            :cwd (temp-dir)
                            :exit #(deliver exit-code %)
                            :clock #(deref now)})}))
@@ -150,6 +151,12 @@ read = ['cat', '{read:file}']
       (is (= 1 (deref (:exit-code t) 2000 nil)))
       (is (nil? (.poll (:out t))))
       (is (= {} @(:received t)))))
+  (testing "fails `initialize` if the config file it was given isn't there"
+    (let [file (str (temp-dir) "/nosuch.toml")
+          t (start :config-file file)]
+      (client! t (lsp/request 0 "initialize" {"rootUri" (str "file://" (:repo t)) "capabilities" {}}))
+      (is (= (lsp/error-response 0 -32803 (str "There's no config file " file ".") {"retry" false})
+             (from-proxy t)))))
   (testing "warns that there's no server type, and serves nothing"
     (let [t (start :config "[scopes.'.']\n")]
       (initialize! t {})
@@ -361,6 +368,22 @@ read = ['cat', '{read:file}']
       (is (= -32603 (get-in (from-proxy t) ["error" "code"])))
       (is (= log (from-proxy t)))
       (is (nothing-more? t)))))
+
+(deftest with-a-config-file
+  (let [file (str (temp-dir) "/shared.toml")]
+    (spit file config)
+    (testing "serves the repo at the client's root, with the config in the file"
+      (let [t (start :config "[scopes.'.']\n" :config-file file)]
+        (initialize! t {})
+        (is (nothing-more? t))
+        (open! t "api/a.rb" "ruby")
+        (is (eventually #(seq (methods-received t ["ruby" "api"]))))
+        (is (= (:repo t) (get-in (backend-of t ["ruby" "api"]) [:spec :repo])))))
+    (testing "serves the working directory if the client names no root"
+      (let [t (start :config-file file)]
+        (client! t (lsp/request 0 "initialize" {"capabilities" {}}))
+        (is (contains? (from-proxy t) "result"))
+        (is (= (get-in t [:proxy :cwd]) (get-in @(:state (:proxy t)) [:session :repo])))))))
 
 (def ^:private config-with-unused-value
   (str/replace config "command = 'ruby'," "command = 'ruby', image = 'unused',"))

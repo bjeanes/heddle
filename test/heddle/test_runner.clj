@@ -25,6 +25,7 @@
             [heddle.requests-test]
             [heddle.routing-test]
             [heddle.runner-test]
+            [heddle.session-test]
             [heddle.spec-test]
             [heddle.starter-test]
             [heddle.trace-test]

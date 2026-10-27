@@ -33,8 +33,33 @@
   (is (= {:error "--trace needs a file"} (main/parse-args ["serve" "--trace"])))
   (is (= {:error "--trace needs a file"} (main/parse-args ["--trace" "--eager"])))
   (is (= {:error "--trace can only be given once"} (main/parse-args ["--trace" "a" "--trace" "b"])))
-  (is (= {:error "check takes no options, but was given --trace"}
+  (is (= {:error "check takes only --config, but was given --trace"}
          (main/parse-args ["check" "--trace" "/tmp/trace.jsonl"]))))
+
+(deftest serve-languages-and-check-take-a-config-file
+  (is (= {:command :serve :eager? true :server-types ["ruby-lsp"] :trace "t.jsonl" :config "c.toml"}
+         (main/parse-args ["--config" "c.toml" "--eager" "serve" "ruby-lsp" "--trace" "t.jsonl"])
+         (main/parse-args ["serve" "ruby-lsp" "--trace" "t.jsonl" "--config" "c.toml" "--eager"])))
+  (is (= {:command :languages :dir "/repo" :server-types ["ruby-lsp"] :config "c.toml"}
+         (main/parse-args ["languages" "--config" "c.toml" "/repo" "ruby-lsp"])))
+  (is (= {:command :check :dir "/repo" :config "c.toml"}
+         (main/parse-args ["check" "/repo" "--config" "c.toml"])
+         (main/parse-args ["--config" "c.toml" "check" "/repo"])))
+  (is (= {:error "--config needs a file"} (main/parse-args ["--config"])))
+  (is (= {:error "--config needs a file"} (main/parse-args ["--config" "--eager"])))
+  (is (= {:error "--config needs a file"} (main/parse-args ["check" "--config"])))
+  (is (= {:error "--config can only be given once"} (main/parse-args ["check" "--config" "a" "--config" "b"])))
+  (is (= {:error "init takes no options, but was given --config"}
+         (main/parse-args ["init" "--config" "c.toml"]))))
+
+(deftest the-config-file-comes-from-config-or-heddle-config
+  (is (nil? (main/config-file {} {})))
+  (is (nil? (main/config-file {} {"HEDDLE_CONFIG" ""})))
+  (is (= "/etc/heddle.toml" (main/config-file {} {"HEDDLE_CONFIG" "/etc/heddle.toml"})))
+  (is (= "/etc/heddle.toml"
+         (main/config-file {:config "/etc/heddle.toml"} {"HEDDLE_CONFIG" "/elsewhere.toml"})))
+  (is (= (str (System/getProperty "user.dir") "/c.toml") (main/config-file {:config "c.toml"} {})))
+  (is (= (str (System/getProperty "user.dir") "/c.toml") (main/config-file {} {"HEDDLE_CONFIG" "c.toml"}))))
 
 (deftest serve-rejects-unknown-options
   (is (= {:error "unknown option --languages"} (main/parse-args ["--languages"])))
@@ -71,7 +96,7 @@
   (is (= {:command :check :dir nil} (main/parse-args ["check"])))
   (is (= {:command :check :dir "/repo"} (main/parse-args ["check" "/repo"])))
   (is (= {:error "check takes at most one directory"} (main/parse-args ["check" "/repo" "/other"])))
-  (is (= {:error "languages takes no options, but was given --eager"}
+  (is (= {:error "languages takes only --config, but was given --eager"}
          (main/parse-args ["--eager" "languages"]))))
 
 (deftest languages
@@ -149,6 +174,30 @@
       (is (str/includes? err "server type \"s\" matches no files"))
       (is (str/includes? err "server type \"t\": globs must be a list of strings")))))
 
+(def ^:private design-config (str (.getAbsolutePath (io/file "test/heddle/fixtures/design/.heddle.toml"))))
+
+(deftest check-and-languages-with-a-config-file
+  (let [dir (temp-dir)]
+    (is (= {:exit 0 :out "{\"languages\":[\"ruby\"]}"}
+           (main/languages dir ["rubocop"] design-config)))
+    (is (= {:exit 1 :err (str "There's no server type \"nosuch\" in " design-config ".")}
+           (main/languages dir ["nosuch"] design-config)))
+    (is (str/starts-with? (:out (main/check dir design-config)) (str "No errors in " design-config ".\n")))))
+
+(deftest check-and-languages-with-heddle-config
+  (let [dir (temp-dir)
+        config (main/config-file {} {"HEDDLE_CONFIG" design-config})]
+    (is (= 0 (:exit (main/outcome {:command :check :dir dir :config config}))))
+    (is (= {:exit 0 :out "{\"languages\":[\"ruby\"]}"}
+           (main/outcome {:command :languages :dir dir :server-types ["rubocop"] :config config})))))
+
+(deftest check-and-languages-with-a-config-file-that-isnt-there
+  (let [dir (temp-dir)
+        file (str dir "/nosuch.toml")]
+    (spit (io/file dir ".heddle.toml") "")
+    (is (= {:exit 1 :err (str "There's no config file " file ".")} (main/check dir file)))
+    (is (= {:exit 1 :err (str "There's no config file " file ".")} (main/languages dir [] file)))))
+
 (deftest init-takes-a-directory
   (is (= {:command :init :dir nil} (main/parse-args ["init"])))
   (is (= {:command :init :dir "/repo"} (main/parse-args ["init" "/repo"])))
@@ -185,7 +234,7 @@
   ([terminal? dir] (nothing-to-serve terminal? dir []))
   ([terminal? dir server-types]
    (with-redefs [main/stdin-terminal? (constantly terminal?)]
-     (main/nothing-to-serve dir server-types))))
+     (main/nothing-to-serve dir server-types nil))))
 
 (deftest serve-at-a-terminal-stops-without-a-config
   (let [dir (temp-dir)
@@ -218,6 +267,14 @@
   (let [dir "test/heddle/fixtures/design"]
     (is (nil? (nothing-to-serve true dir)))
     (is (nil? (nothing-to-serve true dir ["nosuch" "rubocop"])))))
+
+(deftest serve-at-a-terminal-with-a-config-file
+  (let [dir (temp-dir)]
+    (with-redefs [main/stdin-terminal? (constantly true)]
+      (is (nil? (main/nothing-to-serve dir [] design-config)))
+      (let [{:keys [exit err]} (main/nothing-to-serve dir [] (str dir "/nosuch.toml"))]
+        (is (= 1 exit))
+        (is (str/starts-with? err (str "heddle: There's no config file " dir "/nosuch.toml.\n")))))))
 
 (deftest serve-from-an-editor-or-pipe-always-serves
   (is (nil? (nothing-to-serve false (temp-dir)))))

@@ -44,8 +44,9 @@
     before answering;
   - :start-timeout-ms and :read-timeout-ms, optionally, to override the
     backends' `default-timeouts` (see heddle.backend);
+  - :config-file, the config to read, or nil to read the repo's own;
   - :cwd, where to look for the config if no workspace root the client names
-    has one;
+    has one, or the repo if the client names none and there's a :config-file;
   - :exit, a function to call with the exit code once the client sends
     `exit`;
   - :clock, optionally, a function that returns the time in milliseconds."
@@ -166,7 +167,7 @@
   [proxy {:strs [id params]}]
   (let [{:keys [result messages error]}
         (try
-          (let [loaded (session/load-config (session/config-roots params (:cwd proxy)))]
+          (let [loaded (session/load-config (session/config-roots params (:cwd proxy)) (:config-file proxy))]
             (if (:repo loaded)
               (start-session! proxy params loaded)
               {:error [lsp/request-failed (second (:problem loaded)) {"retry" false}]}))

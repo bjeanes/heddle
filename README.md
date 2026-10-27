@@ -157,8 +157,9 @@ to install somewhere else, as in `install-heddle ~/.local/bin`.
 ## Configuring a repo
 
 The proxy looks for `.heddle.toml` at the root of the workspace your
-editor opens. The smallest one names a server type, which files it handles,
-and how to start it:
+editor opens, unless you [give it a config from elsewhere](#using-a-config-from-elsewhere).
+The smallest one names a server type, which files it handles, and how to start
+it:
 
 ```toml
 # Server types say which servers handle which files, and how to start them
@@ -226,9 +227,9 @@ For more, see the examples:
 ## Running it
 
 ```
-heddle [serve] [--eager] [--trace FILE] [SERVER-TYPE...]
-heddle languages [DIR [SERVER-TYPE...]]
-heddle check [DIR]
+heddle [serve] [--eager] [--trace FILE] [--config FILE] [SERVER-TYPE...]
+heddle languages [--config FILE] [DIR [SERVER-TYPE...]]
+heddle check [--config FILE] [DIR]
 heddle init [DIR]
 heddle help
 ```
@@ -259,6 +260,29 @@ there, `init` leaves it alone and exits 1.
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
 exits 2.
+
+### Using a config from elsewhere
+
+If you can't commit a config to the repo, or want one config for several
+checkouts, keep it anywhere and pass it as `--config FILE` to `serve`, `check`
+or `languages`. Setting `HEDDLE_CONFIG=FILE` in heddle's environment does the
+same. If you give both, `--config` wins. A relative FILE is relative to the
+current directory.
+
+heddle still takes the repo from the editor or the command line. For `serve`,
+that's the first workspace root the editor names, or else the current
+directory. For `check` and `languages`, it's DIR. Scopes and `paths` stay
+relative to the repo root. A relative path in the config's `cache` or `trace`
+table is relative to FILE's own directory, though.
+
+If FILE's `cache` table has a `path`, every repo served with FILE uses that one
+directory. Each would then replace the others' copies there. In a shared
+config, use
+[`xdg` or `env`](#the-cache) instead, which keep each repo's copies apart.
+
+If FILE doesn't exist, heddle won't fall back to the repo's `.heddle.toml`.
+Instead, `check` and `languages` print an error naming FILE and exit 1. `serve`
+fails the editor's `initialize` request with the same error.
 
 ### Tracing messages
 
@@ -390,7 +414,7 @@ start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:ser
 read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
 
 [cache]                                  # optional, defaults to the system's temp directory
-xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/in/the/repo"
+xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/beside/the/config"
 
 [trace]                                  # optional, defaults to no trace
 path = "heddle-trace.jsonl"              # or "/absolute/file"
@@ -564,7 +588,9 @@ until then.
   directory.
 - `path` gives the cache directory itself, either absolute or relative to the
   directory holding the config. The copies go straight in it, without
-  `heddle/<repo>/`, since only this repo's config names it. As `~` isn't
+  `heddle/<repo>/`, on the assumption that only one repo's config names it.
+  Repos that [share a config](#using-a-config-from-elsewhere) share its `path`
+  too. As `~` isn't
   expanded, use `xdg` or `env` for a directory in your home.
 
 Each choice has its trade-offs:
@@ -618,6 +644,12 @@ a repo with a `.heddle.toml`. It takes these options:
   has to be the proxy itself, rather than a wrapper such as `nix run`, since
   the module runs it with `languages` too.
 - `keep` lists other clients, by name, that should start as usual.
+
+Since the module finds a repo by its `.heddle.toml`, it won't start the client,
+or stop your other servers, in a repo whose config
+[lives elsewhere](#using-a-config-from-elsewhere). For one of those, configure
+the client yourself, with `root_markers` that fit the repo and `--config` in
+`cmd`.
 
 In a repo with a config, Neovim would otherwise also start your usual servers
 for the same files, on the host. To prevent that, the module runs
@@ -737,6 +769,11 @@ too, such as the official ruby-lsp plugin:
 
 If you leave the other plugin on, `/plugin` shows an error such as `LSP server
 "heddle" is not used for .rb files`.
+
+For a repo whose config [lives elsewhere](#using-a-config-from-elsewhere), try
+setting `HEDDLE_CONFIG` in the environment you start Claude Code from, as in
+`HEDDLE_CONFIG=~/configs/shop.toml claude`. I expect heddle to inherit it from
+Claude Code, but I haven't confirmed that.
 
 Because of `--eager`, workspace symbol search covers every service from the
 start. However, heddle waits up to 30 s for the servers before it answers
