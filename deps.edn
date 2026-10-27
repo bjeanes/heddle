@@ -1,8 +1,8 @@
 {:paths ["src" "resources"]
 
  :deps
- {clj-toml/clj-toml {:git/url "https://github.com/vmfhrmfoaj/clj-toml"
-                     :git/sha "04071e5604018b7ac4d596edace2e81d47c1eab1"}
+ {clj-toml/clj-toml {:git/url "https://github.com/bjeanes/clj-toml"
+                     :git/sha "5b38f6aca8b3ebb16bbf620573b70b26531778e4"}
   instaparse/instaparse {:git/url "https://github.com/Engelberg/instaparse.git"
                          :git/tag "v1.4.10"
                          :git/sha "abeafbc0651f00e25f9a8ce64c8d41d495c4fe6b"}}

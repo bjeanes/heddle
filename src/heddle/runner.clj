@@ -55,7 +55,7 @@
   [{:strs [paths] :as boot}]
   (cond
     (or (not (contains? boot "paths")) (false? paths)) nil
-    (or (nil? paths) (= {} paths)) ["paths can't be empty; use paths = false to unset it"] ; an inline {} reads as nil
+    (= {} paths) ["paths can't be empty; use paths = false to unset it"]
     (not (map? paths)) ["paths must be a table"]
     :else (for [[dir server] paths
                 :let [problem (cond (not (paths/relative-dir? dir)) "must be relative to the repo root"

@@ -362,7 +362,8 @@ start = ['{read:file}', '--root={srv:scope}']
     (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
            (scope-errors "{ runner = 'nope' }")))
     (is (= #{"scope \"s\", server type \"a\": runner must be a string"}
-           (scope-errors "{ runner = 1 }"))))
+           (scope-errors "{ runner = 1 }")
+           (scope-errors "{ runner = {} }"))))
   (testing "without a runner, the command has to be given"
     (is (= #{"scope \"s\", server type \"a\": when run directly: no value for {cfg:command}"}
            (scope-errors "{ service = 'api' }"))))
