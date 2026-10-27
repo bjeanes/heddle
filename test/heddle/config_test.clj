@@ -6,6 +6,16 @@
 
 (def design (config/read-config "test/heddle/fixtures/design"))
 
+(def ^:private compose-and-host "
+[runners.compose]
+defaults = { compose = ['docker', 'compose'] }
+start = ['{cfg:compose}', 'exec', '-T', '--workdir', '{server:scope}', '{cfg:service}', '{cfg:command}']
+read = ['{cfg:compose}', 'exec', '-T', '{cfg:service}', 'cat', '{read:file}']
+
+[runners.host]
+start = ['{cfg:command}']
+")
+
 (defn- errors [toml]
   (try
     (config/parse toml)
@@ -42,7 +52,7 @@ boot = { command = 's' }
       "of server types whether or not a scope names them, and only their languages"))
 
 (deftest expands-scopes
-  (let [c (config/parse "
+  (let [c (config/parse (str "
 [servers.ruby-lsp]
 languages = ['ruby']
 boot = { runner = 'compose', service = 'app', command = 'ruby-lsp' }
@@ -59,7 +69,7 @@ compose = 'podman-compose'
 [scopes.other.ruby-lsp]
 runner = 'r'
 y = 's'
-")
+" compose-and-host))
         entry #(get-in c ["scopes" % "ruby-lsp"])]
     (testing "into each slot's whole boot config"
       (is (= {"runner" "compose" "service" "api" "command" "ruby-lsp" "compose" ["docker" "compose"]}
@@ -82,7 +92,7 @@ y = 's'
       (is (not-any? #(contains? % "defaults") (vals (get c "runners")))))))
 
 (deftest unsets-values-set-to-false
-  (let [c (config/parse "
+  (let [c (config/parse (str "
 [servers.ruby-lsp]
 languages = ['ruby']
 boot = { runner = 'r', service = 'app', command = 'ruby-lsp', paths = { '.' = '/srv' }, x = false }
@@ -98,7 +108,7 @@ service = false
 paths = false
 [scopes.c.ruby-lsp]
 x = 's'
-")
+" compose-and-host))
         entry #(get-in c ["scopes" % "ruby-lsp"])]
     (testing "from a lower layer, whether the boot table or the scope unsets it"
       (is (= {"runner" "r" "service" "app" "command" "ruby-lsp" "paths" {"." "/srv"} "y" "d"}
@@ -149,7 +159,7 @@ runner = false
       (is (empty? (config/warnings c))))))
 
 (deftest runs-a-server-type-no-scope-names-across-the-repo
-  (let [c (config/parse "
+  (let [c (config/parse (str "
 [servers.ruby-lsp]
 languages = ['ruby']
 boot = { runner = 'compose', service = 'app', command = 'ruby-lsp' }
@@ -163,7 +173,7 @@ boot = { command = 'ts-ls' }
 [scopes.'apps/web'.ts-ls]
 [scopes.'.'.rubocop]
 command = 'rubocop --lsp'
-")
+" compose-and-host))
         entry #(get-in c ["scopes" %1 %2])]
     (testing "with its boot table, over its runner's defaults, as the whole boot config"
       (is (= {"runner" "compose" "service" "app" "command" "ruby-lsp" "compose" ["docker" "compose"]}
@@ -225,7 +235,7 @@ boot = { command = 'd' }
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
-boot = { runner = 'host', command = 's' }
+boot = { command = 's' }
 
 [scopes.'abcdef'.s]
 [scopes.'abcdef/g'.s]
@@ -361,6 +371,8 @@ start = ['{read:file}', '--root={srv:scope}']
     (is (nil? (scope-errors "{ command = 'a' }")))
     (is (= #{"scope \"s\", server type \"a\": unknown runner \"nope\""}
            (scope-errors "{ runner = 'nope' }")))
+    (is (= #{"scope \"s\", server type \"a\": unknown runner \"compose\""}
+           (scope-errors "{ runner = 'compose', service = 'api', command = 'a' }")))
     (is (= #{"scope \"s\", server type \"a\": runner must be a string"}
            (scope-errors "{ runner = 1 }")
            (scope-errors "{ runner = {} }"))))
@@ -368,37 +380,37 @@ start = ['{read:file}', '--root={srv:scope}']
     (is (= #{"scope \"s\", server type \"a\": when run directly: no value for {cfg:command}"}
            (scope-errors "{ service = 'api' }"))))
   (testing "a value no template uses is allowed"
-    (is (nil? (scope-errors "{ runner = 'host', command = 'a', service = 'api' }"))))
+    (is (nil? (scope-errors "{ command = 'a', service = 'api' }"))))
   (testing "every {cfg:…} a template uses needs a value"
     (is (= #{"scope \"s\", server type \"a\": runner \"compose\", start: no value for {cfg:service}"
              "scope \"s\", server type \"a\": runner \"compose\", read: no value for {cfg:service}"}
-           (scope-errors "{ runner = 'compose', command = 'a' }"))))
+           (scope-errors "{ runner = 'compose', command = 'a' }" compose-and-host))))
   (testing "paths"
     (is (= #{"scope \"s\", server type \"a\": paths entry \"/abs\" must be relative to the repo root"
              "scope \"s\", server type \"a\": paths entry \"s\" must map to an absolute directory"}
-           (scope-errors "{ runner = 'host', command = 'a', paths = { '/abs' = '/app', 's' = 'app' } }")))
+           (scope-errors "{ command = 'a', paths = { '/abs' = '/app', 's' = 'app' } }")))
     (is (= #{"scope \"s\", server type \"a\": paths don't cover the scope's directory"}
-           (scope-errors "{ runner = 'host', command = 'a', paths = { 'other' = '/app' } }")))
+           (scope-errors "{ command = 'a', paths = { 'other' = '/app' } }")))
     (is (= #{"scope \"s\", server type \"a\": paths can't be empty; use paths = false to unset it"}
-           (scope-errors "{ runner = 'host', command = 'a', paths = {} }")
-           (errors "[servers.a]\nlanguages = ['x']\n[scopes.s.a]\nrunner = 'host'\ncommand = 'a'\n[scopes.s.a.paths]\n")))
+           (scope-errors "{ command = 'a', paths = {} }")
+           (errors "[servers.a]\nlanguages = ['x']\n[scopes.s.a]\ncommand = 'a'\n[scopes.s.a.paths]\n")))
     (is (= #{"scope \"s\", server type \"a\": paths must be a table"}
-           (scope-errors "{ runner = 'host', command = 'a', paths = true }"))))
+           (scope-errors "{ command = 'a', paths = true }"))))
   (testing "a value a template needs can't be unset"
-    (is (= #{"scope \"s\", server type \"a\": runner \"host\", start: no value for {cfg:command}"}
-           (scope-errors "{ runner = 'host', command = false }"))))
+    (is (= #{"scope \"s\", server type \"a\": when run directly: no value for {cfg:command}"}
+           (scope-errors "{ command = false }"))))
   (testing "values follow the placeholder rules"
     (is (= #{"scope \"s\", server type \"a\": runner \"wrap\", start: {cfg:command} is a list, which has to make up a whole element"}
            (scope-errors "{ runner = 'wrap', command = ['x', 'y'] }"
                          "[runners.wrap]\nstart = ['sh', '-c', 'run {cfg:command}']\n")))
-    (is (= #{"scope \"s\", server type \"a\": runner \"host\", start: {read:file} is only available in read"
-             "scope \"s\", server type \"a\": runner \"host\", start: the value of {cfg:command} can't use {cfg:other}"}
-           (scope-errors "{ runner = 'host', command = ['{read:file}', '--x={cfg:other}'], other = 'o' }")))))
+    (is (= #{"scope \"s\", server type \"a\": when run directly: {read:file} is only available in read"
+             "scope \"s\", server type \"a\": when run directly: the value of {cfg:command} can't use {cfg:other}"}
+           (scope-errors "{ command = ['{read:file}', '--x={cfg:other}'], other = 'o' }")))))
 
 (deftest warns-about-unused-values
   (testing "a value the scope's runner never uses"
     (is (= ["scope \"tools/cli\", server type \"ruby-lsp\": \"service\" isn't used by runner \"host\""]
-           (config/warnings (config/parse "
+           (config/warnings (config/parse (str "
 [servers.ruby-lsp]
 languages = ['ruby']
 boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
@@ -406,7 +418,7 @@ boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
 [scopes.'services/api'.ruby-lsp]
 [scopes.'tools/cli'.ruby-lsp]
 runner = 'host'
-")))))
+" compose-and-host))))))
   (testing "a value that only the runner a scope cancels would use"
     (is (= ["scope \"tools/cli\", server type \"ruby-lsp\": \"service\" isn't used when run directly"]
            (config/warnings (config/parse "
@@ -418,7 +430,7 @@ boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
 runner = false
 ")))))
   (testing "nothing for a value the scope unsets"
-    (is (empty? (config/warnings (config/parse "
+    (is (empty? (config/warnings (config/parse (str "
 [servers.ruby-lsp]
 languages = ['ruby']
 boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
@@ -426,7 +438,7 @@ boot = { runner = 'compose', service = 'api', command = 'ruby-lsp' }
 [scopes.'tools/cli'.ruby-lsp]
 runner = 'host'
 service = false
-")))))
+" compose-and-host))))))
   (testing "nothing when every value is used, counting runner, paths and values that replace a default"
     (is (empty? (config/warnings design))))
   (testing "nothing for a runner's default that its templates never use"

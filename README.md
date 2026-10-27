@@ -44,9 +44,10 @@ to pass between, much as heddle picks out the servers that match each file.
 - **Restarts a backend that fails or stops** the next time you open one of its
   files, and no sooner than 30 s after. heddle tells you why and withdraws its
   diagnostics.
-- **Has runners for the host, Compose, `docker exec` and `docker run`**
-  [built in](#the-built-in-runners). For anything else, such as Nix or SSH,
-  you can [write your own](#runners).
+- **Runs servers on your machine, or wherever a command can reach.** A
+  [runner](#runners) is a few lines of TOML that start a server somewhere else,
+  such as in Compose, Docker, a Nix shell or over SSH. There are
+  [examples](#example-runners) for Compose and Docker to copy.
 - **Comes with tooling.** `heddle init` writes a starter config, `heddle check`
   checks one, and `heddle languages` lists the languages it covers. To see
   every message, [trace them](#tracing-messages) to a file.
@@ -75,8 +76,8 @@ to pass between, much as heddle picks out the servers that match each file.
   works from the agent's first request.
 - **A containerised or remote toolchain, even for one service.** The app runs
   in Docker, in a Nix shell or over SSH, while your editor stays on the host.
-  Docker and Compose have built-in runners. For anything else, you write a
-  runner that wraps the command, such as `nix develop --command` or `ssh`.
+  You write a runner that wraps the command, such as `docker compose exec`,
+  `nix develop --command` or `ssh`.
   Since heddle maps paths between the two sides and fetches files that only
   exist on the server's side, go-to-definition keeps working inside your
   installed packages.
@@ -169,9 +170,9 @@ boot = { command = ["bundle", "exec", "ruby-lsp"] }
 
 With nothing else, the proxy runs that command on your machine, for the whole
 repo. To run it differently for the files under a directory, such as in a
-container, give it a scope. Once a scope names a server type, the server type
-runs only where scopes name it. For one Ruby service in Compose, that looks
-like this:
+container, give it a scope, and a runner to start it there. Once a scope names
+a server type, the server type runs only where scopes name it. For one Ruby
+service in Compose, that looks like this:
 
 ```toml
 [servers.ruby-lsp]
@@ -181,10 +182,20 @@ boot = { command = ["bundle", "exec", "ruby-lsp"] }
 # Scopes say how to start each server type for the files under a directory.
 # The longest scope that contains a file wins.
 [scopes."services/api"]
-# Run it with `docker compose exec` in the `api` service, which mounts
-# services/api at /app.
+# Run it with the runner below in the `api` service, which mounts services/api
+# at /app.
 ruby-lsp = { runner = "compose", service = "api", paths = { "services/api" = "/app" } }
+
+# Runners are commands that start a server somewhere. This one runs it with
+# `docker compose exec`, in the scope's service.
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
 ```
+
+[Runners](#runners) covers what goes in one.
+[Example runners](#example-runners) has more to copy.
 
 Since the proxy doesn't start containers itself, bring them up first with
 `docker compose up --detach`.
@@ -239,11 +250,11 @@ the problem to stderr and exits 1 instead of waiting on stdin. It does the same
 there if none of the server types named after `serve` is in the config.
 
 `heddle init` writes a starter `.heddle.toml` to the root of DIR. It walks
-through a server type, a scope in a Compose service, a scope on the host, a
-runner of your own, the cache, and tracing, all commented out. Its notes start
-with `## ` and its examples with `# `. Uncomment what you need, then run
-`heddle check`. If there's already a config there, `init` leaves it alone and
-exits 1.
+through a server type, a scope in a Compose service with a runner for it, a
+scope on the host, a runner that starts a container, the cache, and tracing,
+all commented out. Its notes start with `## ` and its examples with `# `.
+Uncomment what you need, then run `heddle check`. If there's already a config
+there, `init` leaves it alone and exits 1.
 
 `heddle help` prints the usage to stdout and exits 0. Any other command
 line it can't make sense of prints the problem and the usage to stderr, and
@@ -305,11 +316,12 @@ open one of its files.
 The config has three main tables. `servers` says which language servers handle
 which files. `scopes` says how to start each of those servers for the files
 under a directory. `runners` holds the commands that start a server somewhere,
-such as on the host or in a container. You'll often only need the first two,
-because the proxy ships with runners for the host, Docker and Compose. Compose
-has no special treatment in the proxy. It's one of those built-in runners,
-written in the same TOML you'd use for your own. An optional fourth table,
-`cache`, says where to keep [copies of files from the servers](#the-cache).
+such as in a container. To run servers on your machine, you only need the first
+two, since a server with no runner runs its command directly. heddle has no
+runners of its own. To run servers in Compose, for instance, you write a runner
+in a few lines of TOML, or copy one from [Example runners](#example-runners).
+An optional fourth table, `cache`, says where to keep
+[copies of files from the servers](#the-cache).
 An optional fifth, `trace`, names a file to [trace messages](#tracing-messages)
 to.
 
@@ -372,6 +384,11 @@ command = ["ruby-lsp"]                   # replaces the server type's command
 [scopes."."]                             # the repo root, as a catch-all
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
 
+[runners.compose]                        # a runner, named as you like
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
 [cache]                                  # optional, defaults to the system's temp directory
 xdg = true                               # or env = "VAR", or path = "/absolute/dir" or "dir/in/the/repo"
 
@@ -430,9 +447,10 @@ reports a value the runner needs but nobody gives, an unknown placeholder, or
 runner's templates never use, which is often a misspelt key.
 
 `prepare` is for anything that has to be in place before the server can start.
-The built-in `docker-run` makes the server the container's main process. If
-you'd rather start the container first and run the server inside it, add a
-runner whose `prepare` starts the container, and name it from a scope:
+The `docker-run` runner in [Example runners](#example-runners) makes the server
+the container's main process. If you'd rather start the container first and run
+the server inside it, add a runner whose `prepare` starts the container, and
+name it from a scope:
 
 <!-- example: custom runner -->
 ```toml
@@ -458,10 +476,10 @@ However, the proxy has no teardown step yet. When the backend exits, the
 container keeps running until you `docker stop` it. Only then does `--rm`
 remove it.
 
-A runner of your own is also a place to say things once that every scope using
-it shares. Where a Compose project mounts the repo is a fact about that
-project, for instance. A runner for the project can give its compose file and
-its `paths` in `defaults`, which leaves each scope to name only its service:
+A runner is also a place to say things once that every scope using it shares.
+Where a Compose project mounts the repo is a fact about that project, for
+instance. A runner for the project can give its compose file and its `paths`
+in `defaults`, which leaves each scope to name only its service:
 
 <!-- example: runner defaults -->
 ```toml
@@ -483,19 +501,14 @@ A scope that uses another runner, or none, doesn't get these `paths`, since
 only the defaults of the runner a scope uses apply to it. A `runner` in
 `defaults` has no effect.
 
-### The built-in runners
+### Example runners
 
-The proxy adds these to your config's `runners`. If you define a runner with
-the same name, yours replaces the built-in one.
+These runners start servers in Compose and Docker. Copy the ones you need into
+your config, under whatever names you like. To run a server on your machine,
+leave out `runner` instead.
 
-<!-- resources/heddle/runners.toml -->
+<!-- example: runners -->
 ```toml
-# The runners that ship with the proxy. A project's config can override any of
-# these by name, or add its own.
-
-[runners.host]
-start = ["{cfg:command}"]
-
 [runners.compose]
 defaults = { compose = ["docker", "compose"] }
 start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
@@ -513,14 +526,19 @@ read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 
 Every one of them needs a `command`.
 
-- `host` runs it on your machine, as a boot config with no runner does.
 - `compose` runs it in a running Compose `service`. To pass Compose flags such
   as `--file`, set `compose`, which defaults to `["docker", "compose"]`.
 - `docker-exec` runs it in a running `container`.
 - `docker-run` starts a new container from `image` for each backend, and
   removes it when the server exits. Since `paths` only translates paths, you
   mount the repo yourself with `args`, as in
-  `args = ["--volume", "{client:repo}:/src"]`.
+  `args = ["--volume", "{client:repo}:/src"]`, repeating what `paths` says.
+
+`docker exec` acts on a container that already exists, which is why
+`docker-exec` takes a `container`. `docker run` creates a new one from an
+`image` instead. The runner names it after the backend's ID. That lets `read`
+find it, and keeps two editors running the same config from fighting over one
+name.
 
 ### The cache
 

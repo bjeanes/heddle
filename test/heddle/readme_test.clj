@@ -2,7 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
-            [heddle.runner :as runner]
             [heddle.spec :as spec]))
 
 (def ^:private readme (slurp "README.md"))
@@ -18,11 +17,32 @@
       (subs readme body (inc end))
       (throw (ex-info (str "README.md has no TOML block right after <!-- " marker " -->") {})))))
 
-(deftest built-in-runners-match-resource
-  (is (= runner/builtin-toml (toml-after "resources/heddle/runners.toml"))))
-
 (defn- command [config scope template]
   (spec/command (spec/spec config ["ruby-lsp" scope] "/r" "/cache") template {:backend-id "heddle-1"}))
+
+(deftest example-runners-parse
+  (let [c (config/parse (str (toml-after "example: runners") "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { command = ['ruby-lsp'] }
+
+[scopes.a.ruby-lsp]
+runner = 'compose'
+service = 'api'
+[scopes.b.ruby-lsp]
+runner = 'docker-exec'
+container = 'api-1'
+[scopes.c.ruby-lsp]
+runner = 'docker-run'
+image = 'ruby:3.3'
+"))]
+    (is (= [] (config/warnings c)))
+    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/r/a" "api" "ruby-lsp"]
+           (command c "a" "start")))
+    (is (= ["docker" "exec" "--interactive" "--workdir" "/r/b" "api-1" "ruby-lsp"]
+           (command c "b" "start")))
+    (is (= ["docker" "run" "--rm" "--interactive" "--name" "heddle-1" "--workdir" "/r/c" "ruby:3.3" "ruby-lsp"]
+           (command c "c" "start")))))
 
 (deftest full-config-parses
   (let [c (config/parse (toml-after "example: full config"))]

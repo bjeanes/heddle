@@ -188,14 +188,13 @@
                             (remove named (keys servers))))))
 
 (defn parse
-  "Parses and checks config from a TOML string, with the built-in runners added
-  and the scopes expanded by `expand`. Throws ex-info listing every problem
-  found, under :errors. `source` names the file in that message."
+  "Parses and checks config from a TOML string, with the scopes expanded by
+  `expand`. Throws ex-info listing every problem found, under :errors.
+  `source` names the file in that message."
   ([s] (parse s file-name))
   ([s source]
    (-> (merge {"servers" {} "scopes" {} "runners" {}} (parse-toml source s))
        (checked source structure-errors)
-       (update "runners" #(merge runner/builtins %))
        expand
        (checked source scope-runner-errors))))
 

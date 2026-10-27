@@ -100,7 +100,7 @@ t = { paths = { '.' = '/src' } }
       (is (= ["t"] (command c ["t" "."] "start")) "when nothing names one")
       (is (= "/src" (:root (spec-for c ["t" "."]))) "with paths as given")
       (is (nil? (command c ["t" "."] "read")))))
-  (testing "a project's runner replaces a built-in of the same name"
+  (testing "a runner named host is like any other"
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
@@ -114,12 +114,15 @@ s = { runner = 'host', command = 's' }
 s = { command = 's' }
 ")]
       (is (= ["env" "s"] (command c ["s" "."] "start")))
-      (is (= ["s"] (command c ["s" "a"] "start")) "and a scope with no runner doesn't use it")
-      (is (contains? (get c "runners") "compose") "the other built-ins remain")))
+      (is (= ["s"] (command c ["s" "a"] "start")) "and a scope with no runner doesn't use it")))
   (testing "a runner's defaults fill in values the boot config leaves out"
     (let [c (config/parse "
 [servers.s]
 languages = ['x']
+
+[runners.docker-run]
+defaults = { args = [] }
+start = ['docker', 'run', '--rm', '--interactive', '--name', '{proxy:backend_id}', '{cfg:args}', '--workdir', '{server:scope}', '{cfg:image}', '{cfg:command}']
 
 [scopes.a]
 s = { runner = 'docker-run', image = 'i', command = 's' }

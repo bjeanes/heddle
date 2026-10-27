@@ -85,8 +85,8 @@ them, under "Pinned for later".
   one, which leaves an old cache behind each time. The `cache` table can keep
   them somewhere stable, such as `xdg = true`, but nothing sweeps that either.
   See [The cache](README.md#the-cache).
-- **`docker-run` needs its mounts listed twice**, once in `args` and again in
-  `paths`.
+- **A runner that uses `docker run` needs its mounts listed twice**, once in
+  its arguments and again in `paths`.
 
 ## Editors and agents
 

@@ -2,12 +2,6 @@
   (:require [clojure.test :refer [deftest is testing]]
             [heddle.runner :as runner]))
 
-(deftest builtins
-  (is (= #{"host" "compose" "docker-exec" "docker-run"} (set (keys runner/builtins))))
-  (doseq [[name r] runner/builtins]
-    (is (empty? (runner/runner-errors r)) name))
-  (is (= {"compose" ["docker" "compose"]} (get-in runner/builtins ["compose" "defaults"]))))
-
 (defn- expand
   "Expands `template` for a boot config in the scope a of the repo /r, which
   the server sees as /srv/a."

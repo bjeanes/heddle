@@ -77,9 +77,8 @@ server type that runs across the repo only because no scope names it.
 
 `heddle init [DIR]` writes a starter config to the root of DIR, and refuses
 to replace one that's already there. Everything in it is commented out, so it
-loads as written, with no server types. It shows a server type, a scope for
-each built-in runner, the cache, and the built-in runners' own definitions,
-which come from the same file the proxy loads them from.
+loads as written, with no server types. It shows a server type, scopes with and
+without a runner, the runners they name, the cache, and tracing.
 
 `heddle help`, `--help` or `-h` prints the usage to stdout and exits 0.
 A command line it can't parse is a usage error instead. It prints the error and
@@ -100,7 +99,8 @@ apart:
 The config has a section for each. **Server types** answer the first question
 and **scopes** answer the second. A scope can name a **runner** for each server
 type it starts, which decides where and how the server process runs. Without
-one, the proxy runs the server's `command` directly, on the host.
+one, the proxy runs the server's `command` directly, on the host. The config
+defines its runners too. The ones this example names are in "Runners" below.
 
 ```toml
 [servers.ruby-lsp]
@@ -190,8 +190,8 @@ the example above runs this way, since each of them has a scope.
 
 A runner describes how to start a server somewhere, whether that's on the host,
 in a container, or anywhere else a command can reach. The proxy itself knows
-nothing about any particular runner. Every runner, including the ones that ship
-with the proxy, is defined in config as a set of command templates.
+nothing about any particular runner. Every runner is defined in the project's
+config as a set of command templates.
 
 - **`start`** starts the server, which then talks LSP over its stdin and stdout.
 - **`read`** prints a file from the server's side. The proxy runs it to get
@@ -200,13 +200,10 @@ with the proxy, is defined in config as a set of command templates.
 - **`prepare`** runs before `start`, for example to bring up a stopped
   container. It's optional too.
 
-These are the runners that ship with the proxy, from
-`resources/heddle/runners.toml`:
+These runners cover Compose, `docker exec` and `docker run`. The example above
+uses the first and the last:
 
 ```toml
-[runners.host]
-start = ["{cfg:command}"]
-
 [runners.compose]
 defaults = { compose = ["docker", "compose"] }
 start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
@@ -222,10 +219,13 @@ start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}
 read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]
 ```
 
-A project's config can override any of these by name, or add its own, such as
-one for Podman, `kubectl exec` or `nix develop --command`. Projects that only
-use the built-ins don't need to repeat them, and they pick up fixes to them. A
-command that prints the built-in definitions would make them easy to copy from.
+The proxy doesn't ship these, or any others. Running the command directly
+already covers the host. The rest are a few lines of TOML, which a project can
+copy from the README and adapt, or use as a model for its own, such as one for
+Podman, `kubectl exec` or `nix develop --command`. Leaving them out means no
+runner name is privileged. Every runner a config names is one it defines. In
+exchange, the README has to teach people to write a runner, rather than only to
+name one.
 
 `docker-exec` and `docker-run` show why an image and a container need separate
 values. `docker exec` acts on a container that already exists, which the scope
@@ -335,10 +335,9 @@ fetched files are read-only. Editing a file needs the real one, under an entry
 in `paths`. In practice, the files anyone edits are in the bind-mounted source
 anyway.
 
-`docker-run` is the one built-in where `paths` and the runner's arguments
-overlap. Its mounts have to be listed in `args`, repeating what `paths` already
-says, as in the `services/web` scope above. I've accepted the repetition for
-now.
+In the `docker-run` runner above, `paths` and the runner's arguments overlap.
+Its mounts have to be listed in `args`, repeating what `paths` already says, as
+in the `services/web` scope above. I've accepted the repetition for now.
 
 The Neovim harness worked its mappings out from `docker inspect` instead. That
 spared writing them down, but it tied the harness to Docker. With the mappings
@@ -828,7 +827,7 @@ These may become worth doing once we've used the prototype.
   that is one line of config, such as
   `["{cfg:compose}", "up", "--detach", "{cfg:service}"]` or
   `["docker", "start", "{cfg:container}"]`. Not everyone will want it, which is
-  why the built-in runners leave it out for now.
+  why the example runners leave it out for now.
 - **A `stop` template.** A runner whose `prepare` starts a container leaves it
   running after the backend exits. A `stop` template could run when a backend
   exits or the proxy shuts down. We'd need to decide whether it runs after a
@@ -837,9 +836,9 @@ These may become worth doing once we've used the prototype.
   name or label that a restarted proxy can work out again, which a random
   backend ID isn't.
 - **Setting the time limits.** Starting and `read` have fixed limits (see
-  "Failures"). A runner whose `prepare` pulls images needs longer than `host`
-  does, so the limits may become per-runner settings once someone needs to
-  change them.
+  "Failures"). A runner whose `prepare` pulls images needs longer than a server
+  run directly does, so the limits may become per-runner settings once someone
+  needs to change them.
 - **Mount flags from `paths`.** `docker-run` could build its `--volume` flags
   from `paths` if the templates could expand a value once per entry. That is a
   feature of the template language, which is worth adding only if the

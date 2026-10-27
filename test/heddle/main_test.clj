@@ -103,11 +103,11 @@
 (deftest languages-with-warnings
   (let [dir (temp-dir)]
     (spit (io/file dir ".heddle.toml")
-          "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\nrunner = 'host'\ncommand = 's'\nimage = 'i'\n")
+          "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\ncommand = 's'\nimage = 'i'\n")
     (let [{:keys [exit out err]} (main/languages dir [])]
       (is (= 0 exit))
       (is (= "{\"languages\":[\"x\"]}" out))
-      (is (str/includes? err "\"image\" isn't used by runner \"host\"")))))
+      (is (str/includes? err "\"image\" isn't used when run directly")))))
 
 (deftest check-a-valid-config
   (let [dir "test/heddle/fixtures/design"]
@@ -225,7 +225,7 @@
 (deftest check-a-config-with-warnings
   (let [dir (temp-dir)]
     (spit (io/file dir ".heddle.toml")
-          "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\nrunner = 'host'\ncommand = 's'\nimage = 'i'\n")
+          "[servers.s]\nlanguages = ['x']\n[scopes.'.'.s]\ncommand = 's'\nimage = 'i'\n")
     (let [{:keys [exit err]} (main/check dir)]
       (is (= 0 exit))
-      (is (str/includes? err "\"image\" isn't used by runner \"host\"")))))
+      (is (str/includes? err "\"image\" isn't used when run directly")))))

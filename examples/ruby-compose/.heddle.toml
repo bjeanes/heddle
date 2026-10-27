@@ -5,3 +5,8 @@ boot = { command = ["bundle", "exec", "ruby-lsp"] }
 
 [scopes."."]
 ruby-lsp = { runner = "compose", service = "app", paths = { "." = "/app" } }
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]

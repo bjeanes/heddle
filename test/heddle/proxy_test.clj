@@ -20,7 +20,7 @@ languages = ['ruby']
 globs = ['**/Gemfile']
 
 [scopes.'.']
-lint = { runner = 'host', command = 'lint' }
+lint = { command = 'lint' }
 
 [scopes.api]
 ruby = { runner = 'local', command = 'ruby', paths = { 'api' = '/app' } }
@@ -31,7 +31,7 @@ read = ['cat', '{read:file}']
 ")
 
 (def ^:private ruby-in-two-scopes
-  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { runner = 'host', command = 'ruby' }\n"))
+  (str/replace config "[scopes.'.']\n" "[scopes.'.']\nruby = { command = 'ruby' }\n"))
 
 (defn- temp-dir []
   (str (Files/createTempDirectory "heddle-test" (into-array FileAttribute []))))
@@ -158,7 +158,7 @@ read = ['cat', '{read:file}']
              (from-proxy t)))
       (is (serves-nothing? t))))
   (testing "shows the config's errors, and serves nothing"
-    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = { runner = 'host' }\n")]
+    (let [t (start :config "[servers.ruby]\n[scopes.api]\nruby = {}\n")]
       (is (= {"openClose" true "change" 1 "save" true}
              (get (initialize! t {}) "textDocumentSync")))
       (let [{:strs [method params]} (from-proxy t)]

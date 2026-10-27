@@ -16,3 +16,8 @@ ruby-lsp = { runner = "compose", service = "billing", paths = { "services/billin
 
 [scopes."."]
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]

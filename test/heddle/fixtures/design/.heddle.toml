@@ -1,4 +1,4 @@
-# The example from DESIGN.md.
+# The example from DESIGN.md, with the runners it uses from "Runners" there.
 
 [servers.ruby-lsp]
 languages = ["ruby"]
@@ -28,3 +28,13 @@ typescript = { runner = "docker-run", image = "web-tools", paths = { "." = "/src
 
 [scopes."."]
 rubocop = { runner = "compose", service = "lints", paths = { "." = "/src" } }
+
+[runners.compose]
+defaults = { compose = ["docker", "compose"] }
+start = ["{cfg:compose}", "exec", "-T", "--workdir", "{server:scope}", "{cfg:service}", "{cfg:command}"]
+read = ["{cfg:compose}", "exec", "-T", "{cfg:service}", "cat", "{read:file}"]
+
+[runners.docker-run]
+defaults = { args = [] }
+start = ["docker", "run", "--rm", "--interactive", "--name", "{proxy:backend_id}", "{cfg:args}", "--workdir", "{server:scope}", "{cfg:image}", "{cfg:command}"]
+read = ["docker", "exec", "{proxy:backend_id}", "cat", "{read:file}"]

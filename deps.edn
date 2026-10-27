@@ -1,4 +1,4 @@
-{:paths ["src" "resources"]
+{:paths ["src"]
 
  :deps
  {clj-toml/clj-toml {:git/url "https://github.com/bjeanes/clj-toml"

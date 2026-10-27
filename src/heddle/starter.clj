@@ -46,24 +46,29 @@
 ## In a Compose service that's already running. `paths` says where the
 ## container sees your files. Here, the `web` service mounts apps/web at /app.
 ## heddle uses `paths` to translate file paths between your editor and the
-## server.
+## server. The runner after it starts the server with `docker compose exec`.
 # [scopes.\"apps/web\".ts-ls]
 # runner = \"compose\"
 # service = \"web\"
 # paths = { \"apps/web\" = \"/app\" }
+#
+# [runners.compose]
+# defaults = { compose = [\"docker\", \"compose\"] }
+# start = [\"{cfg:compose}\", \"exec\", \"-T\", \"--workdir\", \"{server:scope}\", \"{cfg:service}\", \"{cfg:command}\"]
+# read = [\"{cfg:compose}\", \"exec\", \"-T\", \"{cfg:service}\", \"cat\", \"{read:file}\"]
 
 ## Once a scope names a server, it runs only where scopes name it, rather than
 ## across the whole repo. To keep it on your machine for the rest of the repo,
 ## name it at \".\" as well. `heddle check` lists where each server runs.
 # [scopes.\".\".ts-ls]
 
-## 3. Your own runners (optional) ----------------------------------------------
+## 3. Runners (optional) -------------------------------------------------------
 ##
-## heddle has runners built in for a running Compose service (`compose`), a
-## running container (`docker-exec`), and a new container for each server
-## (`docker-run`). For anything else, such as `nix develop` or `ssh`, write a
-## runner of your own. README's \"Runners\" and \"The built-in runners\" cover
-## them in full.
+## heddle has no runners of its own. To run a server anywhere other than your
+## machine, such as in Docker, in `nix develop` or over `ssh`, write a runner
+## for it, as the Compose example above does. README's \"Example runners\" has
+## more to copy, for `docker exec` and `docker run`. \"Runners\" covers them in
+## full.
 ##
 ## A runner is a few commands, each a list of arguments that heddle runs
 ## without a shell. `start` runs the server, which then speaks LSP over its

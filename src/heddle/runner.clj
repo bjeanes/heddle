@@ -1,20 +1,8 @@
 (ns heddle.runner
   "Runners and the expansion of their command templates. See \"Runners\" in
   DESIGN.md."
-  (:require [clj-toml.core :as toml]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [heddle.paths :as paths]))
-
-(defmacro ^:private inline-resource
-  "`jolt build` doesn't bundle resources into the binary, so this reads the
-  file when the namespace compiles."
-  [path]
-  (slurp (io/resource path)))
-
-(def builtin-toml (inline-resource "heddle/runners.toml"))
-
-(def builtins (get (toml/parse-string builtin-toml) "runners"))
 
 (def templates ["start" "read" "prepare"])
 
