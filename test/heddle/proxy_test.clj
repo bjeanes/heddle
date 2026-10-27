@@ -436,7 +436,7 @@ read = ['cat', '{read:file}']
       (initialize! t {})
       (open! t "api/a.rb" "ruby")
       (is (eventually #(cache-of t ["ruby" "api"])))
-      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/ruby/")))))
+      (is (str/starts-with? (cache-of t ["ruby" "api"]) (str (:repo t) "/.cache/heddle/")))))
   (testing "an unset environment variable, which warns once after initialize and falls back"
     (let [t (start :config (str "cache = { env = 'HEDDLE_TEST_UNSET' }\n" config))]
       (initialize! t {})

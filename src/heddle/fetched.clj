@@ -74,13 +74,10 @@
   :warning about the config's `cache` table, as `chosen-root` describes for the
   config in `dir`.
 
-  A `path` is used as given, on the assumption that only one repo's config
-  names it. Since the temp directory, `xdg` and `env` can each name a directory
-  that other repos use too, the repo's cache is `heddle/<repo>-<hash>` inside
-  it."
+  Since any of them can name a directory that other repos use too, the repo's
+  cache is `heddle/<repo>-<hash>` inside it."
   [config dir repo getenv]
-  (cond-> (chosen-root config dir getenv)
-    (not (get-in config ["cache" "path"])) (update :root repo-dir repo)))
+  (update (chosen-root config dir getenv) :root repo-dir repo))
 
 (defn- read-into
   "Runs `command` in `dir` and writes its stdout to `target`, which is only

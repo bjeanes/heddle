@@ -15,11 +15,12 @@
 (deftest loading-the-repos-own-config
   (let [repo (temp-dir)]
     (spit (io/file repo ".heddle.toml") config)
-    (is (= {:repo repo
-            :source (str repo "/.heddle.toml")
-            :cache-root (str repo "/cache")
-            :trace-path (str repo "/trace.jsonl")}
-           (select-keys (session/load-config ["/nowhere" repo] nil) [:repo :source :cache-root :trace-path])))))
+    (let [loaded (session/load-config ["/nowhere" repo] nil)]
+      (is (= {:repo repo
+              :source (str repo "/.heddle.toml")
+              :trace-path (str repo "/trace.jsonl")}
+             (select-keys loaded [:repo :source :trace-path])))
+      (is (str/starts-with? (:cache-root loaded) (str repo "/cache/heddle/"))))))
 
 (deftest loading-a-config-file
   (let [repo (temp-dir)
@@ -35,8 +36,9 @@
         (is (= #{"s"} (set (keys (get config "servers")))))
         (is (nil? problem))))
     (testing "resolves relative cache and trace paths against the file's directory"
-      (is (= {:cache-root (str dir "/cache") :trace-path (str dir "/trace.jsonl")}
-             (select-keys (session/load-config [repo] file) [:cache-root :trace-path]))))
+      (let [{:keys [cache-root trace-path]} (session/load-config [repo] file)]
+        (is (str/starts-with? cache-root (str dir "/cache/heddle/")))
+        (is (= (str dir "/trace.jsonl") trace-path))))
     (testing "names the file in its messages"
       (spit file "[servers.s]\n")
       (is (str/includes? (second (:problem (session/load-config [repo] file)))

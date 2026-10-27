@@ -275,11 +275,6 @@ directory. For `check` and `languages`, it's DIR. Scopes and `paths` stay
 relative to the repo root. A relative path in the config's `cache` or `trace`
 table is relative to FILE's own directory, though.
 
-If FILE's `cache` table has a `path`, every repo served with FILE uses that one
-directory. Each would then replace the others' copies there. In a shared
-config, use
-[`xdg` or `env`](#the-cache) instead, which keep each repo's copies apart.
-
 If FILE doesn't exist, heddle won't fall back to the repo's `.heddle.toml`.
 Instead, `check` and `languages` print an error naming FILE and exit 1. `serve`
 fails the editor's `initialize` request with the same error.
@@ -586,12 +581,9 @@ until then.
 - `env` names an environment variable that holds the root. If the variable is
   unset, empty or a relative path, the proxy warns you and uses the temp
   directory.
-- `path` gives the cache directory itself, either absolute or relative to the
-  directory holding the config. The copies go straight in it, without
-  `heddle/<repo>/`, on the assumption that only one repo's config names it.
-  Repos that [share a config](#using-a-config-from-elsewhere) share its `path`
-  too. As `~` isn't
-  expanded, use `xdg` or `env` for a directory in your home.
+- `path` gives the root, either absolute or relative to the directory holding
+  the config. As `~` isn't expanded, use `xdg` or `env` for a directory in your
+  home.
 
 Each choice has its trade-offs:
 
@@ -609,8 +601,7 @@ Each choice has its trade-offs:
   inherit it, or the proxy will warn and use the temp directory.
 - **An absolute path** is the same for everyone who uses the config. That's
   awkward in a config checked into the repo, since machines lay out their
-  directories differently. Several checkouts of the repo would also share the
-  one directory, each replacing the others' copies.
+  directories differently.
 - **A path in the repo** needs an entry in `.gitignore`. Since it's inside the
   repo, tools that search or watch the repo will see it too, unless they
   ignore it.

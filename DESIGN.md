@@ -631,8 +631,7 @@ fetched file's copy is at its server path under that. For example, `ruby-lsp` in
 `services/api` keeps `/usr/lib/ruby/set.rb` at
 `<root>/heddle/<repo>/ruby-lsp/services/api/=/usr/lib/ruby/set.rb`. `<root>`
 is the system's temp directory unless the config's `cache` table chooses
-another. A `path` in that table replaces `<root>/heddle/<repo>` instead (see
-below).
+another.
 
 Two backends can have different files at the same server path. So, each server
 type and scope gets a directory of its own. The scope's directories are nested
@@ -663,19 +662,12 @@ XDG Base Directory spec, name an environment variable to read the root from,
 or give the root as a path. A relative path is resolved against the config's
 directory, which is the repo root unless the config came from `--config`.
 
-The temp directory, `~/.cache` and a directory named by an environment
-variable may each hold the caches of several repos. An environment variable
-counts as shared because it's set outside the repo, often once for every
-shell. It then names the same directory whichever repo the editor opens.
-`heddle/<repo>` keeps those repos' copies apart. However, a `path` is usually
-named only by this repo's config. The proxy assumes nothing else shares it and
-uses it as given. `heddle/<repo>` would only add two levels of directories
-there.
-
-Several checkouts of the repo can still share an absolute `path`. So can repos
-that read the same config through `--config`, whatever its `path`. If their
-servers see different versions of a file, one checkout's copy can replace
-another's until a backend fetches it again.
+Any of these roots may hold the caches of several repos. The temp directory
+and `~/.cache` are the same whichever repo the editor opens. Since an
+environment variable is set outside the repo, often once for every shell, the
+directory it names is too. Repos that read the same config through `--config`
+share its `path`. Several checkouts of the repo can also share an absolute
+`path`. `heddle/<repo>` keeps those repos' copies apart.
 
 With `xdg = true`, the root is `$XDG_CACHE_HOME` if it's set to an absolute
 path, and `$HOME/.cache` otherwise, as the spec says. Since macOS doesn't set

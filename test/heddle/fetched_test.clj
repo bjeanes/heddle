@@ -85,13 +85,16 @@
            (cache-root "{ xdg = true }" {"HOME" ""})))
     (is (str/includes? (:warning (cache-root "{ xdg = true }" {"HOME" "me"}))
                        "and $HOME is a relative path, \"me\"")))
-  (testing "can be an absolute path, used as given"
-    (is (= {:root "/var/cache"} (cache-root "{ path = '/var/cache' }" {}))))
-  (testing "can be a path relative to the config's directory, used as given"
-    (is (= {:root "/code/shop/.cache"} (cache-root "{ path = '.cache' }" {})))
-    (is (= {:root "/code/shop"} (cache-root "{ path = '.' }" {})))
-    (is (= {:root "/etc/heddle/.cache"}
-           (fetched/cache-root (config/parse "cache = { path = '.cache' }") "/etc/heddle" "/code/shop" {})))))
+  (testing "can be an absolute path"
+    (is (= {:root (shop-in "/var/cache")} (cache-root "{ path = '/var/cache' }" {}))))
+  (testing "can be a path relative to the config's directory"
+    (is (= {:root (shop-in "/code/shop/.cache")} (cache-root "{ path = '.cache' }" {})))
+    (is (= {:root (shop-in "/code/shop")} (cache-root "{ path = '.' }" {})))
+    (is (= {:root (shop-in "/etc/heddle/.cache")}
+           (fetched/cache-root (config/parse "cache = { path = '.cache' }") "/etc/heddle" "/code/shop" {}))))
+  (testing "tell apart repos that share a config with a path"
+    (is (= {:root (shop-in "/etc/heddle/.cache" "a1955834")}
+           (fetched/cache-root (config/parse "cache = { path = '.cache' }") "/etc/heddle" "/other/shop" {})))))
 
 (deftest fetching
   (let [server (temp-dir)
