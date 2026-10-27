@@ -33,6 +33,12 @@
       (is (= ["**/Gemfile" "**/*.rake"] (:globs s)))))
   (testing "give a server type without globs none"
     (is (= [] (:globs (spec-for design ["rubocop" "."])))))
+  (testing "say which directories the backend also serves, without passing them to the runner"
+    (let [s (spec-for (config/parse "[servers.s]\nlanguages = ['x']\n[scopes.a.s]\ncommand = 's'\nalso = ['shared', 'lib/x']\n")
+                      ["s" "a"])]
+      (is (= ["/r/shared" "/r/lib/x"] (:also s)))
+      (is (= {"command" "s"} (:cfg s))))
+    (is (= [] (:also (spec-for design ["rubocop" "."])))))
   (testing "root the root scope where paths map it"
     (is (= "/src" (:root (spec-for design ["rubocop" "."])))))
   (testing "root a scope without paths at its own directory"

@@ -153,6 +153,15 @@
                               "  t: . (the whole repo, since no scope names it)")}
            (main/check dir)))))
 
+(deftest check-a-config-with-shared-directories
+  (let [dir (temp-dir)]
+    (spit (io/file dir ".heddle.toml")
+          "[servers.s]\nlanguages = ['x']\nboot = { command = 's' }\n[scopes.a.s]\nalso = ['shared', 'lib']\n[scopes.b.s]\n")
+    (is (= {:exit 0 :out (str "No errors in " dir "/.heddle.toml.\n"
+                              "Each server type runs in these scopes:\n"
+                              "  s: a (also shared, lib), b")}
+           (main/check dir)))))
+
 (deftest check-a-config-with-no-server-types
   (let [dir (temp-dir)]
     (main/init dir)

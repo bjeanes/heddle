@@ -259,10 +259,12 @@
     (str/join "\n" (cons "Each server type runs in these scopes:"
                          (for [[server-type slots] (sort-by key by-server-type)]
                            (str "  " server-type ": "
-                                (str/join ", " (for [[_ scope :as slot] (sort-by second slots)]
-                                                 (if (implicit? config slot)
-                                                   (str scope " (the whole repo, since no scope names it)")
-                                                   scope)))))))))
+                                (str/join ", " (for [[_ scope :as slot] (sort-by second slots)
+                                                     :let [also (get-in config ["scopes" scope server-type "also"])]]
+                                                 (cond
+                                                   (implicit? config slot) (str scope " (the whole repo, since no scope names it)")
+                                                   (seq also) (str scope " (also " (str/join ", " also) ")")
+                                                   :else scope)))))))))
 
 (defn unknown-server-types
   "Those of the server types `names` that the config doesn't have."
@@ -295,3 +297,14 @@
                dir)]
     (when (seq dirs)
       (apply max-key depth dirs))))
+
+(defn scopes-for
+  "The scopes, sorted, that handle the repo-relative `path` for `server-type`:
+  the one that `scope-for` gives, and each whose entry for `server-type` lists
+  a directory containing `path` under `also`."
+  [config server-type path]
+  (let [longest (scope-for config server-type path)]
+    (sort (for [[dir entries] (get config "scopes")
+                :when (or (= longest dir)
+                          (some #(paths/within? % path) (get-in entries [server-type "also"])))]
+            dir))))

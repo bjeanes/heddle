@@ -186,13 +186,14 @@
 ;; Backends
 
 (defn- document-selector
-  "The backend's files: those of its languages in its scope or among its
-  fetched files, and those matching its globs."
+  "The backend's files: those of its languages in its scope, in the
+  directories it also serves or among its fetched files, and those matching
+  its globs."
   [b]
-  (let [{:keys! [languages globs repo dir cache]} (:spec b)
+  (let [{:keys! [languages globs repo dir also cache]} (:spec b)
         relative (fn [base pattern] {"baseUri" (paths/path->uri base) "pattern" pattern})]
     (vec (concat (for [language languages
-                       base [dir cache]]
+                       base (concat [dir] also [cache])]
                    {"language" language "pattern" (relative base "**/*")})
                  (for [glob globs]
                    {"pattern" (relative repo glob)})))))
@@ -600,12 +601,13 @@
     (notify-backend! b method params)))
 
 (defn- watched-files-changed!
-  "Passes on each change to the backends whose scopes contain the file."
+  "Passes on each change to the backends whose scopes, or the directories they
+  also serve, contain the file."
   [proxy {:strs [changes]}]
-  (let [repo (get-in @(:state proxy) [:session :repo])
-        within? (fn [b change]
-                  (let [[_ scope] (backend/slot b)]
-                    (some->> (paths/uri->path (get change "uri")) (routing/repo-relative repo) (paths/within? scope))))]
+  (let [within? (fn [b change]
+                  (let [{:keys! [dir also]} (:spec b)
+                        path (paths/uri->path (get change "uri"))]
+                    (some #(paths/under? % path) (cons dir also))))]
     (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]
             :when (seq theirs)]

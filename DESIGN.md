@@ -176,6 +176,13 @@ _longest_ path that contains the file and starts that server type. If no scope
 starts a server type for a file, that server type doesn't handle the file. For
 a catch-all, give the server type a scope at `.`, as `rubocop` has above.
 
+A directory that several services use, such as a gem kept in the repo, often
+lies outside every one of their scopes. A scope's entry can list directories
+like that under `also`. Its backend then handles their files too, alongside
+the backend of the longest scope that contains them, if there is one. If the
+entry has `paths`, they have to cover each of those directories, since the
+backend would otherwise get files it can't see.
+
 Taking `services/api/app/models/user.rb` from the example above, its language is
 `ruby`. That matches both `ruby-lsp` and `rubocop`.
 
@@ -264,12 +271,13 @@ comes from.
 only exist in `read`, and the proxy reports using one anywhere else as an error
 when it loads the config. Anything else the proxy provides goes under `proxy:`.
 
-A boot config can name its `runner` and give it `paths`. Every other key in it,
-including `command`, is a value for `{cfg:…}`. The runner's `defaults` can give
-`paths` too, as "Paths" below describes. When the proxy loads the config,
-it checks each scope against its runner's templates. If a template uses a
-`{cfg:…}` value that neither the boot config nor the runner's `defaults` has,
-that is an error. A `compose` scope with no `service` is one example.
+A boot config can name its `runner`, give it `paths`, and list other
+directories it serves under `also`. Every other key in it, including `command`,
+is a value for `{cfg:…}`. The runner's `defaults` can give `paths` too, as
+"Paths" below describes. When the proxy loads the config, it checks each scope
+against its runner's templates. If a template uses a `{cfg:…}` value that
+neither the boot config nor the runner's `defaults` has, that is an error. A
+`compose` scope with no `service` is one example.
 
 The proxy only provides values that exist for every valid scope. That is why
 there is no `{server:repo}`. The repo root only has a server path if `paths`
@@ -510,6 +518,10 @@ languages = ["ruby"]
 priority = 10
 ```
 
+Several backends of one server type can handle a file in a directory that
+their scopes list under `also`. A request that wants one answer then goes to the
+first of them by scope that offers the feature.
+
 Requests whose answers can be combined, such as completion and code actions,
 go to all of them that have started. The proxy concatenates the results.
 
@@ -601,8 +613,10 @@ second server's diagnostics. Instead, the proxy keeps each backend's latest set
 for each file and publishes their union. When a backend stops, the proxy
 publishes the union again without it.
 
-Two backends may report the same problem in a file. When two diagnostics are
-equal in every field, the proxy publishes only the first.
+Two backends may report the same problem in a file. That is typical of a file
+in a directory that several scopes list under `also`, since each of their
+backends runs the same server over it. When two diagnostics are equal in every field,
+the proxy publishes only the first.
 
 Clients can also pull a file's diagnostics with `textDocument/diagnostic`. The
 proxy asks every backend for the file that offers it and concatenates their

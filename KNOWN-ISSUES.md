@@ -69,15 +69,6 @@ them, under "Pinned for later".
 
 ## Paths and fetched files
 
-- **Code that several scopes share isn't served by their servers.** In a
-  monorepo, several services may use a directory such as `shared/some_gem`,
-  for example as a path gem in their Gemfiles. Since each service's server
-  indexes it, you can jump _into_ it. However, a file there lies outside every
-  service's scope. Once you open it, none of their servers serve it. Only a
-  scope that contains it, such as `"."`, can start one for it. Even then,
-  heddle sends a file to only one backend of each server type. Finding a
-  shared file's references would need every service's server. This is a gap
-  in the current approach to config, which I plan to address.
 - **Fetched copies are read-only.** Edits need the real file, under an entry in
   `paths`.
 - **Nothing cleans up fetched copies.** By default they live under the

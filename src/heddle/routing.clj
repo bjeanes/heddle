@@ -22,7 +22,9 @@
 
 (defn handlers
   "The [server-type scope] of each backend that handles the file at `uri` when
-  it's opened as `language`, in priority order. `session` has the :config,
+  it's opened as `language`, in priority order, then by scope. For each server
+  type, those are the longest scope that contains the file and every scope
+  that also serves a directory containing it. `session` has the :config,
   :repo and :specs to route by. `backends` is the registry's live backends by
   slot."
   [{:keys [config repo specs]} backends uri language]
@@ -31,7 +33,8 @@
       [k]
       (when-let [path (repo-relative repo path)]
         (for [server-type (config/by-priority config (config/server-types config path language))
-              :let [k [server-type (config/scope-for config server-type path)]]
+              scope (config/scopes-for config server-type path)
+              :let [k [server-type scope]]
               :when (contains? specs k)]
           k)))))
 

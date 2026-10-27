@@ -78,7 +78,7 @@
 (defn cfg
   "The boot config's values for `{cfg:…}` placeholders."
   [boot]
-  (dissoc boot "runner" "paths"))
+  (dissoc boot "runner" "paths" "also"))
 
 (defn unused-values
   "The names, sorted, of the boot config's values that none of the runner's

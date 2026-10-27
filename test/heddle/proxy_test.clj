@@ -867,6 +867,60 @@ read = ['cat', '{read:file}']
       (stop-backend! t ["lint" "."])
       (is (= #{"ruby"} (messages (from-proxy t)))))))
 
+(def ^:private sharing-config "
+[servers.ruby]
+languages = ['ruby']
+
+[scopes.api]
+ruby = { command = 'ruby', also = ['shared'] }
+
+[scopes.web]
+ruby = { command = 'ruby', also = ['shared'] }
+")
+
+(deftest serving-shared-directories
+  (let [respond (fn [[_ scope] {:strs [id method params]}]
+                  (case method
+                    "initialize" [(lsp/response id {"capabilities" {"textDocumentSync" 1 "hoverProvider" true}})]
+                    "textDocument/didOpen" [(lsp/notification "textDocument/publishDiagnostics"
+                                                              {"uri" (get-in params ["textDocument" "uri"])
+                                                               "diagnostics" [{"message" "unused"}]})]
+                    "textDocument/hover" [(lsp/response id {"contents" scope})]
+                    nil))
+        t (start :respond respond :config sharing-config)]
+    (initialize! t {})
+    (open! t "shared/a.rb" "ruby")
+    (testing "sends a shared file to every backend whose scope also serves it"
+      (is (eventually #(= ["initialize" "initialized" "textDocument/didOpen"]
+                          (methods-received t ["ruby" "api"])
+                          (methods-received t ["ruby" "web"])))))
+    (testing "publishes the diagnostics they both report once"
+      (is (= [{"message" "unused"}] (get-in (from-proxy t) ["params" "diagnostics"])))
+      (is (= [{"message" "unused"}] (get-in (from-proxy t) ["params" "diagnostics"]))))
+    (testing "asks the first by scope a request that wants one answer"
+      (client! t (request-about t 1 "textDocument/hover" "shared/a.rb"))
+      (is (= (lsp/response 1 {"contents" "api"}) (from-proxy t))))
+    (testing "sends a file in one scope only to that scope's backend"
+      (open! t "web/b.rb" "ruby")
+      (is (eventually #(= 2 (count (received t ["ruby" "web"] "textDocument/didOpen")))))
+      (is (= 1 (count (received t ["ruby" "api"] "textDocument/didOpen")))))
+    (testing "passes on changes to watched files in a shared directory too"
+      (client! t (lsp/notification "workspace/didChangeWatchedFiles"
+                                   {"changes" [{"uri" (uri t "shared/c.rb") "type" 2}
+                                               {"uri" (uri t "web/d.rb") "type" 2}]}))
+      (is (eventually #(= [[(uri t "shared/c.rb")] [(uri t "shared/c.rb") (uri t "web/d.rb")]]
+                          (for [k [["ruby" "api"] ["ruby" "web"]]]
+                            (map #(get % "uri")
+                                 (get-in (received t k "workspace/didChangeWatchedFiles") [0 "params" "changes"])))))))))
+
+(deftest registering-features-for-shared-directories
+  (let [t (start :config sharing-config)]
+    (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "shared") "pattern" "**/*"}}}
+              (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
+        "covers the files in the directories a backend also serves")))
+
 (deftest publishing-diagnostics-about-fetched-files
   (let [gem (str (temp-dir) "/gems/rainbow.rb")
         respond (fn [_ {:strs [id method params]}]

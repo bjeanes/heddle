@@ -365,11 +365,13 @@ type runs in, marking one that runs across the repo for that reason.
 
 The proxy lays a scope's values over the server type's `boot` table, one key
 at a time. That lets you give the command once, on the server type, and only
-say where it runs in each scope. Two keys in the result belong to the proxy.
+say where it runs in each scope. Three keys in the result belong to the proxy.
 `runner` names the runner to use. Without one, the proxy runs `command`
 directly, on your machine. `paths` maps directories in the repo to the
 absolute directories the server sees, such as where a container mounts them.
-Every other key, `command` included, is a value for the runner's templates.
+`also` lists directories outside the scope for the server to handle too, as
+[Shared code](#shared-code) describes. Every other key, `command` included,
+is a value for the runner's templates.
 
 Setting a key to `false` unsets it, since TOML has no null. Say the server
 type's `boot` runs it in Compose with `paths = { "." = "/srv" }`. A scope that
@@ -418,6 +420,33 @@ path = "heddle-trace.jsonl"              # or "/absolute/file"
 With this config, a Ruby file under `services/api` gets ruby-lsp in the `api`
 service and RuboCop in the `lints` service.
 
+### Shared code
+
+A directory that several services use, such as a gem kept in the repo, often
+sits outside every service's scope. Since the longest scope that contains a
+file wins, no scope's ruby-lsp would handle its files. `also` lists
+directories, relative to the repo root, whose files a scope's backend handles
+as well as its own. Its `paths` have to cover them, if it has any:
+
+<!-- example: shared code -->
+```toml
+[scopes."services/orders".ruby-lsp]
+service = "orders"
+paths = { "services/orders" = "/app", "shared/analytics" = "/shared/analytics" }
+also = ["shared/analytics"]
+
+[scopes."services/billing".ruby-lsp]
+service = "billing"
+paths = { "services/billing" = "/app", "shared/analytics" = "/shared/analytics" }
+also = ["shared/analytics"]
+```
+
+Added to the config above, a file under `shared/analytics` goes to both
+backends. A request that wants one answer, such as hover or rename, goes to the
+first of them by scope, which is `services/billing`. Requests whose answers are
+combined go to both. When both report the same diagnostic, you see it once.
+`heddle check` lists each scope's `also` beside it.
+
 ### Runners
 
 A runner is a set of command templates. Each template is a list of arguments,
@@ -462,8 +491,9 @@ in `"{client:repo}:/src"`, though not another `{cfg:…}`.
 
 When the proxy loads the config, it checks every scope against its runner. It
 reports a value the runner needs but nobody gives, an unknown placeholder, or
-`paths` that don't cover the scope's directory. It warns about a value that the
-runner's templates never use, which is often a misspelt key.
+`paths` that don't cover the scope's directory or a directory in its `also`. It
+warns about a value that the runner's templates never use, which is often a
+misspelt key.
 
 `prepare` is for anything that has to be in place before the server can start.
 The `docker-run` runner in [Example runners](#example-runners) makes the server
@@ -831,9 +861,6 @@ likely to run into are:
   files. Until then, workspace symbol search doesn't cover them.
 - If a backend stops, it starts again the next time you open one of its
   files, and no sooner than 30 s after it stopped.
-- Code that several scopes share, such as a path gem used by several services,
-  gets none of their servers once you open it. Only a scope that contains it,
-  such as `"."`, can serve it.
 - Copies of files fetched from containers are read-only. Nothing cleans them
   up, wherever [the cache](#the-cache) keeps them.
 - There's no VS Code extension yet. The only release is `edge`, built from

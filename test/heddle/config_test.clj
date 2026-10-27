@@ -243,7 +243,37 @@ boot = { command = 's' }
 ")]
       (is (= "abcdef/g" (config/scope-for c "s" "abcdef/g/h")))
       (is (= "abcdef" (config/scope-for c "s" "abcdef/h")))
-      (is (= "." (config/scope-for c "s" "z"))))))
+      (is (= "." (config/scope-for c "s" "z")))))
+  (testing "the longest scope and those that also serve a directory containing the file, sorted"
+    (let [c (config/parse "
+[servers.s]
+languages = ['x']
+boot = { command = 's' }
+[servers.t]
+languages = ['x']
+boot = { command = 't' }
+
+[scopes.a.s]
+also = ['shared', 'b/vendor']
+[scopes.b.s]
+also = ['shared/one', 'other']
+[scopes.c.t]
+also = ['shared']
+
+[servers.u]
+languages = ['x']
+boot = { command = 'u', also = ['shared'] }
+[scopes.d.u]
+[scopes.e.u]
+also = false
+")]
+      (is (= ["a" "b"] (config/scopes-for c "s" "shared/one/x")))
+      (is (= ["a"] (config/scopes-for c "s" "shared/two/x")))
+      (is (= ["c"] (config/scopes-for c "t" "shared/x")))
+      (is (empty? (config/scopes-for c "s" "sharedx/x")))
+      (is (= ["a" "b"] (config/scopes-for c "s" "b/vendor/x")))
+      (is (= ["b"] (config/scopes-for c "s" "b/x")))
+      (is (= ["d"] (config/scopes-for c "u" "shared/x")) "from the boot table, unless a scope unsets it"))))
 
 (deftest trace-path
   (is (= "/r/tmp/trace.jsonl" (config/trace-path (config/parse "trace = { path = 'tmp/trace.jsonl' }") "/r")))
@@ -396,6 +426,22 @@ start = ['{read:file}', '--root={srv:scope}']
            (errors "[servers.a]\nlanguages = ['x']\n[scopes.s.a]\ncommand = 'a'\n[scopes.s.a.paths]\n")))
     (is (= #{"scope \"s\", server type \"a\": paths must be a table"}
            (scope-errors "{ command = 'a', paths = true }"))))
+  (testing "also"
+    (is (nil? (scope-errors "{ command = 'a', also = ['shared', 'lib/x'] }")))
+    (is (nil? (scope-errors "{ command = 'a', also = ['shared'], paths = { '.' = '/src' } }")))
+    (is (nil? (scope-errors "{ command = 'a', also = ['shared'], paths = false }")))
+    (is (nil? (scope-errors "{ command = 'a', also = false }")))
+    (is (= #{"scope \"s\", server type \"a\": also must be a list of directories relative to the repo root, such as [\"shared/analytics\"]"}
+           (scope-errors "{ command = 'a', also = 'shared' }")
+           (scope-errors "{ command = 'a', also = ['/shared'] }")
+           (scope-errors "{ command = 'a', also = ['../shared'] }")))
+    (is (= #{"scope \"s\", server type \"a\": paths don't cover \"shared\", which is in also"}
+           (scope-errors "{ command = 'a', also = ['shared', 'lib'], paths = { 's' = '/app', 'lib' = '/lib' } }")
+           (scope-errors "{ runner = 'r', also = ['shared'] }"
+                         "[runners.r]\nstart = ['x']\ndefaults = { paths = { 's' = '/app' } }\n")))
+    (is (= #{"scope \"s\", server type \"a\": paths must be a table"}
+           (scope-errors "{ command = 'a', also = ['shared'], paths = true }"))
+        "only once paths are valid"))
   (testing "a value a template needs can't be unset"
     (is (= #{"scope \"s\", server type \"a\": when run directly: no value for {cfg:command}"}
            (scope-errors "{ command = false }"))))
@@ -441,6 +487,15 @@ service = false
 " compose-and-host))))))
   (testing "nothing when every value is used, counting runner, paths and values that replace a default"
     (is (empty? (config/warnings design))))
+  (testing "nothing for also"
+    (is (empty? (config/warnings (config/parse "
+[servers.s]
+languages = ['x']
+
+[scopes.a.s]
+command = 's'
+also = ['shared']
+")))))
   (testing "nothing for a runner's default that its templates never use"
     (is (empty? (config/warnings (config/parse "
 [servers.s]

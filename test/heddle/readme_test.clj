@@ -59,6 +59,15 @@ image = 'ruby:3.3'
             "bundle" "exec" "ruby-lsp"]
            (command c "tools/cli" "start")))))
 
+(deftest shared-code-parses
+  (let [c (config/parse (str (toml-after "example: full config") "\n"
+                             (toml-after "example: shared code")))]
+    (is (= [] (config/warnings c)))
+    (is (= ["services/billing" "services/orders"]
+           (config/scopes-for c "ruby-lsp" "shared/analytics/lib/event.rb")))
+    (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "orders" "bundle" "exec" "ruby-lsp"]
+           (command c "services/orders" "start")))))
+
 (deftest runner-defaults-parse
   (let [c (config/parse (str "[servers.ruby-lsp]\nlanguages = ['ruby']\nboot = { command = ['bundle', 'exec', 'ruby-lsp'] }\n"
                              (toml-after "example: runner defaults")))]
