@@ -74,6 +74,7 @@
 ## The commands fill in placeholders:
 ##   {cfg:NAME}          NAME from the scope or `boot`, or else from `defaults`
 ##   {client:repo}       the repo, as a path on your machine
+##   {client:scope}      the scope's directory, as a path on your machine
 ##   {server:scope}      the scope's directory, as the server sees it
 ##   {proxy:backend_id}  an ID for each server heddle starts
 ##   {read:file}         the file for `read` to print

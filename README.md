@@ -400,20 +400,22 @@ scope's directory as its working directory.
   it when a server refers to a file that `paths` doesn't cover, such as an
   installed gem, to copy the file out for you to open. Without it, you can't
   open those files. Each `read` has 10 s to finish.
-- `defaults` is optional. It gives values for the templates that a boot config
-  can override. It can also give `paths`, which the boot config can override
-  or unset in the same way.
+- `defaults` is optional. It gives values for the templates. The proxy lays
+  the server type's `boot` table over them, then the scope's values, one key at
+  a time. Either can override a default, or unset it with `false`. `defaults`
+  can also give `paths`, which the boot config can override or unset in the
+  same way.
 
 Templates draw on values through placeholders:
 
-| Placeholder          | Value                                                     |
-| -------------------- | --------------------------------------------------------- |
-| `{cfg:NAME}`         | the boot config's `NAME`, or else the runner's `defaults` |
-| `{client:repo}`      | the repo root, as a path on your machine                  |
-| `{client:scope}`     | the scope's directory, as a path on your machine          |
-| `{server:scope}`     | the scope's directory, as the server sees it              |
-| `{read:file}`        | the file to print, as the server sees it (only in `read`) |
-| `{proxy:backend_id}` | an ID unique to the backend, safe as a container name     |
+| Placeholder          | Value                                                            |
+| -------------------- | ---------------------------------------------------------------- |
+| `{cfg:NAME}`         | `NAME` from the scope, else `boot`, else the runner's `defaults` |
+| `{client:repo}`      | the repo root, as a path on your machine                         |
+| `{client:scope}`     | the scope's directory, as a path on your machine                 |
+| `{server:scope}`     | the scope's directory, as the server sees it                     |
+| `{read:file}`        | the file to print, as the server sees it (only in `read`)        |
+| `{proxy:backend_id}` | an ID unique to the backend, safe as a container name            |
 
 A `{cfg:…}` value can be a string or a list of strings. The other placeholders
 are always a single string. Since there's no shell to split a string into
