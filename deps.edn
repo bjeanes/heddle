@@ -2,7 +2,7 @@
 
  :deps
  {clj-toml/clj-toml {:git/url "https://github.com/bjeanes/clj-toml"
-                     :git/sha "5b38f6aca8b3ebb16bbf620573b70b26531778e4"}
+                     :git/sha "b88e947acebbeec81aef6db46984d51f10cdd4f4"}
   instaparse/instaparse {:git/url "https://github.com/Engelberg/instaparse.git"
                          :git/tag "v1.4.10"
                          :git/sha "abeafbc0651f00e25f9a8ce64c8d41d495c4fe6b"}}

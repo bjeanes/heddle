@@ -55,9 +55,7 @@
 
 (def ^:private values
   [{"s" "plain"}
-   ;; Under Jolt, clj-toml can't read a \uXXXX escape, since Jolt has no
-   ;; Integer/parseUnsignedInt. The control characters that need one are left out.
-   {"s" "\"\\\b\t\n\f\r é 😀"}
+   {"s" "\"\\\b\t\n\f\r é 😀 \u0000\u0001\u001f\u007f"}
    {"n" 0 "neg" -42 "big" 9007199254740993 "t" true "f" false}
    {"x" 1.5 "e" 1e-7 "inf" ##Inf "-inf" ##-Inf}
    {"l" [] "ls" ["a" "b"] "nested" [[1 2] ["x"]]}
