@@ -20,13 +20,14 @@
       (vec (mapcat second offered)))))
 
 (defn- full-report [reports]
-  {"kind" "full" "items" (vec (mapcat #(get % "items") reports))})
+  {"kind" "full" "items" (vec (distinct (mapcat #(get % "items") reports)))})
 
 (defn- diagnostic-reports
   "One report from several backends' reports for a file, along with their
-  reports for related files. The combined reports have no `resultId`, since
-  one backend's ID means nothing to the others. So, the client never asks
-  for only what changed, and every backend always reports in full."
+  reports for related files, with each diagnostic that several backends gave
+  once. The combined reports have no `resultId`, since one backend's ID means
+  nothing to the others. So, the client never asks for only what changed, and
+  every backend always reports in full."
   [reports]
   (let [related (apply merge-with into (for [report reports
                                              [uri related-report] (get report "relatedDocuments")]

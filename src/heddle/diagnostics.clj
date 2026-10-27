@@ -16,9 +16,10 @@
       (dissoc by-file uri))))
 
 (defn union-for
-  "Every backend's diagnostics for `uri`, in one list."
+  "Every backend's diagnostics for `uri`, in one list. A diagnostic that
+  several backends published appears once."
   [by-file uri]
-  (vec (apply concat (vals (get by-file uri)))))
+  (vec (distinct (apply concat (vals (get by-file uri))))))
 
 (defn files-from
   "The URIs of the files that the backend `backend-id` has diagnostics for."

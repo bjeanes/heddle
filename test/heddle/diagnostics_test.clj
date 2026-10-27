@@ -23,5 +23,13 @@
       (is (= {} (-> by-file
                     (diagnostics/published a "lint-1" [])
                     (diagnostics/published a "ruby-1" [])))))
+    (testing "has a diagnostic that several backends published once"
+      (let [unused {"message" "unused" "range" {"start" {"line" 1 "character" 0}}}
+            elsewhere (assoc-in unused ["range" "start" "line"] 2)]
+        (is (= [unused elsewhere]
+               (diagnostics/union-for (-> {}
+                                          (diagnostics/published a "ruby-1" [unused])
+                                          (diagnostics/published a "ruby-2" [unused elsewhere]))
+                                      a)))))
     (testing "has nothing for a file no backend published for"
       (is (= [] (diagnostics/union-for by-file "file:///repo/b.rb"))))))
