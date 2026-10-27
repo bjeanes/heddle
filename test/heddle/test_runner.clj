@@ -28,6 +28,7 @@
             [heddle.session-test]
             [heddle.spec-test]
             [heddle.starter-test]
+            [heddle.toml-writer-test]
             [heddle.trace-test]
             [heddle.translate-test]))
 
