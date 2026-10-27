@@ -84,6 +84,10 @@ config can see its problems without starting an editor. If there are no
 errors, it also lists the scopes that each server type runs in, marking a
 server type that runs across the repo only because no scope names it.
 
+`heddle config [DIR]` prints the config as the proxy sees it once each scope
+has its whole boot config, as TOML that loads to the same thing. A comment on
+each of a scope's values names the table and line it came from.
+
 `heddle init [DIR]` writes a starter config to the root of DIR, and refuses
 to replace one that's already there. Everything in it is commented out, so it
 loads as written, with no server types. It shows a server type, scopes with and
@@ -153,7 +157,10 @@ each open file's language.
 
 A server type's `boot` table holds defaults for starting it. Scopes override
 them one key at a time. That avoids repeating a command in every scope, without
-tying the command to the server type. Any scope can still replace it.
+tying the command to the server type. Any scope can still replace it. When
+the proxy loads the config, it lays each scope's values over the `boot` table
+and its runner's `defaults`. It keeps only the result, which `heddle config`
+prints.
 
 Since TOML has no null, setting a key to `false` unsets it, along with
 whatever a lower layer gave it. A scope on the host can then drop the `paths`

@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
+            [heddle.config-test :as config-test]
             [heddle.spec :as spec]
             [heddle.starter :as starter]))
 
@@ -42,6 +43,12 @@
     (is (= ["docker" "exec" "--interactive" "--workdir" "/src/tools/cli" "heddle-1"
             "typescript-language-server" "--stdio"]
            (command c "tools/cli" "start")))))
+
+(deftest every-example-prints-a-config-that-expands-the-same
+  (doseq [s [(uncomment) (uncomment "# [servers.ts-ls]")]
+          :let [[c again] (config-test/reprinted s)]]
+    (is (= c again))
+    (is (= [] (config/warnings again)))))
 
 (deftest the-server-type-alone-runs-across-the-repo
   (let [c (config/parse (uncomment "# [servers.ts-ls]"))]

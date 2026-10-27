@@ -200,6 +200,68 @@ command = 'rubocop --lsp'
               slot (spec/slots c)]
         (is (not (config/implicit? c slot)) (str dir " " slot))))))
 
+(defn reprinted
+  "The config in the TOML text `s`, and the config parsed from what
+  `expanded-toml` prints for it."
+  [s]
+  (let [c (config/parse s)]
+    [c (config/parse (config/expanded-toml c s))]))
+
+(def ^:private layered "
+[servers.ruby-lsp]
+languages = ['ruby']
+boot = { runner = 'c', command = ['bundle', 'exec', 'ruby-lsp'], x = false }
+
+[servers.rubocop]
+languages = ['ruby']
+boot = { command = 'rubocop' }
+
+[runners.c]
+defaults = { compose = ['docker', 'compose'], paths = { '.' = '/src' }, x = 'd' }
+start = ['{cfg:compose}', 'exec', '{cfg:service}', '{cfg:command}']
+
+[scopes.'services/api'.ruby-lsp]
+service = 'api'
+[scopes.'tools/cli'.ruby-lsp]
+runner = false
+")
+
+(deftest prints-the-expanded-config
+  (is (= "[servers.rubocop]
+languages = [\"ruby\"]
+
+[servers.ruby-lsp]
+languages = [\"ruby\"]
+
+[runners.c]
+start = [\"{cfg:compose}\", \"exec\", \"{cfg:service}\", \"{cfg:command}\"]
+
+# rubocop runs across the whole repo, since no scope names it
+[scopes.\".\".rubocop]
+# heddle runs the command directly, with no runner
+command = \"rubocop\"  # servers.rubocop.boot (line 8)
+
+[scopes.\"services/api\".ruby-lsp]
+runner = \"c\"                              # servers.ruby-lsp.boot (line 4)
+command = [\"bundle\", \"exec\", \"ruby-lsp\"]  # servers.ruby-lsp.boot (line 4)
+compose = [\"docker\", \"compose\"]           # runners.c.defaults (line 11)
+paths = { \".\" = \"/src\" }                  # runners.c.defaults (line 11)
+service = \"api\"                           # scopes.\"services/api\".ruby-lsp (line 15)
+
+[scopes.\"tools/cli\".ruby-lsp]
+# heddle runs the command directly, with no runner
+command = [\"bundle\", \"exec\", \"ruby-lsp\"]  # servers.ruby-lsp.boot (line 4)"
+         (config/expanded-toml (config/parse layered) layered))))
+
+(deftest prints-a-config-that-expands-the-same
+  (doseq [s [layered
+             (slurp "test/heddle/fixtures/design/.heddle.toml")
+             (slurp "examples/monorepo/.heddle.toml")
+             (slurp "examples/ruby-compose/.heddle.toml")]
+          :let [[c again] (reprinted s)]]
+    (is (= c again))
+    (is (= [] (config/warnings again)))))
+
 (deftest unknown-server-types
   (is (= ["nosuch"] (config/unknown-server-types design ["ruby-lsp" "nosuch"])))
   (is (empty? (config/unknown-server-types design []))))

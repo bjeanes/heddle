@@ -207,6 +207,24 @@
     (is (= {:exit 1 :err (str "There's no config file " file ".")} (main/check dir file)))
     (is (= {:exit 1 :err (str "There's no config file " file ".")} (main/languages dir [] file)))))
 
+(deftest config-takes-a-directory-and-a-config-file
+  (is (= {:command :config :dir nil} (main/parse-args ["config"])))
+  (is (= {:command :config :dir "/repo" :config "c.toml"} (main/parse-args ["config" "--config" "c.toml" "/repo"])))
+  (is (= {:error "config takes at most one directory"} (main/parse-args ["config" "/repo" "/other"]))))
+
+(deftest config-prints-the-expanded-config
+  (let [dir (temp-dir)]
+    (spit (io/file dir ".heddle.toml")
+          "[servers.s]\nlanguages = ['x']\nboot = { command = 's', image = 'i' }\n")
+    (let [{:keys [exit out err]} (main/expanded-config dir)]
+      (is (= 0 exit))
+      (is (str/includes? out "command = \"s\"  # servers.s.boot (line 3)"))
+      (is (str/includes? err "\"image\" isn't used when run directly"))))
+  (is (= (main/expanded-config (temp-dir) design-config)
+         (main/outcome {:command :config :dir "test/heddle/fixtures/design" :config design-config})
+         (main/expanded-config "test/heddle/fixtures/design")))
+  (is (= 1 (:exit (main/expanded-config (temp-dir))))))
+
 (deftest init-takes-a-directory
   (is (= {:command :init :dir nil} (main/parse-args ["init"])))
   (is (= {:command :init :dir "/repo"} (main/parse-args ["init" "/repo"])))

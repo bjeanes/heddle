@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [heddle.config :as config]
+            [heddle.config-test :as config-test]
             [heddle.spec :as spec]))
 
 (def ^:private readme (slurp "README.md"))
@@ -48,6 +49,15 @@ image = 'ruby:3.3'
   (let [c (config/parse (toml-after "example: full config"))]
     (is (= ["docker" "compose" "exec" "-T" "--workdir" "/app" "api" "bundle" "exec" "ruby-lsp"]
            (command c "services/api" "start")))))
+
+(deftest examples-print-configs-that-expand-the-same
+  (doseq [s [(toml-after "example: full config")
+             (str (toml-after "example: full config") "\n" (toml-after "example: shared code"))
+             (str "[servers.ruby-lsp]\nlanguages = ['ruby']\nboot = { command = ['bundle', 'exec', 'ruby-lsp'] }\n"
+                  (toml-after "example: runner defaults"))]
+          :let [[c again] (config-test/reprinted s)]]
+    (is (= c again))
+    (is (= [] (config/warnings again)))))
 
 (deftest custom-runner-parses
   (let [c (config/parse (str (toml-after "example: full config") "\n"

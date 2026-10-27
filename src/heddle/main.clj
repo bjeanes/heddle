@@ -16,6 +16,7 @@
   "usage: heddle [serve] [--eager] [--trace FILE] [--config FILE] [SERVER-TYPE...]
        heddle languages [--config FILE] [DIR [SERVER-TYPE...]]
        heddle check [--config FILE] [DIR]
+       heddle config [--config FILE] [DIR]
        heddle init [DIR]
        heddle help
 
@@ -34,8 +35,8 @@ Either one overrides the config's [trace] table.
 --config FILE reads the config from FILE instead of the root of the repo.
 HEDDLE_CONFIG=FILE does the same, unless --config is given. For serve, the
 repo is still the client's first workspace root, or else the current
-directory. For languages and check, it's DIR. A relative path in FILE's
-[cache] or [trace] table is relative to FILE's own directory.
+directory. For languages, check and config, it's DIR. A relative path in
+FILE's [cache] or [trace] table is relative to FILE's own directory.
 
 languages prints, as JSON, the languages that the config for DIR covers,
 counting only the server types named, if any.
@@ -43,12 +44,17 @@ counting only the server types named, if any.
 check reads the config for DIR and prints its errors and warnings.
 It exits non-zero if the config has errors.
 
+config prints the config for DIR as TOML, with each scope's values layered
+over its server type's boot table and its runner's defaults. A comment beside
+each of those values says where it came from. It exits non-zero if the config
+has errors.
+
 init writes a starter config, all commented out, to the root of DIR. It won't
 replace a config that's already there.
 
 DIR is the current directory unless given.")
 
-(def ^:private commands #{"serve" "languages" "check" "init" "help"})
+(def ^:private commands #{"serve" "languages" "check" "config" "init" "help"})
 
 (def ^:private trace-variable "HEDDLE_TRACE") ; the environment variable that serves as --trace
 (def ^:private config-variable "HEDDLE_CONFIG") ; the environment variable that serves as --config
@@ -58,6 +64,7 @@ DIR is the current directory unless given.")
 (def ^:private command-options {"serve" #{"--eager" "--trace" "--config"}
                                 "languages" #{"--config"}
                                 "check" #{"--config"}
+                                "config" #{"--config"}
                                 "init" #{}})
 
 (defn- option? [arg]
@@ -184,6 +191,14 @@ DIR is the current directory unless given.")
                                   {:out (str/join "\n" (remove nil? [(str "No errors in " source ".")
                                                                      (config/where-each-runs-message c)]))}))))
 
+(defn expanded-config
+  "What `heddle config` prints for the repo at `dir`, with the config in
+  `config-file`, if given."
+  ([dir] (expanded-config dir nil))
+  ([dir config-file]
+   (with-config dir config-file (fn [c source]
+                                  {:out (config/expanded-toml c (slurp source))}))))
+
 (defn init
   "What `heddle init` prints after writing a starter config to the root of the
   repo at `dir`."
@@ -209,6 +224,7 @@ DIR is the current directory unless given.")
       :help {:exit 0 :out usage}
       :languages (languages dir server-types config)
       :check (check dir config)
+      :config (expanded-config dir config)
       :init (init dir)
       {:exit 2 :err (str "heddle: " error "\n" usage)})))
 

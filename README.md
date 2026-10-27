@@ -49,8 +49,9 @@ to pass between, much as heddle picks out the servers that match each file.
   such as in Compose, Docker, a Nix shell or over SSH. There are
   [examples](#example-runners) for Compose and Docker to copy.
 - **Comes with tooling.** `heddle init` writes a starter config, `heddle check`
-  checks one, and `heddle languages` lists the languages it covers. To see
-  every message, [trace them](#tracing-messages) to a file.
+  checks one, `heddle config` prints what each scope ends up with, and
+  `heddle languages` lists the languages it covers. To see every message,
+  [trace them](#tracing-messages) to a file.
 - **Has clients for Neovim and Claude Code.** The [Neovim module](#neovim)
   keeps your usual servers from starting for the languages heddle serves. The
   [Claude Code plugin](#claude-code) puts heddle behind Claude's `LSP` tool.
@@ -212,6 +213,23 @@ Each server type runs in these scopes:
   ruby-lsp: services/api
 ```
 
+To see what a scope ends up with once its values are layered over the server
+type's `boot` table and its runner's `defaults`, run `heddle config`. It takes
+the same argument and prints the config as TOML, with a comment on each of a
+scope's values saying where it came from. For the config above, its scope
+comes out as:
+
+```toml
+[scopes."services/api".ruby-lsp]
+runner = "compose"                        # scopes."services/api".ruby-lsp (line 10)
+command = ["bundle", "exec", "ruby-lsp"]  # servers.ruby-lsp.boot (line 3)
+compose = ["docker", "compose"]           # runners.compose.defaults (line 15)
+paths = { "services/api" = "/app" }       # scopes."services/api".ruby-lsp (line 10)
+service = "api"                           # scopes."services/api".ruby-lsp (line 10)
+```
+
+The output is a config in its own right, which loads to the same thing.
+
 `heddle languages` takes the same argument and prints which languages the
 config covers, as JSON such as `{"languages":["ruby"]}`.
 
@@ -230,6 +248,7 @@ For more, see the examples:
 heddle [serve] [--eager] [--trace FILE] [--config FILE] [SERVER-TYPE...]
 heddle languages [--config FILE] [DIR [SERVER-TYPE...]]
 heddle check [--config FILE] [DIR]
+heddle config [--config FILE] [DIR]
 heddle init [DIR]
 heddle help
 ```
@@ -264,20 +283,20 @@ exits 2.
 ### Using a config from elsewhere
 
 If you can't commit a config to the repo, or want one config for several
-checkouts, keep it anywhere and pass it as `--config FILE` to `serve`, `check`
-or `languages`. Setting `HEDDLE_CONFIG=FILE` in heddle's environment does the
-same. If you give both, `--config` wins. A relative FILE is relative to the
-current directory.
+checkouts, keep it anywhere and pass it as `--config FILE` to `serve`, `check`,
+`config` or `languages`. Setting `HEDDLE_CONFIG=FILE` in heddle's environment
+does the same. If you give both, `--config` wins. A relative FILE is relative
+to the current directory.
 
 heddle still takes the repo from the editor or the command line. For `serve`,
 that's the first workspace root the editor names, or else the current
-directory. For `check` and `languages`, it's DIR. Scopes and `paths` stay
-relative to the repo root. A relative path in the config's `cache` or `trace`
-table is relative to FILE's own directory, though.
+directory. For `check`, `config` and `languages`, it's DIR. Scopes and
+`paths` stay relative to the repo root. A relative path in the config's `cache`
+or `trace` table is relative to FILE's own directory, though.
 
 If FILE doesn't exist, heddle won't fall back to the repo's `.heddle.toml`.
-Instead, `check` and `languages` print an error naming FILE and exit 1. `serve`
-fails the editor's `initialize` request with the same error.
+Instead, `check`, `config` and `languages` print an error naming FILE and
+exit 1. `serve` fails the editor's `initialize` request with the same error.
 
 ### Tracing messages
 
@@ -378,6 +397,8 @@ type's `boot` runs it in Compose with `paths = { "." = "/srv" }`. A scope that
 runs it on your machine instead, with `runner = false`, needs `paths = false`
 as well. Otherwise, the proxy would still translate its paths to `/srv`. In the
 same way, a `false` in `boot` unsets a value from the runner's `defaults`.
+`heddle config` prints what each scope ends up with, and where each of its
+values came from.
 
 <!-- example: full config -->
 ```toml

@@ -8,9 +8,12 @@
             [heddle.glob :as glob]
             [heddle.paths :as paths]
             [heddle.runner :as runner]
-            [heddle.spec :as spec]))
+            [heddle.spec :as spec]
+            [heddle.toml-writer :as toml-writer]))
 
 (def file-name ".heddle.toml")
+
+(def ^:private no-runner "heddle runs the command directly, with no runner")
 
 (defn- invalid [source errors]
   (throw (ex-info (str/join "\n" (cons (str "invalid config in " source ":")
@@ -197,6 +200,60 @@
        (checked source structure-errors)
        expand
        (checked source scope-runner-errors))))
+
+(defn- line-finder
+  "A function from the path of a key in the TOML text `s` to the line it's set
+  on, or nil if `s` doesn't set it."
+  [s]
+  (let [positions (meta (toml/parse-string s))]
+    (fn [path]
+      (when-let [at (get-in positions (conj (vec path) ::toml/start))]
+        (inc (count (filter #{\newline} (take at s))))))))
+
+(defn- origin
+  "The path of the key that set the value of `k` in the entry for `slot`, by
+  its `source` in the entry's :sources."
+  [[server-type scope] k source]
+  (let [[layer name] source]
+    (case layer
+      nil ["scopes" scope server-type k]
+      :boot ["servers" name "boot" k]
+      :defaults ["runners" name "defaults" k])))
+
+(defn- entry-table [config line-of [server-type scope :as slot]]
+  (let [entry (get-in config ["scopes" scope server-type])
+        comment (fn [k]
+                  (let [path (origin slot k (get-in (meta entry) [:sources k]))]
+                    (cond-> (toml-writer/dotted-key (butlast path))
+                      (line-of path) (str " (line " (line-of path) ")"))))]
+    {:path ["scopes" scope server-type]
+     :comments (when (implicit? config slot)
+                 [(str (toml-writer/key-str server-type) " runs across the whole repo, since no scope names it")])
+     :rows (concat (when-not (contains? entry "runner") [no-runner])
+                   (for [k (sort-by (juxt #(not= "runner" %) identity) (keys entry))]
+                     [k (get entry k) (comment k)]))}))
+
+(defn expanded-toml
+  "The `config` parsed from the TOML text `s`, written back out as TOML. A
+  comment on each value in a scope says which table, and which line of `s`, it
+  came from. The TOML parses to the same config."
+  [{:strs! [servers runners scopes] :as config} s]
+  (let [line-of (line-finder s)]
+    (toml-writer/write
+     (concat (toml-writer/tables ["servers"] servers)
+             (toml-writer/tables ["runners"] runners)
+             (if (empty? scopes)
+               [{:path ["scopes"]}]
+               (for [[scope entries] (sort-by key scopes)
+                     table (if (empty? entries)
+                             [{:path ["scopes" scope]}]
+                             (for [server-type (sort (keys entries))]
+                               (entry-table config line-of [server-type scope])))]
+                 table))
+             (for [k ["cache" "trace"]
+                   :when (contains? config k)
+                   table (toml-writer/tables [k] (get config k))]
+               table)))))
 
 (defn read-file
   "Reads the config in the file `f`, or returns nil if there's no such file."
