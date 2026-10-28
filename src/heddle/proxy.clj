@@ -239,12 +239,17 @@
 
 (defn- ask-client!
   "Sends the client a request about registrations, and logs it if the client
-  refuses."
-  [proxy method params]
-  (request-client! proxy method params nil
-                   (fn [{:strs [error]}]
-                     (when error
-                       (log/info "the client refused" method "-" (get error "message"))))))
+  refuses. Then calls `on-refused`, if given."
+  ([proxy method params] (ask-client! proxy method params nil))
+  ([proxy method params on-refused]
+   (request-client! proxy method params nil
+                    (fn [{:strs [error]}]
+                      (when error
+                        (log/info "the client refused" method "for"
+                                  (str/join ", " (map #(get % "method") (get params (registration-lists method))))
+                                  "-" (get error "message"))
+                        (when on-refused
+                          (on-refused)))))))
 
 (defn- unannounced
   "The registration `r` without what the answer to `initialize` announced, or
@@ -256,6 +261,14 @@
       (not (contains? announced (get r "method"))) r
       (and (merged? r) (seq commands)) (assoc-in r ["registerOptions" "commands"] commands))))
 
+(defn- refused!
+  "Forgets the proxy's registration `r`, which the client refused, unless
+  another has replaced it since."
+  [proxy r]
+  (let [method (get r "method")]
+    (swap! (:state proxy) update-in [:client :registered]
+           #(cond-> % (= r (get % method)) (dissoc method)))))
+
 (defn- register!
   "Registers each feature that any ready backend offers, with one registration
   covering all of their files. Some clients, such as VS Code, ask every
@@ -265,7 +278,13 @@
   backend offers the feature any more, the proxy unregisters it. Features
   announced in the answer to `initialize` aren't registered, apart from
   commands it didn't list. Nothing is registered until that answer has been
-  sent."
+  sent.
+
+  A client such as VS Code rejects a whole request if it can't take one
+  registration in it. So, each registration and unregistration goes in a
+  request of its own. If the client refuses a registration, the proxy doesn't
+  unregister it later. It tries the registration again the next time this
+  runs."
   [proxy]
   (channel/serially (:channel proxy)
     (fn []
@@ -281,11 +300,12 @@
             replaced (filter #(contains? registered (get % "method")) changed)
             unregistered (concat withdrawn replaced)]
         (swap! (:state proxy) assoc-in [:client :registered] wanted-by-method)
-        (when (seq unregistered)
+        (doseq [r unregistered]
           (ask-client! proxy "client/unregisterCapability"
-                       {"unregisterations" (mapv #(select-keys % ["id" "method"]) unregistered)}))
-        (when (seq changed)
-          (ask-client! proxy "client/registerCapability" {"registrations" (vec changed)}))))))
+                       {"unregisterations" [(select-keys r ["id" "method"])]}))
+        (doseq [r changed]
+          (ask-client! proxy "client/registerCapability" {"registrations" [r]}
+                       #(refused! proxy r)))))))
 
 (defn- init-params [b client-params]
   (let [{:keys! [root dir]} (:spec b)
