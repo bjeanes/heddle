@@ -103,8 +103,8 @@
         "announced with no commands when the client can't register them")))
 
 (deftest limiting-a-backends-selector
-  (let [scope {"language" "ruby" "pattern" {"baseUri" "file:///r/api" "pattern" "**/*"}}
-        gemfile {"pattern" {"baseUri" "file:///r" "pattern" "**/Gemfile"}}
+  (let [scope {"language" "ruby" "pattern" "/r/api/**/*"}
+        gemfile {"pattern" "/r/**/Gemfile"}
         own [scope gemfile]]
     (testing "a null selector becomes the proxy's"
       (is (= own (capabilities/limit-selector nil own))))
@@ -114,7 +114,7 @@
       (is (= [(assoc gemfile "language" "erb")]
              (capabilities/limit-selector [{"language" "erb"}] own))))
     (testing "a relative glob is moved under the scope"
-      (is (= [{"language" "ruby" "scheme" "file" "pattern" {"baseUri" "file:///r/api" "pattern" "**/*.rb"}}]
+      (is (= [{"language" "ruby" "scheme" "file" "pattern" "/r/api/**/*.rb"}]
              (capabilities/limit-selector [{"scheme" "file" "pattern" "**/*.rb"}] own))))
     (testing "a relative pattern is kept only inside the scope, once normalised"
       (let [inside {"pattern" {"baseUri" "file:///r/api/lib/" "pattern" "*.rb"}}

@@ -12,6 +12,7 @@
             [heddle.diagnostics :as diagnostics]
             [heddle.documents :as documents]
             [heddle.fetched :as fetched]
+            [heddle.glob :as glob]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.merge :as merge]
@@ -191,12 +192,12 @@
   its globs."
   [b]
   (let [{:keys! [languages globs repo dir also cache]} (:spec b)
-        relative (fn [base pattern] {"baseUri" (paths/path->uri base) "pattern" pattern})]
+        under (fn [base pattern] (str (glob/literal base) "/" pattern))]
     (vec (concat (for [language languages
                        base (concat [dir] also [cache])]
-                   {"language" language "pattern" (relative base "**/*")})
+                   {"language" language "pattern" (under base "**/*")})
                  (for [glob globs]
-                   {"pattern" (relative repo glob)})))))
+                   {"pattern" (under repo glob)})))))
 
 (defn- live-backends
   "Every live backend, which is one that is starting or ready, in priority

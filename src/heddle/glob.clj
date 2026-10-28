@@ -22,3 +22,10 @@
 
 (defn matches? [glob path]
   (boolean (re-matches (re-pattern (translate glob)) path)))
+
+(defn literal
+  "A glob for clients, such as VS Code and Neovim, that matches `path`. Their
+  globs have no common way to match a literal `{`, `}` or `]`. In their place
+  is `?`, which matches any one character."
+  [path]
+  (str/replace path #"[*?\[\\{}\]]" #(if (str/index-of "{}]" %) "?" (str "[" % "]"))))

@@ -8,6 +8,7 @@
   the proxy's own `initialize` reply, as are the features of any backends
   started before it."
   (:require [clojure.string :as str]
+            [heddle.glob :as glob]
             [heddle.methods :as methods]
             [heddle.paths :as paths]))
 
@@ -167,17 +168,18 @@
           "registerOptions" options})))
 
 (defn- narrow-pattern
-  "A backend's `pattern` limited to the proxy's `own` relative pattern, or nil
-  if a document filter can't express that. Since two globs can't be combined,
+  "A backend's `pattern` limited to the proxy's `own` absolute glob, or nil if
+  a document filter can't express that. Since two globs can't be combined,
   only a pattern for a whole directory can narrow another."
   [pattern own]
-  (let [base (paths/uri->path (get own "baseUri"))]
+  (let [base (when (str/ends-with? own "/**/*") (subs own 0 (- (count own) 5)))]
     (cond
-      (not= "**/*" (get own "pattern")) nil
-      (map? pattern) (when (paths/under? base (paths/uri->path (get pattern "baseUri"))) pattern)
+      (nil? base) nil
+      (map? pattern) (when (paths/under? base (some-> (paths/uri->path (get pattern "baseUri")) glob/literal))
+                       pattern)
       (not (string? pattern)) nil
       (str/starts-with? pattern "/") (when (paths/under? base pattern) pattern)
-      :else (assoc own "pattern" pattern))))
+      :else (str base "/" pattern))))
 
 (defn- narrow-filter
   "A document filter for the files that both a backend's filter `theirs` and
