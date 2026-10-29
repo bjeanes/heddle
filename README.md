@@ -141,10 +141,19 @@ run `curl -fL <link> | tar -xz heddle`. Naming `heddle` unpacks just the
 binary. The archive also holds heddle's licence and the notices for the
 software it bundles.
 
+With Nix, you can build heddle from the flake instead, on aarch64 macOS or on
+aarch64 or x86_64 Linux. To run it without installing it, use
+`nix run github:bjeanes/heddle`, or `nix run .#heddle` from a checkout. Put
+heddle's arguments after `--`, as in `nix run github:bjeanes/heddle -- help`.
+To install it from your own flake, add
+`inputs.heddle.url = "github:bjeanes/heddle";` to its inputs. Then add
+`heddle.packages.${pkgs.stdenv.hostPlatform.system}.heddle` to your packages,
+such as `home.packages` with home-manager.
+
 ## Building it
 
 To build it yourself, you need Nix with flakes. The dev shell provides Jolt,
-for aarch64 macOS and x86_64 Linux.
+for aarch64 macOS and for aarch64 and x86_64 Linux.
 
 ```sh
 nix develop
@@ -154,10 +163,10 @@ jolt build -m heddle.main -o out/heddle
 That writes a single binary to `out/heddle`. Put it on your `PATH`,
 or point your editor at it directly.
 
-To build it and install it as `~/bin/heddle` in one go, run `install-heddle`
-from the repo root. Since the command comes with the dev shell, run it inside
-`nix develop`, or with direnv loading the shell for you. Give it a directory
-to install somewhere else, as in `install-heddle ~/.local/bin`.
+To build it and install it in one go, run `nix profile install .#heddle` from
+the repo root. That adds it to your Nix profile as `heddle`. After you pull
+new changes, `nix profile upgrade heddle` rebuilds it from the checkout as it
+stands then.
 
 ## Configuring a repo
 
@@ -243,6 +252,21 @@ For more, see the examples:
 - [`examples/monorepo`](examples/monorepo) has two Ruby services with their
   own bundles, plus RuboCop in a separate `lints` service that checks the
   whole repo.
+
+To try an example in Neovim without changing your own setup, run these from
+the root of a checkout. They bring up the example's containers, then open it
+with the flake's `nvim-with-heddle` package:
+
+```sh
+docker compose --project-directory examples/monorepo up --detach
+nix run .#nvim-with-heddle -- examples/monorepo
+```
+
+That opens Neovim in the example's directory, with heddle's plugin set up and
+none of your own config or plugins. Open a Ruby file, such as
+`services/api/lib/greeting.rb`, to start heddle. This Neovim keeps its
+history and logs apart from your usual Neovim's, in directories such as
+`~/.local/state/nvim-with-heddle`.
 
 [The config in full](#the-config-in-full) covers every key.
 
@@ -768,9 +792,30 @@ programs.neovim.plugins = [
 ];
 ```
 
-The flake doesn't build the `heddle` binary yet. You'll still need to install
-it separately, such as with `install-heddle` or a release binary (see
-[Installing it](#installing-it)).
+With nixvim, add it to `extraPlugins` and call `setup` from `extraConfigLua`:
+
+```nix
+programs.nixvim = {
+  extraPlugins = [ heddle.packages.${pkgs.stdenv.hostPlatform.system}.vim-plugin ];
+  extraConfigLua = "require('heddle').setup()";
+};
+```
+
+The flake also has an overlay, `heddle.overlays.default`, which adds the
+plugin to nixpkgs as `vimPlugins.heddle` and the binary as `heddle`.
+
+Unlike a plugin installed some other way, the plugin that the flake builds
+runs the `heddle` binary that the flake builds too. That means you don't need
+heddle on your `PATH`. If you pass `cmd` to `setup`, the plugin runs that
+instead. For example, `cmd = { 'heddle' }` goes back to the `heddle` on your
+`PATH`.
+
+Since no binary cache has heddle, installing the plugin this way builds heddle
+on your machine too. If you already have heddle on your `PATH`, such as from a
+release binary, you can skip that build. Use
+`vim-plugin.override { heddle = null; }` in place of `vim-plugin`, or
+`vimPlugins.heddle.override { heddle = null; }` with the overlay. That plugin
+runs the `heddle` on your `PATH`.
 
 ## Claude Code
 
