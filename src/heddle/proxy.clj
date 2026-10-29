@@ -19,6 +19,7 @@
             [heddle.glob :as glob]
             [heddle.log :as log]
             [heddle.lsp :as lsp]
+            [heddle.lsp.text :as text]
             [heddle.merge :as merge]
             [heddle.methods :as methods]
             [heddle.normalise :as normalise]
@@ -324,7 +325,7 @@
            "workspaceFolders" [{"uri" root-uri
                                 "name" (last (str/split dir #"/"))}]
            "capabilities" (assoc-in (get client-params "capabilities" {})
-                                    ["general" "positionEncodings"] ["utf-16"])
+                                    ["general" "positionEncodings"] [text/position-encoding])
            "trace" (get client-params "trace")})))
 
 (defn- report!
@@ -599,7 +600,7 @@
   [b params text]
   (backend/when-settled b (fn [ready?]
                             (when-let [changes (and ready?
-                                                    (documents/content-changes
+                                                    (text/content-changes
                                                      (capabilities/sync-kind (backend/capabilities b))
                                                      text
                                                      (get params "contentChanges")))]

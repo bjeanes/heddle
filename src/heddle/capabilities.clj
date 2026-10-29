@@ -13,6 +13,7 @@
   started before it."
   (:require [clojure.string :as str]
             [heddle.glob :as glob]
+            [heddle.lsp.text :as text]
             [heddle.methods :as methods]
             [heddle.paths :as paths]))
 
@@ -116,7 +117,7 @@
   ([client-caps] (initialize-result client-caps []))
   ([client-caps backends]
    {"capabilities" (into {"textDocumentSync" sync-everything
-                          "positionEncoding" "utf-16"
+                          "positionEncoding" text/position-encoding
                           (:provider workspace-symbol) (:static workspace-symbol)}
                          (for [f features
                                :let [options (static-options client-caps backends f)]
