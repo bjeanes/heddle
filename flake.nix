@@ -6,25 +6,35 @@
   description = "heddle: define a project's language servers once, for any editor or agent";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.jolt-src = {
+    type = "git";
+    url = "https://github.com/jolt-lang/jolt";
+    ref = "refs/tags/v0.8.23";
+    submodules = true;
+    flake = false;
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      jolt-src,
+    }:
     let
       systems = [
         "aarch64-darwin"
+        "aarch64-linux"
         "x86_64-linux"
       ];
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       joltVersion = "0.8.23";
+      # Jolt also publishes an x86_64 Linux release. Since it segfaults before
+      # main once patched for Nix, the flake builds Jolt from source on Linux.
       joltReleases = {
         aarch64-darwin = {
           platform = "aarch64-macos";
           sha256 = "ebcb856554c9ef9dfd866883aa2e65e1a42a347cae15c90e16db49b07e08aa63";
-        };
-        x86_64-linux = {
-          platform = "x86_64-linux";
-          sha256 = "90031be43241e61d0788a2f1bbd3da56d8f4324ae9fa87271f9637b43a6071f2";
         };
       };
     in
@@ -35,8 +45,9 @@
         vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
 
         jolt = pkgs.callPackage ./nix/packages/jolt {
+          inherit jolt-src;
           version = joltVersion;
-          release = joltReleases.${pkgs.stdenv.hostPlatform.system};
+          release = joltReleases.${pkgs.stdenv.hostPlatform.system} or null;
         };
       });
 

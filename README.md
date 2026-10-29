@@ -144,7 +144,7 @@ software it bundles.
 ## Building it
 
 To build it yourself, you need Nix with flakes. The dev shell provides Jolt,
-for aarch64 macOS and x86_64 Linux.
+for aarch64 macOS and for aarch64 and x86_64 Linux.
 
 ```sh
 nix develop

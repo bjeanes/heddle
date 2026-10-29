@@ -16,15 +16,19 @@ outputs:
 runs:
   using: composite
   steps:
-    # The version and hashes must match flake.nix, which this step checks.
+    # The version, macOS hash and source tag must match flake.nix, which this
+    # step checks. flake.nix has no hash for the x86_64 Linux release, since the
+    # flake builds Jolt from source on Linux.
     - id: release
       shell: bash
       run: |
         version=v0.8.23
+        flake_sha256=
         case "$RUNNER_OS-$RUNNER_ARCH" in
           macOS-ARM64)
             asset=aarch64-macos
-            sha256=ebcb856554c9ef9dfd866883aa2e65e1a42a347cae15c90e16db49b07e08aa63 ;;
+            sha256=ebcb856554c9ef9dfd866883aa2e65e1a42a347cae15c90e16db49b07e08aa63
+            flake_sha256=$sha256 ;;
           Linux-X64)
             asset=x86_64-linux
             sha256=90031be43241e61d0788a2f1bbd3da56d8f4324ae9fa87271f9637b43a6071f2 ;;
@@ -36,8 +40,9 @@ runs:
             exit 1 ;;
         esac
         if ! grep -qF "joltVersion = \"${version#v}\";" flake.nix ||
-          { [ -n "$sha256" ] && ! grep -qF "$sha256" flake.nix; }; then
-          echo "::error::Jolt's version or hash in setup-jolt doesn't match flake.nix"
+          ! grep -qF "ref = \"refs/tags/$version\";" flake.nix ||
+          { [ -n "$flake_sha256" ] && ! grep -qF "$flake_sha256" flake.nix; }; then
+          echo "::error::Jolt's version, hash or source tag in setup-jolt doesn't match flake.nix"
           exit 1
         fi
         {
