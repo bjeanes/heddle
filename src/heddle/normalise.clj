@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.normalise
   "Puts a backend's answer in the one shape the proxy handles for its request,
   before the proxy marks it or combines it with others. See \"Requests about

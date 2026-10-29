@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.proxy
   "Routes messages between the client and the backends that handle its files.
   See \"Routing messages\" in DESIGN.md.

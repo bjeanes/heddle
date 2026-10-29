@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.log
   "Logging to stderr, since stdout is the LSP stream. Clients usually show a
   server's stderr in a log of their own. Tests send it elsewhere with

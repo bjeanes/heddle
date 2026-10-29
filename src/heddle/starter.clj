@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.starter
   "The config that `heddle init` writes. Since everything in it is commented
   out, it loads as written, with no server types. Examples start with `# ` and

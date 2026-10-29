@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.methods
   "What the proxy needs to know about each LSP request it handles, from
   announcing the feature to combining backends' answers. Each namespace keeps

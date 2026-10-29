@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.dev.drive
   "Drives a language server through one short session, as a client would, and
   prints what comes back. For trying the proxy against real servers by hand."

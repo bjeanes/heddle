@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.test-runner
   (:require [clojure.test :as t]
             [heddle.backend-test]
@@ -9,6 +13,7 @@
             [heddle.fetched-test]
             [heddle.glob-test]
             [heddle.json-test]
+            [heddle.licence-test]
             [heddle.log :as log]
             [heddle.log-test]
             [heddle.lsp-test]

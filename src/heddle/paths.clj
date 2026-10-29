@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.paths
   "Directories relative to the repo root, as used for scopes and the keys of
   `paths`, and translation between client and server paths. The root itself is

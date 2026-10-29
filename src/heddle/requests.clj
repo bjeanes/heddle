@@ -1,3 +1,7 @@
+;; This Source Code Form is subject to the terms of the Mozilla Public
+;; License, v. 2.0. If a copy of the MPL was not distributed with this
+;; file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 (ns heddle.requests
   "Tables of the requests sent to a peer that it has yet to answer, as values
   of the shape {:last-id n :open {id {:tag t :on-response f}}}. The proxy keeps
