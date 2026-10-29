@@ -33,6 +33,7 @@
               root = ./.;
               fileset = ./lua;
             };
+            meta.license = nixpkgs.lib.licenses.mit;
           };
         }
         // nixpkgs.lib.optionalAttrs (joltReleases ? ${system}) {

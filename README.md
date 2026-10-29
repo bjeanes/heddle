@@ -889,4 +889,10 @@ likely to run into are:
 - There's no VS Code extension yet. The only release is `edge`, built from
   `main`.
 
+## Licence
+
+heddle is available under the [Mozilla Public License 2.0](LICENSE).
+The Neovim module, lua/heddle.lua, is under the [MIT License](LICENSE-MIT)
+instead, so you can copy it into your own Neovim config.
+
 [1]: https://github.com/isaacphi/mcp-language-server
