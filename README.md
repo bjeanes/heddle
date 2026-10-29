@@ -777,6 +777,9 @@ programs.neovim.plugins = [
 ];
 ```
 
+The flake also has an overlay, `heddle.overlays.default`, which adds the
+plugin to nixpkgs as `vimPlugins.heddle` and the binary as `heddle`.
+
 The plugin starts `heddle` from your `PATH`. The flake builds that too (see
 [Installing it](#installing-it)).
 

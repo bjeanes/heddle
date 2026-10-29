@@ -41,6 +41,16 @@
     {
       formatter = forEachSystem (pkgs: pkgs.nixfmt);
 
+      overlays.default =
+        final: prev:
+        let
+          packages = self.packages.${final.stdenv.hostPlatform.system};
+        in
+        {
+          inherit (packages) heddle;
+          vimPlugins = prev.vimPlugins.extend (_: _: { heddle = packages.vim-plugin; });
+        };
+
       packages = forEachSystem (
         pkgs:
         let
