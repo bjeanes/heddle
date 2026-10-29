@@ -29,19 +29,6 @@
     (is (= "/r" (paths/to-client ps "/r" "/src")))
     (is (nil? (paths/to-client ps "/r" "/usr/lib/ruby/x.rb")) "a fetched file")))
 
-(deftest file-uris
-  (testing "become normalised paths without a trailing slash"
-    (is (= "/r/a b" (paths/uri->path "file:///r/a%20b")))
-    (is (= "/r/b" (paths/uri->path "file:///r/a/../b/")))
-    (is (= "/" (paths/uri->path "file:///"))))
-  (testing "other URIs have no path"
-    (is (nil? (paths/uri->path "untitled:Untitled-1")))
-    (is (nil? (paths/uri->path "file:///r/%zz")))
-    (is (nil? (paths/uri->path nil))))
-  (testing "a path becomes a file URI that maps back to it"
-    (is (= "file:///r/a%20b" (paths/path->uri "/r/a b")))
-    (is (= "/r/a b" (paths/uri->path (paths/path->uri "/r/a b"))))))
-
 (deftest under
   (is (paths/under? "/r" "/r"))
   (is (paths/under? "/r" "/r/a"))

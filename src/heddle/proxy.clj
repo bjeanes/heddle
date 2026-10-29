@@ -20,6 +20,7 @@
             [heddle.log :as log]
             [heddle.lsp :as lsp]
             [heddle.lsp.text :as text]
+            [heddle.lsp.uri :as uri]
             [heddle.merge :as merge]
             [heddle.methods :as methods]
             [heddle.normalise :as normalise]
@@ -314,7 +315,7 @@
 
 (defn- init-params [b client-params]
   (let [{:keys! [root dir]} (:spec b)
-        root-uri (paths/path->uri root)]
+        root-uri (uri/path->uri root)]
     (into {}
           (remove (comp nil? val))
           {"processId" (.pid (ProcessHandle/current))
@@ -632,7 +633,7 @@
   [proxy {:strs [changes]}]
   (let [within? (fn [b change]
                   (let [{:keys! [dir also]} (:spec b)
-                        path (paths/uri->path (get change "uri"))]
+                        path (uri/uri->path (get change "uri"))]
                     (some #(paths/under? % path) (cons dir also))))]
     (doseq [b (live-backends proxy)
             :let [theirs (filterv #(within? b %) changes)]

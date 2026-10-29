@@ -18,6 +18,7 @@
             [heddle.log-test]
             [heddle.lsp-test]
             [heddle.lsp.text-test]
+            [heddle.lsp.uri-test]
             [heddle.main-test]
             [heddle.merge-test]
             [heddle.methods-test]

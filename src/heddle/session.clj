@@ -11,13 +11,13 @@
             [clojure.string :as str]
             [heddle.config :as config]
             [heddle.fetched :as fetched]
-            [heddle.paths :as paths]))
+            [heddle.lsp.uri :as uri]))
 
 (defn config-roots
   "Where to look for a config: the workspace roots the client named in
   `initialize`, then `cwd`."
   [params cwd]
-  (distinct (concat (keep paths/uri->path (cons (get params "rootUri")
+  (distinct (concat (keep uri/uri->path (cons (get params "rootUri")
                                           (map #(get % "uri") (get params "workspaceFolders"))))
                     [cwd])))
 

@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [heddle.backend :as backend]
             [heddle.config :as config]
+            [heddle.lsp.uri :as uri]
             [heddle.paths :as paths]))
 
 (defn repo-relative [repo path]
@@ -32,7 +33,7 @@
   :repo and :specs to route by. `backends` is the registry's live backends by
   slot."
   [{:keys [config repo specs]} backends uri language]
-  (let [path (paths/uri->path uri)]
+  (let [path (uri/uri->path uri)]
     (if-let [k (fetched-by backends path)]
       [k]
       (when-let [path (repo-relative repo path)]
@@ -60,7 +61,7 @@
   (let [scope (comp second backend/slot)
         of-type (partial filter #(= server-type (backend/server-type %)))
         candidates (sort-by scope (or (seq (of-type offering)) (of-type backends)))
-        files (keep #(repo-relative repo (paths/uri->path %))
+        files (keep #(repo-relative repo (uri/uri->path %))
                     (filter string? (tree-seq coll? seq arguments)))
         containing (filter (fn [b] (some #(paths/within? (scope b) %) files)) candidates)]
     (or (last (sort-by (comp count scope) containing))

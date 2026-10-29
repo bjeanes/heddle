@@ -6,8 +6,7 @@
   "Directories relative to the repo root, as used for scopes and the keys of
   `paths`, and translation between client and server paths. The root itself is
   `.`. Client and server paths are absolute."
-  (:require [clojure.string :as str])
-  (:import (java.net URI)))
+  (:require [clojure.string :as str]))
 
 (defn relative-dir? [s]
   (and (string? s)
@@ -33,20 +32,6 @@
   (and dir path
        (or (= dir path)
            (str/starts-with? path (if (= "/" dir) dir (str dir "/"))))))
-
-(defn uri->path
-  "The path of the `file:` URI `uri`, normalised and without a trailing slash,
-  or nil if it isn't one."
-  [uri]
-  (try
-    (let [uri (URI. uri)]
-      (when (= "file" (.getScheme uri))
-        (let [path (str/replace (.getPath (.normalize uri)) #"/+$" "")]
-          (if (= "" path) "/" path))))
-    (catch Exception _ nil)))
-
-(defn path->uri [path]
-  (str (URI. "file" "" path nil)))
 
 (defn- rebase [from to path]
   (let [suffix (str/replace-first (subs path (count from)) #"^/" "")]

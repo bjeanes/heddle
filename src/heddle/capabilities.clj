@@ -14,6 +14,7 @@
   (:require [clojure.string :as str]
             [heddle.glob :as glob]
             [heddle.lsp.text :as text]
+            [heddle.lsp.uri :as uri]
             [heddle.methods :as methods]
             [heddle.paths :as paths]))
 
@@ -180,7 +181,7 @@
   (let [base (when (str/ends-with? own "/**/*") (subs own 0 (- (count own) 5)))]
     (cond
       (nil? base) nil
-      (map? pattern) (when (paths/under? base (some-> (paths/uri->path (get pattern "baseUri")) glob/literal))
+      (map? pattern) (when (paths/under? base (some-> (uri/uri->path (get pattern "baseUri")) glob/literal))
                        pattern)
       (not (string? pattern)) nil
       (str/starts-with? pattern "/") (when (paths/under? base pattern) pattern)
