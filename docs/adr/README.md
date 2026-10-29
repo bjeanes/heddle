@@ -3,10 +3,11 @@
 These record the broad decisions made while building heddle. Each one says what
 the problem was, what was tried or considered, what was decided and what
 followed from it. [DESIGN.md](../../DESIGN.md) describes how heddle works.
-These say why it works that way, and what else was on the table. They were
-written after the fact, from the commit history, the design docs and the notes
-kept while building it. Where those don't say why something was decided, the
-record says so instead of guessing.
+These say why it works that way, and what else was on the table. Records 0001
+to 0019 were written after the fact, from the commit history, the design docs
+and the notes kept while building it. Where those don't say why something was
+decided, the record says so instead of guessing. Later records are written
+with the change they describe, as the last commit of that work.
 
 | Number | Title | Status |
 | ------ | ----- | ------ |
@@ -14,7 +15,7 @@ record says so instead of guessing.
 | [0002](0002-build-a-standalone-proxy.md) | Build a standalone proxy | Accepted |
 | [0003](0003-separate-server-types-from-scopes.md) | Separate server types from scopes | Accepted; amended by 0019 |
 | [0004](0004-define-runners-as-command-templates.md) | Define runners as command templates | Accepted; built-in runners superseded by 0019 |
-| [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted; amended by 0006 and 0017 |
+| [0005](0005-answer-initialize-and-register-features-later.md) | Answer `initialize` itself, and register features later | Accepted; amended by 0006, 0017 and 0020 |
 | [0006](0006-start-backends-lazily-with-eager-as-a-flag.md) | Start backends lazily, with `--eager` as a flag | Accepted |
 | [0007](0007-declare-paths-and-fetch-the-rest.md) | Declare paths, and fetch everything else | Accepted |
 | [0008](0008-make-the-first-word-a-subcommand.md) | Make the first word a subcommand, defaulting to `serve` | Accepted |
@@ -29,3 +30,4 @@ record says so instead of guessing.
 | [0017](0017-send-changes-in-each-backends-sync-kind.md) | Send each backend changes in the form its sync kind asks for | Accepted |
 | [0018](0018-cache-fetched-files-by-slot-outside-the-repo.md) | Cache fetched files by slot, outside the repo | Accepted |
 | [0019](0019-expand-the-config-when-it-loads.md) | Simplify the config, and expand it when it loads | Accepted |
+| [0020](0020-register-features-with-absolute-globs-one-request-each.md) | Register features with absolute globs, one request each | Accepted |

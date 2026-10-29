@@ -272,7 +272,7 @@ read = ['cat', '{read:file}']
         (is (= "client/registerCapability" (get lint "method")))
         (is (= [["textDocument/hover" "textDocument/hover"]]
                (map (juxt #(get % "id") #(get % "method")) (get-in lint ["params" "registrations"]))))
-        (is (some #{{"pattern" {"baseUri" (str "file://" (:repo t)) "pattern" "**/Gemfile"}}} (selector lint))
+        (is (some #{{"pattern" (str (:repo t) "/**/Gemfile")}} (selector lint))
             "such as those matching its globs"))
       (testing "once for every backend, replacing the registration when another starts"
         (open! t "api/a.rb" "ruby")
@@ -285,7 +285,7 @@ read = ['cat', '{read:file}']
           (is (= ["textDocument/hover"] (map #(get % "id") (get-in register ["params" "registrations"]))))
           (testing "covering both backends' files"
             (is (= (selector lint) (take (count (selector lint)) (selector register))))
-            (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
+            (is (some #{{"language" "ruby" "pattern" (str (:repo t) "/api/**/*")}}
                       (selector register)))))))))
 
 (def ^:private registers-hover-and-commands
@@ -917,7 +917,7 @@ ruby = { command = 'ruby', also = ['shared'] }
   (let [t (start :config sharing-config)]
     (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}}})
     (open! t "api/a.rb" "ruby")
-    (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "shared") "pattern" "**/*"}}}
+    (is (some #{{"language" "ruby" "pattern" (str (:repo t) "/shared/**/*")}}
               (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
         "covers the files in the directories a backend also serves")))
 
@@ -1129,7 +1129,7 @@ ruby = { command = 'ruby', also = ['shared'] }
         t (start :respond respond :server-types #{"ruby"})]
     (initialize! t {})
     (open! t "api/a.rb" "ruby")
-    (is (some #{{"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}}
+    (is (some #{{"language" "ruby" "pattern" (str (:repo t) "/api/**/*")}}
               (get-in (from-proxy t) ["params" "registrations" 0 "registerOptions" "documentSelector"]))
         "are limited to the backend's files")))
 
@@ -1137,6 +1137,28 @@ ruby = { command = 'ruby', also = ['shared'] }
   "The methods of the registrations in the client/registerCapability `msg`."
   [msg]
   (map #(get % "method") (get-in msg ["params" "registrations"])))
+
+(deftest registering-each-feature-in-its-own-request
+  (let [respond (fn [_ {:strs [id method]}]
+                  (when (= "initialize" method)
+                    [(lsp/response id {"capabilities" {"hoverProvider" true "definitionProvider" true}})]))
+        t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
+        definition {"id" "textDocument/definition" "method" "textDocument/definition"}]
+    (initialize! t {"textDocument" {"hover" {"dynamicRegistration" true}
+                                    "definition" {"dynamicRegistration" true}}})
+    (open! t "api/a.rb" "ruby")
+    (let [msgs [(from-proxy t) (from-proxy t)]
+          by-method (into {} (map (juxt (comp first registered-methods) identity)) msgs)]
+      (is (= #{["textDocument/hover"] ["textDocument/definition"]} (set (map registered-methods msgs))))
+      (testing "and doesn't unregister one the client refused"
+        (client! t (lsp/error-response (get-in by-method ["textDocument/hover" "id"]) -32603 "can't"))
+        (client! t (lsp/response (get-in by-method ["textDocument/definition" "id"]) nil))
+        (open! t "b.rb" "ruby")
+        (let [msgs [(from-proxy t) (from-proxy t) (from-proxy t)]]
+          (is (= [[definition]] (keep #(get-in % ["params" "unregisterations"]) msgs)))
+          (testing "but registers it again"
+            (is (= #{["textDocument/hover"] ["textDocument/definition"]}
+                   (set (keep #(seq (registered-methods %)) msgs))))))))))
 
 (deftest withdrawing-registrations-when-a-backend-stops
   (let [watch {"id" "watch" "method" "workspace/didChangeWatchedFiles"}
@@ -1147,8 +1169,8 @@ ruby = { command = 'ruby', also = ['shared'] }
                     "textDocument/didChange" [(lsp/request 2 "client/unregisterCapability" {"unregisterations" [watch]})]
                     nil))
         t (start :respond respond :server-types #{"ruby"} :config ruby-in-two-scopes)
-        root-files {"language" "ruby" "pattern" {"baseUri" (str "file://" (:repo t)) "pattern" "**/*"}}
-        api-files {"language" "ruby" "pattern" {"baseUri" (uri t "api") "pattern" "**/*"}}
+        root-files {"language" "ruby" "pattern" (str (:repo t) "/**/*")}
+        api-files {"language" "ruby" "pattern" (str (:repo t) "/api/**/*")}
         hover-selector (fn [msgs]
                          (some #(when (= ["textDocument/hover"] (registered-methods %))
                                   (get-in % ["params" "registrations" 0 "registerOptions" "documentSelector"]))

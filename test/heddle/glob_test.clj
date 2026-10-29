@@ -18,3 +18,11 @@
   (testing "other characters are literal"
     (is (glob/matches? "a+b.(c)" "a+b.(c)"))
     (is (not (glob/matches? "a.rb" "abrb")))))
+
+(deftest literal
+  (testing "metacharacters go in brackets"
+    (is (= "/r/[*]/[?]/[[]/[\\]" (glob/literal "/r/*/?/[/\\"))))
+  (testing "braces and closing brackets match any character"
+    (is (= "/r/a?b?c?" (glob/literal "/r/a{b}c]"))))
+  (testing "anything else is left alone"
+    (is (= "/r/services/api-v2, old!" (glob/literal "/r/services/api-v2, old!")))))
