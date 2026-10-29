@@ -24,6 +24,8 @@
       forEachSystem = f: nixpkgs.lib.genAttrs (builtins.attrNames joltReleases) (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      formatter = forEachSystem (pkgs: pkgs.nixfmt);
+
       packages = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed (
         system:
         let
