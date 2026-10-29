@@ -57,7 +57,7 @@
           packages = self.packages.${pkgs.stdenv.hostPlatform.system};
         in
         {
-          vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
+          vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { inherit (packages) heddle; };
 
           jolt = pkgs.callPackage ./nix/packages/jolt {
             inherit jolt-src;

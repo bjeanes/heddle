@@ -789,8 +789,18 @@ programs.nixvim = {
 The flake also has an overlay, `heddle.overlays.default`, which adds the
 plugin to nixpkgs as `vimPlugins.heddle` and the binary as `heddle`.
 
-The plugin starts `heddle` from your `PATH`. The flake builds that too (see
-[Installing it](#installing-it)).
+Unlike a plugin installed some other way, the plugin that the flake builds
+runs the `heddle` binary that the flake builds too. That means you don't need
+heddle on your `PATH`. If you pass `cmd` to `setup`, the plugin runs that
+instead. For example, `cmd = { 'heddle' }` goes back to the `heddle` on your
+`PATH`.
+
+Since no binary cache has heddle, installing the plugin this way builds heddle
+on your machine too. If you already have heddle on your `PATH`, such as from a
+release binary, you can skip that build. Use
+`vim-plugin.override { heddle = null; }` in place of `vim-plugin`, or
+`vimPlugins.heddle.override { heddle = null; }` with the overlay. That plugin
+runs the `heddle` on your `PATH`.
 
 ## Claude Code
 

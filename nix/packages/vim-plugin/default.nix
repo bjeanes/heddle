@@ -2,7 +2,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-{ lib, vimUtils }:
+{
+  lib,
+  vimUtils,
+  heddle ? null,
+}:
 
 vimUtils.buildVimPlugin {
   pname = "heddle";
@@ -11,5 +15,9 @@ vimUtils.buildVimPlugin {
     root = ../../..;
     fileset = ../../../lua;
   };
+  postPatch = lib.optionalString (heddle != null) ''
+    substituteInPlace lua/heddle.lua \
+      --replace-fail "cmd = { 'heddle' }," "cmd = { '${lib.getExe heddle}' },"
+  '';
   meta.license = lib.licenses.mit;
 }
