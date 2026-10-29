@@ -777,6 +777,15 @@ programs.neovim.plugins = [
 ];
 ```
 
+With nixvim, add it to `extraPlugins` and call `setup` from `extraConfigLua`:
+
+```nix
+programs.nixvim = {
+  extraPlugins = [ heddle.packages.${pkgs.stdenv.hostPlatform.system}.vim-plugin ];
+  extraConfigLua = "require('heddle').setup()";
+};
+```
+
 The flake also has an overlay, `heddle.overlays.default`, which adds the
 plugin to nixpkgs as `vimPlugins.heddle` and the binary as `heddle`.
 
