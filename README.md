@@ -130,14 +130,16 @@ platform=darwin-arm64
 curl -fsSL https://api.github.com/repos/bjeanes/heddle/releases/tags/edge \
   | grep -o "https://[^\"]*-$platform\.tar\.gz" \
   | xargs curl -fL \
-  | tar -xz
+  | tar -xz heddle
 ```
 
 A tagged release names its archives for the version, so you can write the link
 out yourself, as in
 `https://github.com/bjeanes/heddle/releases/download/v0.1.0/heddle-v0.1.0-darwin-arm64.tar.gz`.
 For any release, you can also copy the archive's link from the release page and
-run `curl -fL <link> | tar -xz`.
+run `curl -fL <link> | tar -xz heddle`. Naming `heddle` unpacks just the
+binary. The archive also holds heddle's licence and the notices for the
+software it bundles.
 
 ## Building it
 

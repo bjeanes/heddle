@@ -8,6 +8,11 @@ description: >-
   and builds Jolt from source on arm64 Linux, which Jolt doesn't publish a
   release for.
 
+outputs:
+  dir:
+    description: The directory holding Jolt, with its LICENSE, NOTICE and licenses/.
+    value: ${{ steps.release.outputs.dir }}
+
 runs:
   using: composite
   steps:
@@ -93,6 +98,7 @@ runs:
           "$IMAGE" sh ci/glibc-floor-build.sh
         mkdir -p "$DIR"
         cp "$src/target/release/jolt" "$DIR/jolt"
+        cp -R "$src/LICENSE" "$src/NOTICE" "$src/licenses" "$DIR/"
 
     - shell: bash
       env:

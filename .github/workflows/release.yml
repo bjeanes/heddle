@@ -61,7 +61,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-jolt
+      - id: jolt
+        uses: ./.github/actions/setup-jolt
       - run: jolt -M:test
       - run: jolt build -m heddle.main -o out/heddle
 
@@ -83,10 +84,13 @@ jobs:
       - name: Package
         env:
           PLATFORM: ${{ matrix.platform }}
+          JOLT_DIR: ${{ steps.jolt.outputs.dir }}
           COPYFILE_DISABLE: 1
         run: |
-          mkdir dist
-          tar -czf "dist/heddle-$VERSION-$PLATFORM.tar.gz" -C out heddle
+          mkdir dist out/jolt
+          cp LICENSE THIRD-PARTY-NOTICES out/
+          cp -R "$JOLT_DIR/LICENSE" "$JOLT_DIR/NOTICE" "$JOLT_DIR/licenses" out/jolt/
+          tar -czf "dist/heddle-$VERSION-$PLATFORM.tar.gz" -C out heddle LICENSE THIRD-PARTY-NOTICES jolt
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -121,9 +125,9 @@ jobs:
               echo "The latest build of \`main\`, from $GITHUB_SHA. It is replaced on every push to \`main\`."
               echo
             fi
-            echo "Each archive holds a single \`heddle\` binary. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
+            echo "Each archive holds the \`heddle\` binary, with its licence and the notices for the software it bundles. Check it against \`SHA256SUMS\` with \`shasum -a 256 -c --ignore-missing SHA256SUMS\`."
             echo
-            echo "The macOS binary isn't signed or notarised. Download it with curl, as in \`curl -fL <link> | tar -xz\`, since macOS refuses to run binaries that a browser has marked as quarantined. If you've already downloaded it through a browser, clear the flag with \`xattr -d com.apple.quarantine heddle\`."
+            echo "The macOS binary isn't signed or notarised. Download it with curl, as in \`curl -fL <link> | tar -xz heddle\`, since macOS refuses to run binaries that a browser has marked as quarantined. If you've already downloaded it through a browser, clear the flag with \`xattr -d com.apple.quarantine heddle\`."
             echo
             echo "The README's [Installing it](https://github.com/bjeanes/heddle#installing-it) section has a command that finds the right file for your platform."
           } > "$RUNNER_TEMP/notes.md"

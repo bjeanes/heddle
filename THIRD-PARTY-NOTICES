@@ -1,0 +1,70 @@
+heddle is licensed under the Mozilla Public License 2.0, in LICENSE.
+
+Each heddle binary also bundles the third-party software below. Each part
+stays under the licence its authors gave it.
+
+
+Jolt v0.8.23
+  https://github.com/jolt-lang/jolt/tree/v0.8.23
+  Copyright (c) Dmitri Sotnikov and contributors
+  Eclipse Public License 2.0
+  `jolt build` embeds Jolt's runtime in every heddle binary. That runtime
+  includes further works, such as Chez Scheme, babashka libraries and code
+  derived from Clojure. Jolt's NOTICE lists each of them with its licence.
+  Each heddle release archive holds a copy of Jolt's LICENSE and NOTICE, and
+  the full text of each licence NOTICE names, under jolt/. Chez Scheme's
+  Apache License 2.0 is one of them. Jolt's repo has the same files at the
+  tag above.
+
+instaparse v1.4.10
+  https://github.com/Engelberg/instaparse/tree/v1.4.10
+  Copyright (c) Mark Engelberg
+  Eclipse Public License 1.0
+
+clj-toml, at commit b88e947acebbeec81aef6db46984d51f10cdd4f4
+  https://github.com/bjeanes/clj-toml
+  Copyright 2022 Jinseop Kim
+  MIT License, reproduced below
+
+
+Eclipse Public License components
+---------------------------------
+
+Jolt and instaparse are provided under the Eclipse Public License on an
+"AS IS" basis, without warranties or conditions of any kind, either express
+or implied, including any warranties or conditions of title,
+non-infringement, merchantability or fitness for a particular purpose. Their
+contributors have no liability for any direct, indirect, incidental,
+special, exemplary or consequential damages, including lost profits, arising
+in any way out of their use or distribution. Any terms in heddle's licence
+that differ from the Eclipse Public License are offered by heddle's authors
+alone.
+
+The source code for each is available at the address listed above.
+
+
+clj-toml's licence
+------------------
+
+Copyright 2022 Jinseop Kim<vmfhrmfoaj@gmail.com>
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
