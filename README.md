@@ -253,6 +253,21 @@ For more, see the examples:
   own bundles, plus RuboCop in a separate `lints` service that checks the
   whole repo.
 
+To try an example in Neovim without changing your own setup, run these from
+the root of a checkout. They bring up the example's containers, then open it
+with the flake's `nvim-with-heddle` package:
+
+```sh
+docker compose --project-directory examples/monorepo up --detach
+nix run .#nvim-with-heddle -- examples/monorepo
+```
+
+That opens Neovim in the example's directory, with heddle's plugin set up and
+none of your own config or plugins. Open a Ruby file, such as
+`services/api/lib/greeting.rb`, to start heddle. This Neovim keeps its
+history and logs apart from your usual Neovim's, in directories such as
+`~/.local/state/nvim-with-heddle`.
+
 [The config in full](#the-config-in-full) covers every key.
 
 ## Running it

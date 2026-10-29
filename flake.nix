@@ -69,6 +69,10 @@
 
           heddle = pkgs.callPackage ./nix/packages/heddle { inherit (packages) jolt heddle-deps; };
 
+          nvim-with-heddle = pkgs.callPackage ./nix/packages/nvim-with-heddle {
+            inherit (packages) vim-plugin;
+          };
+
           default = packages.heddle;
         }
       );
