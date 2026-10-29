@@ -141,6 +141,15 @@ run `curl -fL <link> | tar -xz heddle`. Naming `heddle` unpacks just the
 binary. The archive also holds heddle's licence and the notices for the
 software it bundles.
 
+With Nix, you can build heddle from the flake instead, on aarch64 macOS or on
+aarch64 or x86_64 Linux. To run it without installing it, use
+`nix run github:bjeanes/heddle`, or `nix run .#heddle` from a checkout. Put
+heddle's arguments after `--`, as in `nix run github:bjeanes/heddle -- help`.
+To install it from your own flake, add
+`inputs.heddle.url = "github:bjeanes/heddle";` to its inputs. Then add
+`heddle.packages.${pkgs.stdenv.hostPlatform.system}.heddle` to your packages,
+such as `home.packages` with home-manager.
+
 ## Building it
 
 To build it yourself, you need Nix with flakes. The dev shell provides Jolt,
@@ -768,8 +777,7 @@ programs.neovim.plugins = [
 ];
 ```
 
-The flake doesn't build the `heddle` binary yet. You'll still need to install
-it separately, such as with `install-heddle` or a release binary (see
+The plugin starts `heddle` from your `PATH`. The flake builds that too (see
 [Installing it](#installing-it)).
 
 ## Claude Code

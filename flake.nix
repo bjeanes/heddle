@@ -41,15 +41,27 @@
     {
       formatter = forEachSystem (pkgs: pkgs.nixfmt);
 
-      packages = forEachSystem (pkgs: {
-        vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
+      packages = forEachSystem (
+        pkgs:
+        let
+          packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        {
+          vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
 
-        jolt = pkgs.callPackage ./nix/packages/jolt {
-          inherit jolt-src;
-          version = joltVersion;
-          release = joltReleases.${pkgs.stdenv.hostPlatform.system} or null;
-        };
-      });
+          jolt = pkgs.callPackage ./nix/packages/jolt {
+            inherit jolt-src;
+            version = joltVersion;
+            release = joltReleases.${pkgs.stdenv.hostPlatform.system} or null;
+          };
+
+          heddle-deps = pkgs.callPackage ./nix/packages/heddle-deps { inherit (packages) jolt; };
+
+          heddle = pkgs.callPackage ./nix/packages/heddle { inherit (packages) jolt heddle-deps; };
+
+          default = packages.heddle;
+        }
+      );
 
       devShells = forEachSystem (
         pkgs:
