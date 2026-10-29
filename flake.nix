@@ -10,6 +10,12 @@
   outputs =
     { self, nixpkgs }:
     let
+      systems = [
+        "aarch64-darwin"
+        "x86_64-linux"
+      ];
+      forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
       joltVersion = "0.8.23";
       joltReleases = {
         aarch64-darwin = {
@@ -21,26 +27,18 @@
           sha256 = "90031be43241e61d0788a2f1bbd3da56d8f4324ae9fa87271f9637b43a6071f2";
         };
       };
-      forEachSystem = f: nixpkgs.lib.genAttrs (builtins.attrNames joltReleases) (system: f nixpkgs.legacyPackages.${system});
     in
     {
       formatter = forEachSystem (pkgs: pkgs.nixfmt);
 
-      packages = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
-        }
-        // nixpkgs.lib.optionalAttrs (joltReleases ? ${system}) {
-          jolt = pkgs.callPackage ./nix/packages/jolt {
-            version = joltVersion;
-            release = joltReleases.${system};
-          };
-        }
-      );
+      packages = forEachSystem (pkgs: {
+        vim-plugin = pkgs.callPackage ./nix/packages/vim-plugin { };
+
+        jolt = pkgs.callPackage ./nix/packages/jolt {
+          version = joltVersion;
+          release = joltReleases.${pkgs.stdenv.hostPlatform.system};
+        };
+      });
 
       devShells = forEachSystem (
         pkgs:
